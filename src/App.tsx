@@ -44,10 +44,11 @@ import CountUp from 'react-countup';
 import { localService } from './services/localService';
 import { apiService } from './services/apiService';
 import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz } from './types';
+import { TutorProfilePage } from './components/pages/TutorProfilePage';
 
 const STEM_SUBJECTS = ['Mathematics', 'Physics', 'Chemistry', 'Biology', 'ICT', 'Computer Science', 'Software Engineering'];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'register' | 'dashboard' | 'settings';
+type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'register' | 'dashboard' | 'settings' | 'tutorProfile';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
@@ -58,23 +59,24 @@ const NAV_LABELS: Record<Tab, string> = {
   quizzes: 'Quizzes',
   register: 'Profile',
   dashboard: 'Dashboard',
-  settings: 'Settings'
+  settings: 'Settings',
+  tutorProfile: 'Tutor Profile'
 };
 
 const getAllowedTabs = (user: AppUser | null): Tab[] => {
   if (!user) {
-    return ['home', 'tutors', 'courses', 'resources', 'register'];
+    return ['home', 'tutors', 'courses', 'resources', 'register', 'tutorProfile'];
   }
 
   if (user.role === 'student') {
-    return ['home', 'tutors', 'questions', 'courses', 'resources', 'dashboard', 'settings'];
+    return ['home', 'tutors', 'questions', 'courses', 'resources', 'dashboard', 'settings', 'tutorProfile'];
   }
 
   if (user.role === 'tutor') {
-    return ['home', 'dashboard', 'register', 'courses', 'resources', 'settings'];
+    return ['home', 'dashboard', 'register', 'courses', 'resources', 'settings', 'tutorProfile'];
   }
 
-  return ['home'];
+  return ['home', 'tutorProfile'];
 };
 
 const canAccessTab = (tab: Tab, user: AppUser | null) => getAllowedTabs(user).includes(tab);
@@ -92,6 +94,7 @@ const getTutorDisplayName = (tutor: Tutor & { name?: string }) => {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('home');
+  const [viewingTutorId, setViewingTutorId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -660,7 +663,7 @@ export default function App() {
 
             {/* Desktop Nav */}
             <div className="hidden md:flex items-center gap-6">
-              {availableTabs.filter(tab => tab !== 'dashboard' && tab !== 'settings' && tab !== 'register').map(tab => (
+              {availableTabs.filter(tab => tab !== 'dashboard' && tab !== 'settings' && tab !== 'register' && tab !== 'tutorProfile').map(tab => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
@@ -738,7 +741,7 @@ export default function App() {
             exit={{ opacity: 0, y: -20 }}
             className="md:hidden bg-white border-b border-slate-200 px-4 py-4 space-y-4"
           >
-            {availableTabs.filter(tab => tab !== 'dashboard' && tab !== 'settings' && tab !== 'register').map(tab => (
+            {availableTabs.filter(tab => tab !== 'dashboard' && tab !== 'settings' && tab !== 'register' && tab !== 'tutorProfile').map(tab => (
               <button
                 key={tab}
                 onClick={() => {setActiveTab(tab); setIsMenuOpen(false)}}
@@ -776,6 +779,25 @@ export default function App() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {activeTab === 'tutorProfile' && viewingTutorId && (
+          <TutorProfilePage 
+            tutorId={viewingTutorId}
+            initialTutor={tutors.find(t => t.id === viewingTutorId)}
+            courses={courses.filter(c => c.tutorId === viewingTutorId)}
+            onBack={() => {
+              setViewingTutorId(null);
+              setActiveTab('tutors');
+            }}
+            onBookSession={(id) => {
+              setViewingTutorId(null);
+              setSelectedTutor(tutors.find(t => t.id === id) || null);
+              setActiveTab('tutors');
+            }}
+            isLoggedIn={!!currentUser}
+            isStudent={isStudent}
+          />
+        )}
+
         {activeTab === 'home' && (
           <div className="space-y-24">
             {/* Hero Section */}
@@ -992,7 +1014,10 @@ export default function App() {
                     whileHover={{ y: -8 }}
                     key={tutor.id}
                     className="relative bg-white rounded-[1.5rem] border border-slate-100 overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.04)] hover:shadow-[0_20px_40px_rgba(79,70,229,0.1)] transition-all duration-300 group cursor-pointer flex flex-col"
-                    onClick={() => setActiveTab('tutors')}
+                    onClick={() => {
+                      setViewingTutorId(tutor.id);
+                      setActiveTab('tutorProfile');
+                    }}
                   >
                     <div className="relative h-56 overflow-hidden">
                       <div className="absolute inset-0 bg-gradient-to-t from-slate-900/65 via-slate-900/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-10" />
@@ -1138,16 +1163,29 @@ export default function App() {
                         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Hourly Rate</span>
                         <p className="text-2xl font-black text-slate-900">LKR {tutor.pricePerHour}</p>
                       </div>
-                      <button 
-                        onClick={() => setSelectedTutor(selectedTutor?.id === tutor.id ? null : tutor)}
-                        className={`px-6 py-3 rounded-2xl font-black text-sm transition-all ${
-                          selectedTutor?.id === tutor.id 
-                          ? 'bg-slate-900 text-white' 
-                          : 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700'
-                        }`}
-                      >
-                        {selectedTutor?.id === tutor.id ? 'Close' : (isStudent || !currentUser ? 'Book Session' : 'View Profile')}
-                      </button>
+                      <div className="flex gap-3">
+                        <button
+                          onClick={() => {
+                            setViewingTutorId(tutor.id);
+                            setActiveTab('tutorProfile');
+                          }}
+                          className="px-6 py-3 rounded-2xl font-black text-sm transition-all bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+                        >
+                          View Profile
+                        </button>
+                        {(isStudent || !currentUser) && (
+                          <button 
+                            onClick={() => setSelectedTutor(selectedTutor?.id === tutor.id ? null : tutor)}
+                            className={`px-6 py-3 rounded-2xl font-black text-sm transition-all ${
+                              selectedTutor?.id === tutor.id 
+                              ? 'bg-slate-900 text-white' 
+                              : 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700'
+                            }`}
+                          >
+                            {selectedTutor?.id === tutor.id ? 'Close' : 'Book Session'}
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <AnimatePresence>

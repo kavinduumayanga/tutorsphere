@@ -1,0 +1,8 @@
+{
+  "name": "TutorSphere - STEM & ICT Learning Platform",
+  "description": "A comprehensive web-based platform connecting students with qualified STEM and ICT tutors, featuring automated validation, session booking, and AI-powered learning support.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

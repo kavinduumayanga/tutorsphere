@@ -1,110 +1,152 @@
-TutorSphere
-===========
+# TutorSphere
 
-TutorSphere is a comprehensive STEM education platform built with React and TypeScript. This is a fully local web application that provides tutoring services, Q&A support, courses, and quizzes without requiring any external AI services or dependencies.
+TutorSphere is a full-stack STEM tutoring platform built with React, TypeScript, Vite, Express, and MongoDB.
 
-## Features
+It includes role-based experiences for students and tutors, tutor discovery, bookings, courses, resources, quizzes, and profile management with avatar upload support.
 
-- **Find Tutors**: Browse and book sessions with verified STEM tutors
-- **Q&A Support**: Ask questions and get answers from subject matter experts
-- **Courses**: Enroll in structured learning paths
-- **Quizzes**: Take assessments to test your knowledge
-- **Study Plans**: Get personalized learning schedules
-- **Local Operation**: Runs completely offline without external dependencies
+## Highlights
 
-## Folder Structure
+- Student and tutor authentication
+- Role-based navigation and access control
+- Tutor discovery and session booking
+- Course enrollment and learning resources
+- Q&A and quiz workflows
+- Study plans and skill progression tracking
+- Profile settings with avatar upload and replacement
+- REST API backed by MongoDB models
 
+## Tech Stack
+
+- Frontend: React 19, TypeScript, Vite, Tailwind CSS, Motion
+- Backend: Express, TypeScript (tsx runtime), Multer, CORS
+- Database: MongoDB with Mongoose
+- Tooling: TypeScript, Vite build pipeline
+
+## Project Structure
+
+```text
+tutorsphere/
+|- server.ts
+|- vite.config.ts
+|- package.json
+|- .env.example
+|- src/
+|  |- App.tsx
+|  |- main.tsx
+|  |- index.css
+|  |- types.ts
+|  |- database.ts
+|  |- models/
+|  |- services/
+|  |- components/
+|  |- data/
+|- uploads/
 ```
-├── index.html           # Main HTML file
-├── metadata.json        # Project metadata
-├── package.json         # Node.js dependencies and scripts
-├── README.md            # Project documentation
-├── server.ts            # Express server with API endpoints
-├── tsconfig.json        # TypeScript configuration
-├── vite.config.ts       # Vite build configuration
-└── src/
-    ├── App.tsx          # Main React application
-    ├── index.css        # Global styles with Tailwind CSS
-    ├── main.tsx         # React app entry point
-    ├── types.ts         # TypeScript type definitions
-    └── services/
-        └── localService.ts   # Local service (no external AI)
-```
 
-## Getting Started
+## Prerequisites
 
-### Prerequisites
+- Node.js 20+
+- npm 10+
+- MongoDB database (Atlas or local)
 
-- Node.js (v16 or higher recommended)
-
-### Setup Instructions
+## Quick Start
 
 1. Install dependencies:
-   ```bash
-   npm install
-   ```
 
-2. Start the development server:
-   ```bash
-   npm run dev
-   ```
+```bash
+npm install
+```
 
-3. Open your browser and navigate to `http://localhost:3000`.
+2. Create environment file:
 
-### Build for Production
+```bash
+cp .env.example .env
+```
 
-To build the app for production, run:
+3. Update `MONGODB_URI` in `.env` with your database connection string.
+
+4. Start development server:
+
+```bash
+npm run dev
+```
+
+5. Open:
+
+```text
+http://localhost:3000
+```
+
+## Environment Variables
+
+Use `.env.example` as a template.
+
+Required:
+
+- `MONGODB_URI`: MongoDB connection string
+
+Common:
+
+- `NODE_ENV=development`
+- `APP_NAME=TutorSphere`
+- `APP_VERSION=1.0.0`
+
+Notes:
+
+- Port is currently fixed to `3000` in server and Vite config.
+- Keep secrets in `.env` only. Do not commit `.env`.
+
+## Available Scripts
+
+- `npm run dev`: Run Express + Vite middleware in development
+- `npm run build`: Build frontend for production
+- `npm run preview`: Preview built frontend
+- `npm run lint`: Type-check project (`tsc --noEmit`)
+- `npm run clean`: Remove `dist/`
+
+## API Overview
+
+Core groups exposed under `/api`:
+
+- `auth`: signup, login, profile update, avatar retrieval
+- `tutors`: CRUD for tutor profiles
+- `reviews`: CRUD for tutor reviews
+- `courses`: CRUD and enroll endpoints
+- `resources`: CRUD for study resources
+- `bookings`: CRUD for session bookings
+- `questions`: CRUD for student questions
+- `quizzes`: CRUD for quizzes
+- `study-plans`: CRUD for generated plans
+- `skill-levels`: CRUD for student skill levels
+
+## Build and Production
+
+1. Build app:
 
 ```bash
 npm run build
-npm run preview
 ```
 
-## Architecture
+2. Run with production environment:
 
-- **Frontend**: React 19 with TypeScript, styled with Tailwind CSS
-- **Backend**: Express.js server with REST API
-- **Build Tool**: Vite for fast development and optimized builds
-- **State Management**: React hooks for local state
-- **Data Storage**: In-memory storage (can be extended to use local databases)
-
-## API Endpoints
-
-- `POST /api/auth/signup` - User registration
-- `POST /api/auth/login` - User authentication
-
-## Local Features
-
-All AI-powered features now work locally with mock data:
-- Q&A responses based on predefined knowledge base
-- Quiz generation with curated questions
-- Study plan creation based on skill levels
-- Tutor validation using rule-based logic
-- Chatbot responses using pattern matching
-
-## Development
-
-The project uses modern development practices:
-- TypeScript for type safety
-- ESLint for code quality
-- Hot module replacement during development
-- Responsive design with Tailwind CSS
+```bash
+NODE_ENV=production npm run dev
 ```
 
-## Project Structure Overview
+This project currently uses `server.ts` as the runtime entrypoint for both development and server-side API handling.
 
-- **index.html**: The main HTML file loaded by Vite.
-- **server.ts**: Entry point for the backend server (if used).
-- **src/**: Contains all frontend source code.
-  - **App.tsx**: Main React component.
-  - **main.tsx**: Entry point for rendering the React app.
-  - **index.css**: Global CSS styles.
-  - **types.ts**: Shared TypeScript types.
-  - **services/**: Contains service modules for API calls and business logic.
+## Troubleshooting
+
+- `EADDRINUSE` on port `3000`: stop existing process using that port, then restart.
+- MongoDB connection errors: verify `MONGODB_URI` and network/IP whitelist.
+- Avatar upload issues: confirm file is PNG/JPEG and under 5MB.
 
 ## Contributing
 
-Feel free to fork this repository and submit pull requests. For major changes, please open an issue first to discuss what you would like to change.
+1. Create a feature branch
+2. Make focused changes
+3. Run type checks and build
+4. Open a pull request
 
 ## License
 

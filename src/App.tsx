@@ -45,10 +45,11 @@ import { localService } from './services/localService';
 import { apiService } from './services/apiService';
 import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz } from './types';
 import { TutorProfilePage } from './components/pages/TutorProfilePage';
+import { TutorBookingPage } from './components/pages/TutorBookingPage';
 
 const STEM_SUBJECTS = ['Mathematics', 'Physics', 'Chemistry', 'Biology', 'ICT', 'Computer Science', 'Software Engineering'];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'register' | 'dashboard' | 'settings' | 'tutorProfile';
+type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
@@ -60,23 +61,24 @@ const NAV_LABELS: Record<Tab, string> = {
   register: 'Profile',
   dashboard: 'Dashboard',
   settings: 'Settings',
-  tutorProfile: 'Tutor Profile'
+  tutorProfile: 'Tutor Profile',
+  tutorBooking: 'Book Session'
 };
 
 const getAllowedTabs = (user: AppUser | null): Tab[] => {
   if (!user) {
-    return ['home', 'tutors', 'courses', 'resources', 'register', 'tutorProfile'];
+    return ['home', 'tutors', 'courses', 'resources', 'register', 'tutorProfile', 'tutorBooking'];
   }
 
   if (user.role === 'student') {
-    return ['home', 'tutors', 'questions', 'courses', 'resources', 'dashboard', 'settings', 'tutorProfile'];
+    return ['home', 'tutors', 'questions', 'courses', 'resources', 'dashboard', 'settings', 'tutorProfile', 'tutorBooking'];
   }
 
   if (user.role === 'tutor') {
-    return ['home', 'dashboard', 'register', 'courses', 'resources', 'settings', 'tutorProfile'];
+    return ['home', 'dashboard', 'register', 'courses', 'resources', 'settings', 'tutorProfile', 'tutorBooking'];
   }
 
-  return ['home', 'tutorProfile'];
+  return ['home', 'tutorProfile', 'tutorBooking'];
 };
 
 const canAccessTab = (tab: Tab, user: AppUser | null) => getAllowedTabs(user).includes(tab);
@@ -95,6 +97,7 @@ const getTutorDisplayName = (tutor: Tutor & { name?: string }) => {
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('home');
   const [viewingTutorId, setViewingTutorId] = useState<string | null>(null);
+  const [bookingTutorId, setBookingTutorId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -663,7 +666,7 @@ export default function App() {
 
             {/* Desktop Nav */}
             <div className="hidden md:flex items-center gap-6">
-              {availableTabs.filter(tab => tab !== 'dashboard' && tab !== 'settings' && tab !== 'register' && tab !== 'tutorProfile').map(tab => (
+              {availableTabs.filter(tab => tab !== 'dashboard' && tab !== 'settings' && tab !== 'register' && tab !== 'tutorProfile' && tab !== 'tutorBooking').map(tab => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
@@ -741,7 +744,7 @@ export default function App() {
             exit={{ opacity: 0, y: -20 }}
             className="md:hidden bg-white border-b border-slate-200 px-4 py-4 space-y-4"
           >
-            {availableTabs.filter(tab => tab !== 'dashboard' && tab !== 'settings' && tab !== 'register' && tab !== 'tutorProfile').map(tab => (
+            {availableTabs.filter(tab => tab !== 'dashboard' && tab !== 'settings' && tab !== 'register' && tab !== 'tutorProfile' && tab !== 'tutorBooking').map(tab => (
               <button
                 key={tab}
                 onClick={() => {setActiveTab(tab); setIsMenuOpen(false)}}
@@ -789,12 +792,32 @@ export default function App() {
               setActiveTab('tutors');
             }}
             onBookSession={(id) => {
-              setViewingTutorId(null);
-              setSelectedTutor(tutors.find(t => t.id === id) || null);
-              setActiveTab('tutors');
+              setBookingTutorId(id);
+              setActiveTab('tutorBooking');
             }}
             isLoggedIn={!!currentUser}
             isStudent={isStudent}
+          />
+        )}
+
+        {activeTab === 'tutorBooking' && bookingTutorId && (
+          <TutorBookingPage
+            tutor={tutors.find(t => t.id === bookingTutorId) || null}
+            onBack={() => {
+              setBookingTutorId(null);
+              if (viewingTutorId === bookingTutorId) {
+                setActiveTab('tutorProfile');
+              } else {
+                setViewingTutorId(bookingTutorId);
+                setActiveTab('tutorProfile');
+              }
+            }}
+            onConfirmBooking={(slotId) => {
+              const tutor = tutors.find(t => t.id === bookingTutorId);
+              if (tutor) {
+                handleBookSession(tutor, slotId);
+              }
+            }}
           />
         )}
 

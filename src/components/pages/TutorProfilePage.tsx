@@ -4,7 +4,7 @@ import {
   ArrowLeft, Star, Clock, BookOpen, GraduationCap, CheckCircle, BadgeCheck, Check,
   Calendar, Award, User as UserIcon, Users, TrendingUp, Share2, Heart, 
   MessageSquare, Shield, MapPin, Globe, ChevronRight, PlayCircle, 
-  Video, Mail, Phone, Briefcase, Languages
+  Video, Mail, Phone, Briefcase, Languages, Lightbulb, Target, MessageCircle, Zap
 } from 'lucide-react';
 import { apiService } from '../../services/apiService';
 import { Tutor, Course } from '../../types';
@@ -280,45 +280,7 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
                       </div>
                     </section>
 
-                    {/* Skills & Expertise */}
-                    <section className="bg-white rounded-[2rem] shadow-sm border border-slate-200/60 p-8">
-                      <h3 className="text-xl font-bold text-slate-900 mb-6 flex items-center gap-2">
-                        <BookOpen className="w-5 h-5 text-indigo-500" />
-                        Competencies
-                      </h3>
-                      
-                      <div className="mb-8">
-                        <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4">Subjects</h4>
-                        <div className="flex flex-wrap gap-2">
-                          {tutor.subjects.map((subject) => (
-                            <div key={subject} className="px-4 py-2 bg-indigo-50 rounded-xl border border-indigo-100 text-indigo-700 font-semibold hover:bg-indigo-100 transition-colors cursor-default">
-                              {subject}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t border-slate-100">
-                        <div className="flex gap-4 p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                          <div className="w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center shrink-0 text-blue-600 shadow-sm">
-                            <Briefcase className="w-6 h-6" />
-                           </div>
-                          <div>
-                            <h4 className="font-bold text-slate-900">Experience</h4>
-                            <p className="text-sm text-slate-500 mt-1">5+ years teaching in university settings and private mentoring.</p>
-                          </div>
-                        </div>
-                        <div className="flex gap-4 p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                          <div className="w-12 h-12 rounded-xl bg-emerald-100 flex items-center justify-center shrink-0 text-emerald-600 shadow-sm">
-                            <GraduationCap className="w-6 h-6" />
-                          </div>
-                          <div>
-                            <h4 className="font-bold text-slate-900">Education</h4>
-                            <p className="text-sm text-slate-500 mt-1">Masters in {tutor.subjects[0] || 'Education'} from Stanford University.</p>
-                          </div>
-                        </div>
-                      </div>
-                    </section>
+                    
                   </motion.div>
                 )}
 
@@ -514,36 +476,6 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
                 </div>
               </div>
 
-              {/* Mini Availability Preview */}
-              <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200/60 p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h4 className="font-bold text-slate-900 flex items-center gap-2">
-                    <Calendar className="w-4 h-4 text-indigo-500" />
-                    Next Available
-                  </h4>
-                </div>
-                
-                {availableSlots.length > 0 ? (
-                  <div className="space-y-3">
-                    {availableSlots.slice(0, 3).map((slot, idx) => (
-                      <div key={slot.id} className="flex justify-between items-center p-3.5 bg-slate-50 rounded-xl text-sm border border-slate-100">
-                        <span className="font-bold text-slate-700">{slot.day}</span>
-                        <span className="text-slate-500 bg-white px-2 py-1 rounded-md border border-slate-100 font-medium text-xs shadow-sm">
-                          {slot.startTime} - {slot.endTime}
-                        </span>
-                      </div>
-                    ))}
-                    <button className="w-full text-indigo-600 text-sm font-bold hover:text-indigo-800 mt-2 py-2 hover:bg-indigo-50 rounded-lg transition-colors">
-                      View full schedule
-                    </button>
-                  </div>
-                ) : (
-                  <div className="py-6 text-center">
-                    <p className="text-sm text-slate-500 italic mb-2">No slots listed for this week.</p>
-                    <button className="text-xs font-bold text-indigo-600 hover:underline">Request a time</button>
-                  </div>
-                )}
-              </div>
           </div>
 
         </div>

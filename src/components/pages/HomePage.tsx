@@ -198,21 +198,58 @@ export const HomePage: React.FC<HomePageProps> = ({ setActiveTab, currentUser, t
         </div>
       </motion.div>
 
-      {/* Features Grid */}
-      <section className="grid md:grid-cols-3 gap-8">
-        {[
-          { icon: <CheckCircle className="text-emerald-500" />, title: 'Verified Tutors', desc: 'Automated qualification validation ensures only the best teach you.' },
-          { icon: <Calendar className="text-indigo-500" />, title: 'Easy Booking', desc: 'Seamless time-slot management and session scheduling.' },
-          { icon: <MessageCircle className="text-purple-500" />, title: 'Expert Q&A', desc: 'Get instant answers to your STEM questions from our expert community.' }
-        ].map((f, i) => (
-          <div key={i} className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-            <div className="bg-slate-50 w-12 h-12 rounded-2xl flex items-center justify-center mb-6">
-              {f.icon}
-            </div>
-            <h3 className="text-xl font-bold mb-2">{f.title}</h3>
-            <p className="text-slate-600">{f.desc}</p>
+      {/* Features Section */}
+      <section className="grid lg:grid-cols-2 gap-12 items-center">
+        <div className="space-y-6 lg:pr-12">
+          <div className="inline-flex items-center gap-2 bg-purple-50 px-4 py-2 rounded-full border border-purple-100">
+            <span className="text-xs font-bold text-purple-700 uppercase tracking-widest">Platform Features</span>
           </div>
-        ))}
+          <h2 className="text-4xl md:text-5xl font-extrabold text-slate-900 leading-tight">
+            Everything you need to <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-indigo-600">succeed</span>
+          </h2>
+          <p className="text-lg text-slate-600 leading-relaxed">
+            Discover a comprehensive suite of powerful tools and features designed to enhance your learning experience, connect you with the best educators, and accelerate your academic progress.
+          </p>
+          <button onClick={() => setActiveTab('tutors')} className="mt-4 bg-purple-50 text-purple-700 font-bold px-6 py-3 rounded-xl hover:bg-purple-100 transition-colors inline-flex items-center gap-2">
+            Explore Tutors <ArrowRight className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="relative h-[500px] overflow-hidden rounded-[2rem] p-2 bg-slate-50/50">
+          <div className="absolute top-0 inset-x-0 h-16 bg-gradient-to-b from-white to-transparent z-10 pointer-events-none" />
+          <div className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-white to-transparent z-10 pointer-events-none" />
+          
+          <motion.div
+            animate={{ y: ['0%', '-50%'] }}
+            transition={{ duration: 15, repeat: Infinity, ease: 'linear' }}
+            className="flex flex-col gap-6"
+          >
+            {[
+              { icon: <User className="text-purple-600 w-6 h-6" />, title: 'Find Expert Tutors', desc: 'Connect with verified professionals who match your unique learning style.' },
+              { icon: <Calendar className="text-purple-600 w-6 h-6" />, title: 'Easy Booking', desc: 'Seamlessly schedule time slots that fit perfectly into your busy calendar.' },
+              { icon: <Star className="text-purple-600 w-6 h-6" />, title: 'Ratings & Reviews', desc: 'Make informed decisions with transparent feedback from our community.' },
+              { icon: <GraduationCap className="text-purple-600 w-6 h-6" />, title: 'Structured Courses', desc: 'Follow structured curricula designed for optimal comprehension and retention.' },
+              { icon: <CheckCircle className="text-purple-600 w-6 h-6" />, title: 'Earn Certificates', desc: 'Showcase your achievements with verifiable digital completion certificates.' },
+              { icon: <MessageCircle className="text-purple-600 w-6 h-6" />, title: 'AI Assistant', desc: 'Get instant answers and personalized support powered by advanced AI.' },
+              { icon: <User className="text-purple-600 w-6 h-6" />, title: 'Find Expert Tutors', desc: 'Connect with verified professionals who match your unique learning style.' },
+              { icon: <Calendar className="text-purple-600 w-6 h-6" />, title: 'Easy Booking', desc: 'Seamlessly schedule time slots that fit perfectly into your busy calendar.' },
+              { icon: <Star className="text-purple-600 w-6 h-6" />, title: 'Ratings & Reviews', desc: 'Make informed decisions with transparent feedback from our community.' },
+              { icon: <GraduationCap className="text-purple-600 w-6 h-6" />, title: 'Structured Courses', desc: 'Follow structured curricula designed for optimal comprehension and retention.' },
+              { icon: <CheckCircle className="text-purple-600 w-6 h-6" />, title: 'Earn Certificates', desc: 'Showcase your achievements with verifiable digital completion certificates.' },
+              { icon: <MessageCircle className="text-purple-600 w-6 h-6" />, title: 'AI Assistant', desc: 'Get instant answers and personalized support powered by advanced AI.' }
+            ].map((f, i) => (
+              <div key={i} className="bg-white p-6 rounded-3xl border border-purple-100 shadow-[0_8px_30px_rgb(0,0,0,0.04)] shadow-purple-500/10 flex items-start gap-5 min-h-[140px] flex-shrink-0">
+                <div className="bg-purple-50 p-4 rounded-2xl flex-shrink-0">
+                  {f.icon}
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold mb-2 text-slate-900">{f.title}</h3>
+                  <p className="text-slate-600 leading-relaxed">{f.desc}</p>
+                </div>
+              </div>
+            ))}
+          </motion.div>
+        </div>
       </section>
 
       {/* Featured Tutors Section */}

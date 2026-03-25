@@ -79,6 +79,17 @@ const getAllowedTabs = (user: AppUser | null): Tab[] => {
 
 const canAccessTab = (tab: Tab, user: AppUser | null) => getAllowedTabs(user).includes(tab);
 
+const getTutorDisplayName = (tutor: Tutor & { name?: string }) => {
+  const firstName = tutor.firstName?.trim();
+  const lastName = tutor.lastName?.trim();
+
+  if (firstName || lastName) {
+    return `${firstName || ''} ${lastName || ''}`.trim();
+  }
+
+  return tutor.name?.trim() || 'Tutor';
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('home');
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
@@ -913,57 +924,128 @@ export default function App() {
               </div>
             </motion.div>
 
-            {/* Features Grid */}
-            <section className="grid md:grid-cols-3 gap-8">
-              {[
-                { icon: <CheckCircle className="text-emerald-500" />, title: 'Verified Tutors', desc: 'Automated qualification validation ensures only the best teach you.' },
-                { icon: <Calendar className="text-indigo-500" />, title: 'Easy Booking', desc: 'Seamless time-slot management and session scheduling.' },
-                { icon: <Bot className="text-purple-500" />, title: 'AI Support', desc: 'Get instant answers to your STEM questions with our AI tutor.' }
-              ].map((f, i) => (
-                <div key={i} className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                  <div className="bg-slate-50 w-12 h-12 rounded-2xl flex items-center justify-center mb-6">
-                    {f.icon}
-                  </div>
-                  <h3 className="text-xl font-bold mb-2">{f.title}</h3>
-                  <p className="text-slate-600">{f.desc}</p>
+            {/* Features Section */}
+            <section className="grid lg:grid-cols-2 gap-12 items-center">
+              <div className="space-y-6 lg:pr-12">
+                <div className="inline-flex items-center gap-2 bg-purple-50 px-4 py-2 rounded-full border border-purple-100">
+                  <span className="text-xs font-bold text-purple-700 uppercase tracking-widest">Platform Features</span>
                 </div>
-              ))}
+                <h2 className="text-4xl md:text-5xl font-extrabold text-slate-900 leading-tight">
+                  Everything you need to <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-indigo-600">succeed</span>
+                </h2>
+                <p className="text-lg text-slate-600 leading-relaxed">
+                  Discover a comprehensive suite of powerful tools and features designed to enhance your learning experience, connect you with the best educators, and accelerate your academic progress.
+                </p>
+                <button onClick={() => setActiveTab('tutors')} className="mt-4 bg-purple-50 text-purple-700 font-bold px-6 py-3 rounded-xl hover:bg-purple-100 transition-colors inline-flex items-center gap-2">
+                  Explore Tutors <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="relative h-[500px] overflow-hidden rounded-[2rem] p-2 bg-slate-50/50">
+                <div className="absolute top-0 inset-x-0 h-16 bg-gradient-to-b from-white to-transparent z-10 pointer-events-none" />
+                <div className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-white to-transparent z-10 pointer-events-none" />
+                
+                <motion.div
+                  animate={{ y: ['0%', '-50%'] }}
+                  transition={{ duration: 15, repeat: Infinity, ease: 'linear' }}
+                  className="flex flex-col gap-6"
+                >
+                  {[
+                    { icon: <User className="text-purple-600 w-6 h-6" />, title: 'Find Expert Tutors', desc: 'Connect with verified professionals who match your unique learning style.' },
+                    { icon: <Calendar className="text-purple-600 w-6 h-6" />, title: 'Easy Booking', desc: 'Seamlessly schedule time slots that fit perfectly into your busy calendar.' },
+                    { icon: <Star className="text-purple-600 w-6 h-6" />, title: 'Ratings & Reviews', desc: 'Make informed decisions with transparent feedback from our community.' },
+                    { icon: <GraduationCap className="text-purple-600 w-6 h-6" />, title: 'Structured Courses', desc: 'Follow structured curricula designed for optimal comprehension and retention.' },
+                    { icon: <CheckCircle className="text-purple-600 w-6 h-6" />, title: 'Earn Certificates', desc: 'Showcase your achievements with verifiable digital completion certificates.' },
+                    { icon: <Bot className="text-purple-600 w-6 h-6" />, title: 'AI Assistant', desc: 'Get instant answers and personalized support powered by advanced AI.' },
+                    { icon: <User className="text-purple-600 w-6 h-6" />, title: 'Find Expert Tutors', desc: 'Connect with verified professionals who match your unique learning style.' },
+                    { icon: <Calendar className="text-purple-600 w-6 h-6" />, title: 'Easy Booking', desc: 'Seamlessly schedule time slots that fit perfectly into your busy calendar.' },
+                    { icon: <Star className="text-purple-600 w-6 h-6" />, title: 'Ratings & Reviews', desc: 'Make informed decisions with transparent feedback from our community.' },
+                    { icon: <GraduationCap className="text-purple-600 w-6 h-6" />, title: 'Structured Courses', desc: 'Follow structured curricula designed for optimal comprehension and retention.' },
+                    { icon: <CheckCircle className="text-purple-600 w-6 h-6" />, title: 'Earn Certificates', desc: 'Showcase your achievements with verifiable digital completion certificates.' },
+                    { icon: <Bot className="text-purple-600 w-6 h-6" />, title: 'AI Assistant', desc: 'Get instant answers and personalized support powered by advanced AI.' }
+                  ].map((f, i) => (
+                    <div key={i} className="bg-white p-6 rounded-3xl border border-purple-100 shadow-[0_8px_30px_rgb(0,0,0,0.04)] shadow-purple-500/10 flex items-start gap-5 min-h-[140px] flex-shrink-0">
+                      <div className="bg-purple-50 p-4 rounded-2xl flex-shrink-0">
+                        {f.icon}
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-bold mb-2 text-slate-900">{f.title}</h3>
+                        <p className="text-slate-600 leading-relaxed">{f.desc}</p>
+                      </div>
+                    </div>
+                  ))}
+                </motion.div>
+              </div>
             </section>
             {/* Featured Tutors Section */}
             <section className="space-y-12">
               <div className="text-center space-y-4">
-                <h2 className="text-4xl font-bold text-slate-900">Meet Our Top Rated Tutors</h2>
-                <p className="text-slate-600 max-w-2xl mx-auto">Learn from the best minds in the country. Our tutors are verified experts with proven track records.</p>
+                <div className="inline-flex items-center gap-2 bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100 mb-2">
+                  <span className="text-xs font-bold text-indigo-700 uppercase tracking-widest">Expert Instructors</span>
+                </div>
+                <h2 className="text-4xl md:text-5xl font-extrabold text-slate-900 leading-tight">Meet Our Top Rated Tutors</h2>
+                <p className="text-lg text-slate-600 max-w-2xl mx-auto">Learn from the best minds in the country. Our tutors are verified experts with proven track records in guiding students to success.</p>
               </div>
-              <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-                {tutors.map(tutor => (
+              <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
+                {[...tutors].sort((a, b) => b.rating - a.rating).slice(0, 4).map(tutor => (
                   <motion.div 
-                    whileHover={{ y: -10 }}
+                    whileHover={{ y: -8 }}
                     key={tutor.id}
-                    className="bg-white rounded-[2rem] border border-slate-100 overflow-hidden shadow-sm hover:shadow-xl transition-all group cursor-pointer"
+                    className="relative bg-white rounded-[1.5rem] border border-slate-100 overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.04)] hover:shadow-[0_20px_40px_rgba(79,70,229,0.1)] transition-all duration-300 group cursor-pointer flex flex-col"
                     onClick={() => setActiveTab('tutors')}
                   >
-                    <div className="relative h-64 overflow-hidden">
-                      <img src={tutor.avatar} alt={tutor.firstName + ' ' + tutor.lastName} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" referrerPolicy="no-referrer" />
-                      <div className="absolute top-4 right-4 bg-white/90 backdrop-blur-md px-3 py-1 rounded-full flex items-center gap-1 shadow-sm">
-                        <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
-                        <span className="text-xs font-bold">{tutor.rating}</span>
+                    <div className="relative h-56 overflow-hidden">
+                      <div className="absolute inset-0 bg-gradient-to-t from-slate-900/65 via-slate-900/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-10" />
+                      <img src={tutor.avatar} alt={getTutorDisplayName(tutor)} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" referrerPolicy="no-referrer" />
+                      
+                      {/* Subject Badge */}
+                      <div className="absolute top-4 right-4 z-20">
+                        <span className="bg-white/95 backdrop-blur-md text-indigo-700 text-xs font-bold px-3 py-1.5 rounded-xl shadow-lg border border-indigo-100">
+                          {tutor.subjects[0]}
+                        </span>
                       </div>
                     </div>
-                    <div className="p-6 space-y-2">
-                      <h3 className="font-bold text-lg text-slate-900">{tutor.firstName} {tutor.lastName}</h3>
-                      <p className="text-xs text-indigo-600 font-bold uppercase tracking-widest">{tutor.subjects[0]}</p>
-                      <p className="text-sm text-slate-500 line-clamp-1">{tutor.qualifications}</p>
+                    
+                    <div className="p-6 flex-1 flex flex-col bg-white">
+                      <div className="mb-4 space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <h3 className="font-bold text-lg text-slate-900 block w-full leading-tight whitespace-normal break-words">
+                            {getTutorDisplayName(tutor)}
+                          </h3>
+                          {tutor.isVerified && (
+                            <CheckCircle className="w-5 h-5 text-emerald-500 shrink-0" fill="currentColor" opacity="0.2" />
+                          )}
+                        </div>
+                        <p className="text-sm font-bold text-indigo-600 truncate block w-full">
+                          {tutor.qualifications}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 mb-4">
+                        <Star className="w-5 h-5 text-amber-500 fill-amber-500" />
+                        <span className="font-bold text-slate-800">{tutor.rating.toFixed(1)}</span>
+                        <span className="text-sm font-medium text-slate-500">({tutor.reviewCount} reviews)</span>
+                      </div>
+                      
+                      <p className="text-sm text-slate-600 line-clamp-2 mb-6 flex-1 leading-relaxed">
+                        {tutor.bio}
+                      </p>
+                      
+                      <div className="mt-auto pt-4 border-t border-slate-100 flex items-center justify-center">
+                        <div className="text-indigo-600 font-bold text-sm flex items-center gap-1 group-hover:text-indigo-700 transition-colors">
+                          View Profile <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                        </div>
+                      </div>
                     </div>
                   </motion.div>
                 ))}
               </div>
-              <div className="text-center">
+              <div className="text-center pt-6">
                 <button 
                   onClick={() => setActiveTab('tutors')}
-                  className="inline-flex items-center gap-2 text-indigo-600 font-bold hover:gap-3 transition-all"
+                  className="inline-flex items-center justify-center gap-2 bg-white text-indigo-600 border-2 border-indigo-100 font-bold px-8 py-4 rounded-2xl hover:bg-indigo-50 hover:border-indigo-200 hover:gap-3 transition-all shadow-sm group"
                 >
-                  View All Tutors <ArrowRight className="w-5 h-5" />
+                  View All Educators <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                 </button>
               </div>
             </section>
@@ -1018,7 +1100,7 @@ export default function App() {
                       <div className="relative">
                         <img 
                           src={tutor.avatar} 
-                          alt={tutor.firstName + ' ' + tutor.lastName} 
+                          alt={getTutorDisplayName(tutor)} 
                           className="w-20 h-20 rounded-2xl object-cover border-4 border-white shadow-xl" 
                           referrerPolicy="no-referrer" 
                         />
@@ -1029,7 +1111,7 @@ export default function App() {
                         )}
                       </div>
                       <div className="flex-1 pt-1">
-                        <h3 className="font-black text-xl text-slate-900 leading-tight mb-1">{tutor.firstName} {tutor.lastName}</h3>
+                        <h3 className="font-black text-xl text-slate-900 leading-tight mb-1">{getTutorDisplayName(tutor)}</h3>
                         <p className="text-xs font-bold text-indigo-600 uppercase tracking-widest">{tutor.qualifications}</p>
                         <div className="flex items-center gap-1.5 mt-2">
                           <div className="flex items-center gap-1 bg-amber-50 px-2 py-0.5 rounded-lg">

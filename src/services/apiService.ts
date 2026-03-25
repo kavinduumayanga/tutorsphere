@@ -3,6 +3,35 @@ import { User, Tutor, Review, Course, Resource, Booking, Question, Quiz, StudyPl
 const API_BASE_URL = `${window.location.origin}/api`;
 
 class ApiService {
+  private sanitizeTutorName(value: string): string {
+    return value.replace(/\s+updated\s*$/i, '').trim();
+  }
+
+  private normalizeTutor(tutor: any): Tutor {
+    const firstName = this.sanitizeTutorName((tutor?.firstName || '').trim());
+    const lastName = this.sanitizeTutorName((tutor?.lastName || '').trim());
+    const fullName = this.sanitizeTutorName((tutor?.name || '').trim());
+
+    if (firstName || lastName) {
+      return tutor as Tutor;
+    }
+
+    if (fullName) {
+      const [parsedFirstName, ...rest] = fullName.split(' ');
+      return {
+        ...tutor,
+        firstName: parsedFirstName || 'Tutor',
+        lastName: rest.join(' '),
+      } as Tutor;
+    }
+
+    return {
+      ...tutor,
+      firstName: 'Tutor',
+      lastName: '',
+    } as Tutor;
+  }
+
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     const isFormDataBody = options?.body instanceof FormData;
     const requestOptions: RequestInit = {
@@ -66,11 +95,13 @@ class ApiService {
 
   // Tutor methods
   async getTutors(): Promise<Tutor[]> {
-    return this.request('/tutors');
+    const tutors = await this.request<any[]>('/tutors');
+    return tutors.map((tutor) => this.normalizeTutor(tutor));
   }
 
   async getTutor(id: string): Promise<Tutor> {
-    return this.request(`/tutors/${id}`);
+    const tutor = await this.request<any>(`/tutors/${id}`);
+    return this.normalizeTutor(tutor);
   }
 
   async createTutor(tutor: Omit<Tutor, 'id'>): Promise<Tutor> {

@@ -987,7 +987,7 @@ export default function App() {
                 <p className="text-lg text-slate-600 max-w-2xl mx-auto">Learn from the best minds in the country. Our tutors are verified experts with proven track records in guiding students to success.</p>
               </div>
               <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
-                {tutors.slice(0, 4).map(tutor => (
+                {[...tutors].sort((a, b) => b.rating - a.rating).slice(0, 4).map(tutor => (
                   <motion.div 
                     whileHover={{ y: -8 }}
                     key={tutor.id}

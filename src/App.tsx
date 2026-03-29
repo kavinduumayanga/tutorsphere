@@ -42,7 +42,7 @@ import Markdown from 'react-markdown';
 import CountUp from 'react-countup';
 import { localService } from './services/localService';
 import { apiService } from './services/apiService';
-import { BookingPage } from './components/pages/BookingPage.tsx';
+
 import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz } from './types';
 import { TutorProfilePage } from './components/pages/TutorProfilePage';
 import { GetStartedSection } from "./components/pages/GetStartedSection";
@@ -111,6 +111,7 @@ const getTutorDisplayName = (tutor: Tutor & { name?: string }) => {
 };
 
 export default function App() {
+  const [selectedTutor, setSelectedTutor] = useState<Tutor | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('home');
   const [viewingTutorId, setViewingTutorId] = useState<string | null>(null);
   const [bookingTutorId, setBookingTutorId] = useState<string | null>(null);
@@ -355,6 +356,32 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isUserMenuOpen]);
 
+  const handleBookSession = async (tutor: Tutor, slotId: string) => {
+    if (!currentUser) {
+      setShowAuthModal(true);
+      return;
+    }
+    if (currentUser.role !== 'student') {
+      alert('Only student accounts can book sessions.');
+      return;
+    }
+    try {
+      const booking = await apiService.createBooking({
+        studentId: currentUser.id,
+        tutorId: tutor.id,
+        slotId,
+        status: 'confirmed',
+        subject: tutor.subjects?.[0] || 'General',
+        date: new Date().toLocaleDateString(),
+        meetingLink: 'https://meet.google.com/xyz-abc'
+      });
+      setBookings([booking, ...bookings]);
+      alert('Session booked successfully!');
+    } catch (error: any) {
+      alert(error.message || 'Failed to book session.');
+    }
+  };
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -365,7 +392,7 @@ export default function App() {
         setActiveTab('dashboard');
         localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
         setShowAuthModal(false);
-        setAuthData({ email: '', password: '', firstName: '', lastName: '', role: 'student' });
+        setAuthData({ email: '', password: '', firstName: '', lastName: '', confirmPassword: '', role: 'student' });
       } else {
         if (!authData.firstName.trim() || !authData.lastName.trim()) {
           alert('First name and last name are required.');

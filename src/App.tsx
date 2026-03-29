@@ -1169,7 +1169,7 @@ export default function App() {
                               e.stopPropagation();
                               if (!currentUser) {
                                 alert('Please login as a student to book sessions.');
-                                setActiveTab('register');
+                                setActiveTab('registerSelect');
                                 return;
                               }
                               if (currentUser.role !== 'student') {
@@ -1791,7 +1791,7 @@ export default function App() {
               <h2 className="text-3xl font-black text-slate-900 tracking-tight">Tutor Workspace</h2>
               <p className="text-slate-500 mt-2">Manage your profile, subjects, schedule, bookings, feedback, and learning content.</p>
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-6">
-                <button onClick={() => setActiveTab('registerSelect')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
+                <button onClick={() => setActiveTab('register')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
                   <p className="font-black text-slate-900">Profile & Qualifications</p>
                   <p className="text-xs text-slate-500 mt-1">Update tutor profile details</p>
                 </button>

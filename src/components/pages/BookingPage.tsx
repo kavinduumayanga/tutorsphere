@@ -6,7 +6,7 @@ import { Booking, Tutor, User as AppUser } from '../../types';
 
 type SubjectMotionTheme = 'math' | 'coding' | 'chemistry' | 'science';
 
-interface TutorsPageProps {
+interface BookingPageProps {
   currentUser: AppUser | null;
   isStudent: boolean;
   tutors: Tutor[];
@@ -255,14 +255,14 @@ function SubjectMotionGraphic({ tutor }: { tutor: Tutor }) {
   );
 }
 
-export function TutorsPage({
+export function BookingPage({
   currentUser,
   isStudent,
   tutors,
   isLoadingTutors,
   onRequireAuth,
   onBookingCreated,
-}: TutorsPageProps) {
+}: BookingPageProps) {
   const [hoveredTutorId, setHoveredTutorId] = useState<string | null>(null);
   const [selectedTutor, setSelectedTutor] = useState<Tutor | null>(null);
 

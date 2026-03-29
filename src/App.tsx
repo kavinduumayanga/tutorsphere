@@ -44,10 +44,12 @@ import CountUp from 'react-countup';
 import { localService } from './services/localService';
 import { apiService } from './services/apiService';
 import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz } from './types';
+import { TutorProfilePage } from './components/pages/TutorProfilePage';
+import { TutorBookingPage } from './components/pages/TutorBookingPage';
 
 const STEM_SUBJECTS = ['Mathematics', 'Physics', 'Chemistry', 'Biology', 'ICT', 'Computer Science', 'Software Engineering'];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'register' | 'dashboard' | 'settings';
+type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
@@ -58,23 +60,25 @@ const NAV_LABELS: Record<Tab, string> = {
   quizzes: 'Quizzes',
   register: 'Profile',
   dashboard: 'Dashboard',
-  settings: 'Settings'
+  settings: 'Settings',
+  tutorProfile: 'Tutor Profile',
+  tutorBooking: 'Book Session'
 };
 
 const getAllowedTabs = (user: AppUser | null): Tab[] => {
   if (!user) {
-    return ['home', 'tutors', 'courses', 'resources', 'register'];
+    return ['home', 'tutors', 'courses', 'resources', 'register', 'tutorProfile', 'tutorBooking'];
   }
 
   if (user.role === 'student') {
-    return ['home', 'tutors', 'questions', 'courses', 'resources', 'dashboard', 'settings'];
+    return ['home', 'tutors', 'questions', 'courses', 'resources', 'dashboard', 'settings', 'tutorProfile', 'tutorBooking'];
   }
 
   if (user.role === 'tutor') {
-    return ['home', 'dashboard', 'register', 'courses', 'resources', 'settings'];
+    return ['home', 'dashboard', 'register', 'courses', 'resources', 'settings', 'tutorProfile', 'tutorBooking'];
   }
 
-  return ['home'];
+  return ['home', 'tutorProfile', 'tutorBooking'];
 };
 
 const canAccessTab = (tab: Tab, user: AppUser | null) => getAllowedTabs(user).includes(tab);
@@ -92,6 +96,8 @@ const getTutorDisplayName = (tutor: Tutor & { name?: string }) => {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('home');
+  const [viewingTutorId, setViewingTutorId] = useState<string | null>(null);
+  const [bookingTutorId, setBookingTutorId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -660,7 +666,7 @@ export default function App() {
 
             {/* Desktop Nav */}
             <div className="hidden md:flex items-center gap-6">
-              {availableTabs.filter(tab => tab !== 'dashboard' && tab !== 'settings' && tab !== 'register').map(tab => (
+              {availableTabs.filter(tab => tab !== 'dashboard' && tab !== 'settings' && tab !== 'register' && tab !== 'tutorProfile' && tab !== 'tutorBooking').map(tab => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
@@ -738,7 +744,7 @@ export default function App() {
             exit={{ opacity: 0, y: -20 }}
             className="md:hidden bg-white border-b border-slate-200 px-4 py-4 space-y-4"
           >
-            {availableTabs.filter(tab => tab !== 'dashboard' && tab !== 'settings' && tab !== 'register').map(tab => (
+            {availableTabs.filter(tab => tab !== 'dashboard' && tab !== 'settings' && tab !== 'register' && tab !== 'tutorProfile' && tab !== 'tutorBooking').map(tab => (
               <button
                 key={tab}
                 onClick={() => {setActiveTab(tab); setIsMenuOpen(false)}}
@@ -776,6 +782,45 @@ export default function App() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {activeTab === 'tutorProfile' && viewingTutorId && (
+          <TutorProfilePage 
+            tutorId={viewingTutorId}
+            initialTutor={tutors.find(t => t.id === viewingTutorId)}
+            courses={courses.filter(c => c.tutorId === viewingTutorId)}
+            onBack={() => {
+              setViewingTutorId(null);
+              setActiveTab('tutors');
+            }}
+            onBookSession={(id) => {
+              setBookingTutorId(id);
+              setActiveTab('tutorBooking');
+            }}
+            isLoggedIn={!!currentUser}
+            isStudent={isStudent}
+          />
+        )}
+
+        {activeTab === 'tutorBooking' && bookingTutorId && (
+          <TutorBookingPage
+            tutor={tutors.find(t => t.id === bookingTutorId) || null}
+            onBack={() => {
+              setBookingTutorId(null);
+              if (viewingTutorId === bookingTutorId) {
+                setActiveTab('tutorProfile');
+              } else {
+                setViewingTutorId(bookingTutorId);
+                setActiveTab('tutorProfile');
+              }
+            }}
+            onConfirmBooking={(slotId) => {
+              const tutor = tutors.find(t => t.id === bookingTutorId);
+              if (tutor) {
+                handleBookSession(tutor, slotId);
+              }
+            }}
+          />
+        )}
+
         {activeTab === 'home' && (
           <div className="space-y-24">
             {/* Hero Section */}
@@ -992,7 +1037,10 @@ export default function App() {
                     whileHover={{ y: -8 }}
                     key={tutor.id}
                     className="relative bg-white rounded-[1.5rem] border border-slate-100 overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.04)] hover:shadow-[0_20px_40px_rgba(79,70,229,0.1)] transition-all duration-300 group cursor-pointer flex flex-col"
-                    onClick={() => setActiveTab('tutors')}
+                    onClick={() => {
+                      setViewingTutorId(tutor.id);
+                      setActiveTab('tutorProfile');
+                    }}
                   >
                     <div className="relative h-56 overflow-hidden">
                       <div className="absolute inset-0 bg-gradient-to-t from-slate-900/65 via-slate-900/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-10" />
@@ -1138,45 +1186,41 @@ export default function App() {
                         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Hourly Rate</span>
                         <p className="text-2xl font-black text-slate-900">LKR {tutor.pricePerHour}</p>
                       </div>
-                      <button 
-                        onClick={() => setSelectedTutor(selectedTutor?.id === tutor.id ? null : tutor)}
-                        className={`px-6 py-3 rounded-2xl font-black text-sm transition-all ${
-                          selectedTutor?.id === tutor.id 
-                          ? 'bg-slate-900 text-white' 
-                          : 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700'
-                        }`}
-                      >
-                        {selectedTutor?.id === tutor.id ? 'Close' : (isStudent || !currentUser ? 'Book Session' : 'View Profile')}
-                      </button>
+                      <div className="flex gap-3">
+                        <button
+                          onClick={() => {
+                            setViewingTutorId(tutor.id);
+                            setActiveTab('tutorProfile');
+                          }}
+                          className="px-6 py-3 rounded-2xl font-black text-sm transition-all bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+                        >
+                          View Profile
+                        </button>
+                        {(!currentUser || isStudent) && (
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!currentUser) {
+                                alert('Please login as a student to book sessions.');
+                                setActiveTab('register');
+                                return;
+                              }
+                              if (currentUser.role !== 'student') {
+                                alert('Only student accounts can book sessions.');
+                                return;
+                              }
+                              setBookingTutorId(tutor.id);
+                              setActiveTab('tutorBooking');
+                            }}
+                            className="px-6 py-3 rounded-2xl font-black text-sm transition-all bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700"
+                          >
+                            Book Session
+                          </button>
+                        )}
+                      </div>
                     </div>
 
-                    <AnimatePresence>
-                      {selectedTutor?.id === tutor.id && (isStudent || !currentUser) && (
-                        <motion.div 
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: 'auto' }}
-                          exit={{ opacity: 0, height: 0 }}
-                          className="mt-6 pt-6 border-t border-slate-50 space-y-4 overflow-hidden"
-                        >
-                          <div className="flex justify-between items-center">
-                            <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">Available Slots</h4>
-                            <Calendar className="w-4 h-4 text-slate-400" />
-                          </div>
-                          <div className="grid grid-cols-2 gap-3">
-                            {tutor.availability.map(slot => (
-                              <button 
-                                key={slot.id}
-                                onClick={() => handleBookSession(tutor, slot.id)}
-                                className="p-3 rounded-2xl border-2 border-slate-50 hover:border-indigo-200 hover:bg-indigo-50 transition-all text-left group"
-                              >
-                                <p className="font-black text-xs text-slate-700 group-hover:text-indigo-700">{slot.day}</p>
-                                <p className="text-[10px] font-bold text-slate-400 mt-0.5">{slot.startTime} - {slot.endTime}</p>
-                              </button>
-                            ))}
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
+                    
                   </div>
                 </motion.div>
               ))}

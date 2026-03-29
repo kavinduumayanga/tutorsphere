@@ -1196,48 +1196,31 @@ export default function App() {
                         >
                           View Profile
                         </button>
-                        {(isStudent || !currentUser) && (
+                        {(!currentUser || isStudent) && (
                           <button 
-                            onClick={() => setSelectedTutor(selectedTutor?.id === tutor.id ? null : tutor)}
-                            className={`px-6 py-3 rounded-2xl font-black text-sm transition-all ${
-                              selectedTutor?.id === tutor.id 
-                              ? 'bg-slate-900 text-white' 
-                              : 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700'
-                            }`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!currentUser) {
+                                alert('Please login as a student to book sessions.');
+                                setActiveTab('register');
+                                return;
+                              }
+                              if (currentUser.role !== 'student') {
+                                alert('Only student accounts can book sessions.');
+                                return;
+                              }
+                              setBookingTutorId(tutor.id);
+                              setActiveTab('tutorBooking');
+                            }}
+                            className="px-6 py-3 rounded-2xl font-black text-sm transition-all bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700"
                           >
-                            {selectedTutor?.id === tutor.id ? 'Close' : 'Book Session'}
+                            Book Session
                           </button>
                         )}
                       </div>
                     </div>
 
-                    <AnimatePresence>
-                      {selectedTutor?.id === tutor.id && (isStudent || !currentUser) && (
-                        <motion.div 
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: 'auto' }}
-                          exit={{ opacity: 0, height: 0 }}
-                          className="mt-6 pt-6 border-t border-slate-50 space-y-4 overflow-hidden"
-                        >
-                          <div className="flex justify-between items-center">
-                            <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">Available Slots</h4>
-                            <Calendar className="w-4 h-4 text-slate-400" />
-                          </div>
-                          <div className="grid grid-cols-2 gap-3">
-                            {tutor.availability.map(slot => (
-                              <button 
-                                key={slot.id}
-                                onClick={() => handleBookSession(tutor, slot.id)}
-                                className="p-3 rounded-2xl border-2 border-slate-50 hover:border-indigo-200 hover:bg-indigo-50 transition-all text-left group"
-                              >
-                                <p className="font-black text-xs text-slate-700 group-hover:text-indigo-700">{slot.day}</p>
-                                <p className="text-[10px] font-bold text-slate-400 mt-0.5">{slot.startTime} - {slot.endTime}</p>
-                              </button>
-                            ))}
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
+                    
                   </div>
                 </motion.div>
               ))}

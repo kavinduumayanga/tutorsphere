@@ -14,6 +14,8 @@ import {
   MessageSquare, 
   Lock, 
   Mail,
+  MapPin,
+  Phone,
   User, 
   GraduationCap, 
   CheckCircle, 
@@ -49,10 +51,11 @@ import { GetStartedSection } from "./components/pages/GetStartedSection";
 import { TutorBookingPage } from './components/pages/TutorBookingPage';
 import { MOCK_TUTORS, MOCK_COURSES, MOCK_RESOURCES } from './data/mockData';
 import { RegistrationSelectionPage } from './components/pages/RegistrationSelectionPage';
+import { AboutPage } from './components/pages/AboutPage';
 
 const STEM_SUBJECTS = ['Mathematics', 'Physics', 'Chemistry', 'Biology', 'ICT', 'Computer Science', 'Software Engineering'];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking';
+type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'about';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
@@ -68,7 +71,8 @@ const NAV_LABELS: Record<Tab, string> = {
   dashboard: 'Dashboard',
   settings: 'Settings',
   tutorProfile: 'Tutor Profile',
-  tutorBooking: 'Book Session'
+  tutorBooking: 'Book Session',
+  about: 'About Us'
 };
 
 const getAllowedTabs = (user: AppUser | null): Tab[] => {
@@ -82,19 +86,20 @@ const getAllowedTabs = (user: AppUser | null): Tab[] => {
       'registerStudent',
       'registerTutor',
       'tutorProfile',
-      'tutorBooking'
+      'tutorBooking',
+      'about'
     ];
   }
 
   if (user.role === 'student') {
-    return ['home', 'tutors', 'questions', 'courses', 'resources', 'dashboard', 'settings', 'tutorProfile', 'tutorBooking'];
+    return ['home', 'tutors', 'questions', 'courses', 'resources', 'dashboard', 'settings', 'tutorProfile', 'tutorBooking', 'about'];
   }
 
   if (user.role === 'tutor') {
-    return ['home', 'dashboard', 'register', 'courses', 'resources', 'settings', 'tutorProfile', 'tutorBooking'];
+    return ['home', 'dashboard', 'register', 'courses', 'resources', 'settings', 'tutorProfile', 'tutorBooking', 'about'];
   }
 
-  return ['home', 'tutorProfile', 'tutorBooking'];
+  return ['home', 'tutorProfile', 'tutorBooking', 'about'];
 };
 
 const canAccessTab = (tab: Tab, user: AppUser | null) => getAllowedTabs(user).includes(tab);
@@ -2400,6 +2405,11 @@ export default function App() {
           </div>
         )}
 
+        {/* About Page */}
+        {activeTab === 'about' && (
+          <AboutPage setActiveTab={setActiveTab} />
+        )}
+
       </main>
 
       {/* Auth Modal */}
@@ -2792,34 +2802,61 @@ export default function App() {
       )}
 
       {/* Footer */}
-      <footer className="bg-slate-900 text-slate-400 py-12 mt-20">
+      <footer className="bg-slate-900 border-t border-slate-800 text-slate-400 pt-16 pb-8 mt-20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid md:grid-cols-4 gap-8 mb-8">
-            <div className="col-span-2">
-              <div className="flex items-center gap-2 text-white mb-4">
-                <GraduationCap className="w-6 h-6" />
-                <span className="text-xl font-bold">TutorSphere</span>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 mb-16">
+            <div className="lg:col-span-1 space-y-6">
+              <div className="flex items-center gap-2 text-white">
+                <div className="bg-indigo-600 p-2 rounded-lg">
+                  <GraduationCap className="w-5 h-5" />
+                </div>
+                <span className="text-xl font-bold tracking-tight">TutorSphere</span>
               </div>
-              <p className="max-w-xs">Connecting Sri Lankan students with verified STEM and ICT experts for a brighter academic future.</p>
+              <p className="text-sm text-slate-400 leading-relaxed">
+                Connecting Sri Lankan students with verified STEM and ICT experts for a brighter academic future.
+              </p>
             </div>
+
             <div>
-              <h4 className="text-white font-bold mb-4">Platform</h4>
-              <ul className="space-y-2 text-sm">
-                <li><button onClick={() => setActiveTab('tutors')}>Find Tutors</button></li>
-                <li><button onClick={() => setActiveTab('questions')}>Q&A Support</button></li>
-                <li><button onClick={() => setActiveTab('registerSelect')}>Become a Tutor</button></li>
+              <h4 className="text-white font-semibold mb-6">Platform</h4>
+              <ul className="space-y-4 text-sm">
+                <li><button onClick={() => setActiveTab('tutors')} className="hover:text-indigo-400 transition-colors">Find Tutors</button></li>
+                <li><button onClick={() => setActiveTab('courses')} className="hover:text-indigo-400 transition-colors">Explore Courses</button></li>
+                <li><button onClick={() => setIsChatOpen(true)} className="hover:text-indigo-400 transition-colors">Q&A Support</button></li>
+                <li><button onClick={() => setActiveTab('registerSelect')} className="hover:text-indigo-400 transition-colors">Become a Tutor</button></li>
               </ul>
             </div>
+
             <div>
-              <h4 className="text-white font-bold mb-4">Contact</h4>
-              <ul className="space-y-2 text-sm">
-                <li>support@tutorsphere.lk</li>
-                <li>Colombo, Sri Lanka</li>
+              <h4 className="text-white font-semibold mb-6">Company</h4>
+              <ul className="space-y-4 text-sm">
+                <li><button onClick={() => setActiveTab('about')} className="hover:text-indigo-400 transition-colors">About Us</button></li>
+                <li><a href="#" className="hover:text-indigo-400 transition-colors">Careers</a></li>
+                <li><a href="#" className="hover:text-indigo-400 transition-colors">Privacy Policy</a></li>
+                <li><a href="#" className="hover:text-indigo-400 transition-colors">Terms of Service</a></li>
+              </ul>
+            </div>
+
+            <div>
+              <h4 className="text-white font-semibold mb-6">Contact</h4>
+              <ul className="space-y-4 text-sm">
+                <li className="flex items-start gap-3">
+                  <Mail className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
+                  <span>support@tutorsphere.lk</span>
+                </li>
+                <li className="flex items-start gap-3">
+                  <MapPin className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
+                  <span>Colombo, Sri Lanka</span>
+                </li>
+                <li className="flex items-start gap-3">
+                  <Phone className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
+                  <span>+94 11 234 5678</span>
+                </li>
               </ul>
             </div>
           </div>
-          <div className="pt-8 border-t border-slate-800 text-center text-xs">
-            © 2026 TutorSphere. All rights reserved. Built for Academic Excellence.
+          <div className="pt-8 border-t border-slate-800 flex justify-center text-sm">
+            <p>© {new Date().getFullYear()} TutorSphere. All rights reserved.</p>
           </div>
         </div>
       </footer>

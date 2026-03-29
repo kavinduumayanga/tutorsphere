@@ -18,7 +18,6 @@ import {
   GraduationCap, 
   CheckCircle, 
   X, 
-  Menu,
   Video,
   Star,
   Clock,
@@ -43,12 +42,14 @@ import Markdown from 'react-markdown';
 import CountUp from 'react-countup';
 import { localService } from './services/localService';
 import { apiService } from './services/apiService';
-import { BookingPage } from './components/pages/BookingPage.tsx';
 import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz } from './types';
+import { TutorProfilePage } from './components/pages/TutorProfilePage';
+import { GetStartedSection } from "./components/pages/GetStartedSection";
+import { TutorBookingPage } from './components/pages/TutorBookingPage';
 
 const STEM_SUBJECTS = ['Mathematics', 'Physics', 'Chemistry', 'Biology', 'ICT', 'Computer Science', 'Software Engineering'];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'register' | 'dashboard' | 'settings';
+type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
@@ -59,23 +60,25 @@ const NAV_LABELS: Record<Tab, string> = {
   quizzes: 'Quizzes',
   register: 'Profile',
   dashboard: 'Dashboard',
-  settings: 'Settings'
+  settings: 'Settings',
+  tutorProfile: 'Tutor Profile',
+  tutorBooking: 'Book Session'
 };
 
 const getAllowedTabs = (user: AppUser | null): Tab[] => {
   if (!user) {
-    return ['home', 'tutors', 'courses', 'resources', 'register'];
+    return ['home', 'tutors', 'courses', 'resources', 'register', 'tutorProfile', 'tutorBooking'];
   }
 
   if (user.role === 'student') {
-    return ['home', 'tutors', 'questions', 'courses', 'resources', 'dashboard', 'settings'];
+    return ['home', 'tutors', 'questions', 'courses', 'resources', 'dashboard', 'settings', 'tutorProfile', 'tutorBooking'];
   }
 
   if (user.role === 'tutor') {
-    return ['home', 'dashboard', 'register', 'courses', 'resources', 'settings'];
+    return ['home', 'dashboard', 'register', 'courses', 'resources', 'settings', 'tutorProfile', 'tutorBooking'];
   }
 
-  return ['home'];
+  return ['home', 'tutorProfile', 'tutorBooking'];
 };
 
 const canAccessTab = (tab: Tab, user: AppUser | null) => getAllowedTabs(user).includes(tab);
@@ -93,8 +96,9 @@ const getTutorDisplayName = (tutor: Tutor & { name?: string }) => {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('home');
+  const [viewingTutorId, setViewingTutorId] = useState<string | null>(null);
+  const [bookingTutorId, setBookingTutorId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
@@ -159,6 +163,7 @@ export default function App() {
 
   // Booking State
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [selectedTutor, setSelectedTutor] = useState<Tutor | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [userCourses, setUserCourses] = useState<string[]>([]);
 
@@ -195,6 +200,8 @@ export default function App() {
   const isStudent = currentUser?.role === 'student';
   const isTutor = currentUser?.role === 'tutor';
   const availableTabs = getAllowedTabs(currentUser);
+  const primaryNavTabs: Tab[] = ['home', 'tutors', 'courses', 'resources'];
+  const navTabs = currentUser ? availableTabs.filter(tab => primaryNavTabs.includes(tab)) : primaryNavTabs;
   const canUseChatbot = !currentUser || isStudent;
 
   // Fetch data from API on component mount
@@ -462,6 +469,33 @@ export default function App() {
     }
   };
 
+  const handleBookSession = async (tutor: Tutor, slotId: string) => {
+    if (!currentUser) {
+      setShowAuthModal(true);
+      return;
+    }
+    if (currentUser.role !== 'student') {
+      alert('Only student accounts can book sessions.');
+      return;
+    }
+    try {
+      const booking = await apiService.createBooking({
+        studentId: currentUser.id,
+        tutorId: tutor.id,
+        slotId,
+        status: 'confirmed',
+        subject: tutor.subjects[0],
+        date: new Date().toLocaleDateString(),
+        meetingLink: 'https://meet.google.com/abc-defg-hij'
+      });
+      setBookings([booking, ...bookings]);
+      alert('Session booked successfully!');
+    } catch (error) {
+      console.error('Failed to book session:', error);
+      alert('Failed to book session. Please try again.');
+    }
+  };
+
   const handleEnrollCourse = async (courseId: string) => {
     if (!currentUser) {
       setShowAuthModal(true);
@@ -623,37 +657,50 @@ export default function App() {
       {/* Navbar */}
       <nav className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16 items-center">
-            <div className="flex items-center gap-2 cursor-pointer" onClick={() => setActiveTab('home')}>
+          <div className="flex items-center justify-between h-16 flex-nowrap">
+            {/* Left: Logo */}
+            <div className="flex items-center gap-2 cursor-pointer shrink-0" onClick={() => setActiveTab('home')}>
               <div className="bg-indigo-600 p-2 rounded-lg">
                 <GraduationCap className="text-white w-6 h-6" />
               </div>
-              <span className="text-xl font-bold tracking-tight text-indigo-900">TutorSphere</span>
+              <span className="text-xl font-bold tracking-tight text-indigo-900 whitespace-nowrap">TutorSphere</span>
             </div>
 
-            {/* Desktop Nav */}
-            <div className="hidden md:flex items-center gap-6">
-              {availableTabs.filter(tab => tab !== 'dashboard' && tab !== 'settings' && tab !== 'register').map(tab => (
+            {/* Center: Nav Links */}
+            <div className="flex items-center justify-center gap-4 flex-1 flex-nowrap">
+              {navTabs.map(tab => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
-                  className={`text-sm font-semibold ${activeTab === tab ? 'text-indigo-600' : 'text-slate-500 hover:text-indigo-500'}`}
+                  className={`text-sm font-semibold whitespace-nowrap transition-colors px-1 ${activeTab === tab ? 'text-indigo-600' : 'text-slate-500 hover:text-indigo-500'}`}
                 >
                   {NAV_LABELS[tab]}
                 </button>
               ))}
+            </div>
+
+            {/* Right: Auth Buttons */}
+            <div className="flex items-center gap-3 shrink-0">
               {!currentUser ? (
-                <button 
-                  onClick={() => {setAuthMode('login'); setShowAuthModal(true)}} 
-                  className="bg-indigo-600 text-white px-5 py-2 rounded-full text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
-                >
-                  Login
-                </button>
+                <>
+                  <button 
+                    onClick={() => {setAuthMode('login'); setShowAuthModal(true)}} 
+                    className="w-[100px] border border-indigo-200 text-indigo-600 hover:bg-indigo-50 py-2 rounded-full text-sm font-bold transition-all whitespace-nowrap text-center"
+                  >
+                    Login
+                  </button>
+                  <button 
+                    onClick={() => {setAuthMode('signup'); setShowAuthModal(true)}} 
+                    className="w-[100px] bg-indigo-600 text-white py-2 rounded-full text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 whitespace-nowrap text-center"
+                  >
+                    Sign Up
+                  </button>
+                </>
               ) : (
                 <div className="relative user-menu">
                   <button 
                     onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-                    className="flex items-center gap-2 text-sm font-bold text-indigo-700 bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100 hover:bg-indigo-100 transition-colors"
+                    className="flex items-center gap-2 text-sm font-bold text-indigo-700 bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100 hover:bg-indigo-100 transition-colors whitespace-nowrap"
                   >
                     <User className="w-4 h-4" /> {currentUser.firstName} {currentUser.lastName}
                   </button>
@@ -691,64 +738,51 @@ export default function App() {
                 </div>
               )}
             </div>
-
-            {/* Mobile Menu Toggle */}
-            <div className="md:hidden">
-              <button onClick={() => setIsMenuOpen(!isMenuOpen)} className="p-2 text-slate-600">
-                {isMenuOpen ? <X /> : <Menu />}
-              </button>
-            </div>
           </div>
         </div>
       </nav>
 
-      {/* Mobile Menu */}
-      <AnimatePresence>
-        {isMenuOpen && (
-          <motion.div 
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className="md:hidden bg-white border-b border-slate-200 px-4 py-4 space-y-4"
-          >
-            {availableTabs.filter(tab => tab !== 'dashboard' && tab !== 'settings' && tab !== 'register').map(tab => (
-              <button
-                key={tab}
-                onClick={() => {setActiveTab(tab); setIsMenuOpen(false)}}
-                className="block w-full text-left text-slate-600 font-medium"
-              >
-                {NAV_LABELS[tab]}
-              </button>
-            ))}
-            {!currentUser ? (
-              <button 
-                onClick={() => {setAuthMode('login'); setShowAuthModal(true); setIsMenuOpen(false)}} 
-                className="w-full bg-indigo-600 text-white px-5 py-3 rounded-xl text-sm font-bold"
-              >
-                Login
-              </button>
-            ) : (
-              <div className="space-y-2">
-                <button onClick={() => {setActiveTab('dashboard'); setIsMenuOpen(false)}} className="w-full bg-indigo-50 text-indigo-700 px-5 py-3 rounded-xl text-sm font-bold">
-                  Dashboard
-                </button>
-                <button onClick={() => {setActiveTab('settings'); setIsMenuOpen(false)}} className="w-full bg-slate-50 text-slate-700 px-5 py-3 rounded-xl text-sm font-bold">
-                  Settings
-                </button>
-                <button 
-                  onClick={() => {handleSignOut(); setIsMenuOpen(false)}}
-                  className="w-full bg-red-50 text-red-600 px-5 py-3 rounded-xl text-sm font-bold hover:bg-red-100 transition-colors"
-                >
-                  Sign Out
-                </button>
-              </div>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {activeTab === 'tutorProfile' && viewingTutorId && (
+          <TutorProfilePage 
+            tutorId={viewingTutorId}
+            initialTutor={tutors.find(t => t.id === viewingTutorId)}
+            courses={courses.filter(c => c.tutorId === viewingTutorId)}
+            onBack={() => {
+              setViewingTutorId(null);
+              setActiveTab('tutors');
+            }}
+            onBookSession={(id) => {
+              setBookingTutorId(id);
+              setActiveTab('tutorBooking');
+            }}
+            isLoggedIn={!!currentUser}
+            isStudent={isStudent}
+          />
+        )}
+
+        {activeTab === 'tutorBooking' && bookingTutorId && (
+          <TutorBookingPage
+            tutor={tutors.find(t => t.id === bookingTutorId) || null}
+            onBack={() => {
+              setBookingTutorId(null);
+              if (viewingTutorId === bookingTutorId) {
+                setActiveTab('tutorProfile');
+              } else {
+                setViewingTutorId(bookingTutorId);
+                setActiveTab('tutorProfile');
+              }
+            }}
+            onConfirmBooking={(slotId) => {
+              const tutor = tutors.find(t => t.id === bookingTutorId);
+              if (tutor) {
+                handleBookSession(tutor, slotId);
+              }
+            }}
+          />
+        )}
+
         {activeTab === 'home' && (
           <div className="space-y-24">
             {/* Hero Section */}
@@ -965,7 +999,10 @@ export default function App() {
                     whileHover={{ y: -8 }}
                     key={tutor.id}
                     className="relative bg-white rounded-[1.5rem] border border-slate-100 overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.04)] hover:shadow-[0_20px_40px_rgba(79,70,229,0.1)] transition-all duration-300 group cursor-pointer flex flex-col"
-                    onClick={() => setActiveTab('tutors')}
+                    onClick={() => {
+                      setViewingTutorId(tutor.id);
+                      setActiveTab('tutorProfile');
+                    }}
                   >
                     <div className="relative h-56 overflow-hidden">
                       <div className="absolute inset-0 bg-gradient-to-t from-slate-900/65 via-slate-900/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-10" />
@@ -1026,14 +1063,132 @@ export default function App() {
         )}
 
         {activeTab === 'tutors' && (
-          <BookingPage
-            currentUser={currentUser}
-            isStudent={!!isStudent}
-            tutors={tutors}
-            isLoadingTutors={isLoadingTutors}
-            onRequireAuth={() => setShowAuthModal(true)}
-            onBookingCreated={(booking) => setBookings((currentBookings) => [booking, ...currentBookings])}
-          />
+          <div className="space-y-12">
+            <div className="flex flex-col md:flex-row justify-between items-end gap-6">
+              <div className="space-y-2">
+                <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-black uppercase tracking-widest">
+                  <Star className="w-3 h-3 fill-emerald-700" />
+                  <span>Top Rated Experts</span>
+                </div>
+                <h2 className="text-4xl font-black text-slate-900 tracking-tight">Find Your Perfect Tutor</h2>
+                <p className="text-slate-600">Browse verified experts in STEM and ICT subjects ready to guide you.</p>
+              </div>
+              <div className="flex gap-3 w-full md:w-auto">
+                <div className="relative flex-1 md:w-80">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                  <input 
+                    type="text" 
+                    placeholder="Search by subject or name..." 
+                    className="w-full pl-12 pr-4 py-4 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all font-medium" 
+                  />
+                </div>
+                <button 
+                  onClick={() => alert('Searching for tutors...')}
+                  className="bg-indigo-600 text-white p-4 rounded-2xl shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
+                >
+                  <Search className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+
+            {isLoadingTutors ? (
+              <div className="flex justify-center items-center py-12">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+              </div>
+            ) : (
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+                {tutors.map(tutor => (
+                <motion.div 
+                  layout
+                  whileHover={{ y: -10 }}
+                  key={tutor.id}
+                  className="bg-white rounded-[2.5rem] border border-slate-100 overflow-hidden shadow-sm hover:shadow-2xl transition-all group relative"
+                >
+                  <div className="absolute top-0 left-0 w-full h-24 bg-gradient-to-r from-indigo-600 to-violet-600 opacity-10" />
+                  <div className="p-8 relative z-10">
+                    <div className="flex items-start gap-5">
+                      <div className="relative">
+                        <img 
+                          src={tutor.avatar} 
+                          alt={getTutorDisplayName(tutor)} 
+                          className="w-20 h-20 rounded-2xl object-cover border-4 border-white shadow-xl" 
+                          referrerPolicy="no-referrer" 
+                        />
+                        {tutor.isVerified && (
+                          <div className="absolute -bottom-1 -right-1 bg-indigo-600 p-1 rounded-lg border-2 border-white">
+                            <CheckCircle className="w-3 h-3 text-white" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex-1 pt-1">
+                        <h3 className="font-black text-xl text-slate-900 leading-tight mb-1">{getTutorDisplayName(tutor)}</h3>
+                        <p className="text-xs font-bold text-indigo-600 uppercase tracking-widest">{tutor.qualifications}</p>
+                        <div className="flex items-center gap-1.5 mt-2">
+                          <div className="flex items-center gap-1 bg-amber-50 px-2 py-0.5 rounded-lg">
+                            <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                            <span className="text-xs font-black text-amber-700">{tutor.rating}</span>
+                          </div>
+                          <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">({tutor.reviewCount} reviews)</span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="mt-6 flex flex-wrap gap-2">
+                      {tutor.subjects.map(s => (
+                        <span key={s} className="px-3 py-1.5 bg-slate-50 text-slate-600 text-[10px] font-black uppercase tracking-widest rounded-xl border border-slate-100">
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+
+                    <p className="mt-5 text-sm text-slate-500 leading-relaxed line-clamp-2 font-medium italic">"{tutor.bio}"</p>
+
+                    <div className="mt-8 pt-6 border-t border-slate-50 flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Hourly Rate</span>
+                        <p className="text-2xl font-black text-slate-900">LKR {tutor.pricePerHour}</p>
+                      </div>
+                      <div className="flex gap-3">
+                        <button
+                          onClick={() => {
+                            setViewingTutorId(tutor.id);
+                            setActiveTab('tutorProfile');
+                          }}
+                          className="px-6 py-3 rounded-2xl font-black text-sm transition-all bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+                        >
+                          View Profile
+                        </button>
+                        {(!currentUser || isStudent) && (
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!currentUser) {
+                                alert('Please login as a student to book sessions.');
+                                setActiveTab('register');
+                                return;
+                              }
+                              if (currentUser.role !== 'student') {
+                                alert('Only student accounts can book sessions.');
+                                return;
+                              }
+                              setBookingTutorId(tutor.id);
+                              setActiveTab('tutorBooking');
+                            }}
+                            className="px-6 py-3 rounded-2xl font-black text-sm transition-all bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700"
+                          >
+                            Book Session
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+            )}
+          </div>
         )}
 
         {activeTab === 'courses' && (
@@ -1472,121 +1627,14 @@ export default function App() {
         )}
 
         {activeTab === 'register' && !currentUser && (
-          <div className="max-w-2xl mx-auto">
-            <div className="text-center mb-10">
-              <h2 className="text-3xl font-bold">Tutor Registration</h2>
-              <p className="text-slate-600">Join our elite network of STEM & ICT educators.</p>
-            </div>
-
-            <form onSubmit={handleRegister} className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm space-y-6">
-              <div className="grid md:grid-cols-2 gap-6">
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">First Name</label>
-                  <input
-                    required
-                    type="text"
-                    value={regData.firstName}
-                    onChange={e => setRegData({...regData, firstName: e.target.value})}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
-                    placeholder="e.g. John"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">Last Name</label>
-                  <input
-                    required
-                    type="text"
-                    value={regData.lastName}
-                    onChange={e => setRegData({...regData, lastName: e.target.value})}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
-                    placeholder="e.g. Doe"
-                  />
-                </div>
-              </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">Email Address</label>
-                  <input
-                    required
-                    type="email"
-                    value={regData.email}
-                    onChange={e => setRegData({...regData, email: e.target.value})}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
-                    placeholder="john@example.com"
-                  />
-                </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-bold text-slate-700">Education Details</label>
-                <textarea
-                  required
-                  value={regData.education}
-                  onChange={e => setRegData({...regData, education: e.target.value})}
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 h-24"
-                  placeholder="e.g. BSc in Computer Science, University of Colombo"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-bold text-slate-700">Subjects (STEM/ICT Only)</label>
-                <div className="flex flex-wrap gap-2">
-                  {STEM_SUBJECTS.map(s => (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => {
-                        const newSubs = regData.subjects.includes(s)
-                          ? regData.subjects.filter(x => x !== s)
-                          : [...regData.subjects, s];
-                        setRegData({...regData, subjects: newSubs});
-                      }}
-                      className={`px-4 py-2 rounded-full text-sm font-bold transition-all ${
-                        regData.subjects.includes(s)
-                          ? 'bg-indigo-600 text-white'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                      }`}
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-bold text-slate-700">Teaching Level</label>
-                <select
-                  value={regData.teachingLevel}
-                  onChange={e => setRegData({...regData, teachingLevel: e.target.value as any})}
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
-                >
-                  <option value="School">School</option>
-                  <option value="University">University</option>
-                  <option value="Both">Both</option>
-                </select>
-              </div>
-
-              <button
-                type="submit"
-                disabled={isValidating}
-                className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2"
-              >
-                {isValidating ? 'Validating Qualifications...' : 'Submit Application'}
-              </button>
-
-              {validationResult && (
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className={`p-4 rounded-2xl border ${validationResult.isValid ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}
-                >
-                  <div className="flex items-center gap-2 font-bold mb-1">
-                    {validationResult.isValid ? <CheckCircle className="w-5 h-5" /> : <X className="w-5 h-5" />}
-                    {validationResult.isValid ? 'Validation Successful' : 'Validation Failed'}
-                  </div>
-                  <p className="text-sm opacity-90">{validationResult.reason}</p>
-                </motion.div>
-              )}
-            </form>
-          </div>
+          <GetStartedSection 
+            onAccountCreated={(user) => {
+              setCurrentUser(user);
+              setActiveTab('dashboard');
+              localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
+            }} 
+            STEM_SUBJECTS={STEM_SUBJECTS}
+          />
         )}
 
         {activeTab === 'register' && isTutor && currentUser && (
@@ -2303,9 +2351,7 @@ export default function App() {
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: 0.3 }}
                   >
-                    <h3 className="text-2xl sm:text-3xl lg:text-3xl font-bold text-white leading-tight mb-4 sm:mb-5">
-                      {authMode === 'login' ? 'Welcome back to your learning journey.' : 'Start your journey with the best STEM tutors.'}
-                    </h3>
+                    <h3 className="text-2xl sm:text-3xl lg:text-3xl font-bold text-white leading-tight mb-4 sm:mb-5">Welcome back to your learning journey.</h3>
                     <p className="text-indigo-100/80 text-sm sm:text-base leading-relaxed font-medium">
                       Access personalized learning paths, expert guidance, and AI-powered support all in one place.
                     </p>
@@ -2345,12 +2391,8 @@ export default function App() {
 
                 <div className="w-full max-w-xs sm:max-w-sm md:max-w-md mx-auto">
                   <div className="mb-6">
-                    <h2 className="text-2xl sm:text-3xl font-black text-slate-900 mb-3 tracking-tight">
-                      {authMode === 'login' ? 'Sign In' : 'Create Account'}
-                    </h2>
-                    <p className="text-slate-500 text-sm font-medium">
-                      {authMode === 'login' ? 'Enter your details to access your account.' : 'Join thousands of students mastering STEM today.'}
-                    </p>
+                    <h2 className="text-2xl sm:text-3xl font-black text-slate-900 mb-3 tracking-tight">Sign In</h2>
+                    <p className="text-slate-500 text-sm font-medium">Enter your details to access your account.</p>
                   </div>
 
                   {/* Social Logins */}
@@ -2376,69 +2418,6 @@ export default function App() {
                   </div>
                   
                   <form onSubmit={handleAuth} className="space-y-4">
-                    {authMode === 'signup' && (
-                      <div className="grid md:grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">First Name</label>
-                          <div className="relative group">
-                            <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
-                            <input 
-                              required
-                              type="text" 
-                              value={authData.firstName}
-                              onChange={e => setAuthData({...authData, firstName: e.target.value})}
-                              className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all bg-slate-50/50 font-medium"
-                              placeholder="John"
-                            />
-                          </div>
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Last Name</label>
-                          <div className="relative group">
-                            <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
-                            <input 
-                              required
-                              type="text" 
-                              value={authData.lastName}
-                              onChange={e => setAuthData({...authData, lastName: e.target.value})}
-                              className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all bg-slate-50/50 font-medium"
-                              placeholder="Doe"
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    {authMode === 'signup' && (
-                      <div className="space-y-2">
-                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">I am a</label>
-                        <div className="flex gap-3">
-                          <button
-                            type="button"
-                            onClick={() => setAuthData({...authData, role: 'student'})}
-                            className={`flex-1 py-3 px-4 rounded-2xl border-2 font-bold transition-all flex items-center justify-center gap-2 ${
-                              authData.role === 'student' 
-                                ? 'border-indigo-500 bg-indigo-50 text-indigo-700' 
-                                : 'border-slate-200 bg-slate-50/50 text-slate-500 hover:border-slate-300'
-                            }`}
-                          >
-                            <GraduationCap className="w-5 h-5" />
-                            Student
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setAuthData({...authData, role: 'tutor'})}
-                            className={`flex-1 py-3 px-4 rounded-2xl border-2 font-bold transition-all flex items-center justify-center gap-2 ${
-                              authData.role === 'tutor' 
-                                ? 'border-indigo-500 bg-indigo-50 text-indigo-700' 
-                                : 'border-slate-200 bg-slate-50/50 text-slate-500 hover:border-slate-300'
-                            }`}
-                          >
-                            <BookOpen className="w-5 h-5" />
-                            Tutor
-                          </button>
-                        </div>
-                      </div>
-                    )}
                     <div className="space-y-2">
                       <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Email Address</label>
                       <div className="relative group">
@@ -2484,19 +2463,20 @@ export default function App() {
                       type="submit" 
                       className="w-full bg-indigo-600 text-white py-3 rounded-2xl font-bold hover:bg-indigo-700 shadow-xl shadow-indigo-200 transition-all mt-3 active:scale-[0.98] flex items-center justify-center gap-2"
                     >
-                      {authMode === 'login' ? 'Sign In' : 'Create Account'}
+                      Sign In
                       <ArrowRight className="w-5 h-5" />
                     </button>
                   </form>
                   
                   <div className="mt-10 text-center">
                     <p className="text-slate-500 text-sm font-medium">
-                      {authMode === 'login' ? "Don't have an account?" : "Already have an account?"}
+                      Don't have an account?
                       <button 
-                        onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
+                        type="button"
+                        onClick={() => { setShowAuthModal(false); setActiveTab('register'); }}
                         className="ml-2 text-indigo-600 font-bold hover:text-indigo-700 transition-colors"
                       >
-                        {authMode === 'login' ? 'Create an account' : 'Sign in to account'}
+                        Get Started
                       </button>
                     </p>
                   </div>

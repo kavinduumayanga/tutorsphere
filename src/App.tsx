@@ -125,6 +125,9 @@ export default function App() {
   const [profileData, setProfileData] = useState({ firstName: '', lastName: '', phone: '' });
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
 
+  // Subject Cycling State
+  const [currentSubjectIndex, setCurrentSubjectIndex] = useState(0);
+
   // Image Upload Modal State
   const [showImageModal, setShowImageModal] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -166,6 +169,17 @@ export default function App() {
       setAuthMode('login');
     }
   }, [activeTab]);
+
+  // Cycle through subjects for live session animation
+  const DISPLAY_SUBJECTS = ['Science', 'Technology', 'Engineering', 'Mathematics', 'ICT'];
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentSubjectIndex((prevIndex) => (prevIndex + 1) % DISPLAY_SUBJECTS.length);
+    }, 3000); // Change every 3 seconds
+
+    return () => clearInterval(interval);
+  }, []);
 
   // Registration State
   const [regData, setRegData] = useState({
@@ -883,7 +897,20 @@ export default function App() {
                       </div>
                       <div>
                         <p className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-1">Live Session</p>
-                        <h4 className="font-bold text-slate-900">Advanced Quantum Physics</h4>
+                        <div className="relative h-6 overflow-hidden min-w-[200px]">
+                          <AnimatePresence mode="popLayout">
+                            <motion.h4
+                              key={currentSubjectIndex}
+                              initial={{ y: 20, opacity: 0 }}
+                              animate={{ y: 0, opacity: 1 }}
+                              exit={{ y: -20, opacity: 0 }}
+                              transition={{ duration: 0.5, ease: "easeOut" }}
+                              className="font-bold text-slate-900 absolute left-0"
+                            >
+                              {DISPLAY_SUBJECTS[currentSubjectIndex]}
+                            </motion.h4>
+                          </AnimatePresence>
+                        </div>
                       </div>
                     </div>
                   </div>

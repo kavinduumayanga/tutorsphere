@@ -1,7 +1,7 @@
-import React from 'react';
-import { motion } from 'motion/react';
+import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle, Calendar, MessageCircle, Star, GraduationCap, ArrowRight, User } from 'lucide-react';
-import { Tab } from '../../data/mockData';
+import { Tab, STEM_SUBJECTS } from '../../data/mockData';
 import { User as UserType, Tutor } from '../../types';
 
 interface HomePageProps {
@@ -11,6 +11,19 @@ interface HomePageProps {
 }
 
 export const HomePage: React.FC<HomePageProps> = ({ setActiveTab, currentUser, tutors }) => {
+  const [currentSubjectIndex, setCurrentSubjectIndex] = useState(0);
+
+  const DISPLAY_SUBJECTS = ['Science', 'Technology', 'Engineering', 'Mathematics', 'ICT'];
+
+  // Cycle through subjects for live session animation
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentSubjectIndex((prevIndex) => (prevIndex + 1) % DISPLAY_SUBJECTS.length);
+    }, 3000); // Change every 3 seconds
+
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <div className="space-y-24">
       {/* Hero Section */}
@@ -113,7 +126,20 @@ export const HomePage: React.FC<HomePageProps> = ({ setActiveTab, currentUser, t
                 </div>
                 <div>
                   <p className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-1">Live Session</p>
-                  <h4 className="font-bold text-slate-900">Advanced Quantum Physics</h4>
+                  <div className="relative h-6 overflow-hidden min-w-[200px]">
+                    <AnimatePresence mode="popLayout">
+                      <motion.h4
+                        key={currentSubjectIndex}
+                        initial={{ y: 20, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        exit={{ y: -20, opacity: 0 }}
+                        transition={{ duration: 0.5, ease: "easeOut" }}
+                        className="font-bold text-slate-900 absolute left-0"
+                      >
+                        {DISPLAY_SUBJECTS[currentSubjectIndex]}
+                      </motion.h4>
+                    </AnimatePresence>
+                  </div>
                 </div>
               </div>
             </div>

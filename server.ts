@@ -206,15 +206,17 @@ async function startServer() {
   app.post("/api/auth/signup", async (req, res) => {
     try {
       const { firstName, lastName, email, password, role } = req.body;
+      const normalizedEmail = email ? email.trim() : '';
+      const escapedEmail = normalizedEmail.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
 
       // Check if user already exists
-      const existingUser = await User.findOne({ email });
+      const existingUser = await User.findOne({ email: { $regex: new RegExp(`^${escapedEmail}$`, 'i') } });
       if (existingUser) {
         return res.status(400).json({ error: "User already exists" });
       }
 
       const id = Math.random().toString(36).substr(2, 9);
-      const newUser = new User({ id, firstName, lastName, email, password, role: role || 'student' });
+      const newUser = new User({ id, firstName, lastName, email: normalizedEmail, password, role: role || 'student' });
 
       await newUser.save();
 
@@ -229,11 +231,28 @@ async function startServer() {
     try {
       const { email, password } = req.body;
 
-      const user = await User.findOne({ email, password });
+      if (!email || !password) {
+        return res.status(400).json({ error: "Email and password are required" });
+      }
+
+      const normalizedEmail = email.trim();
+      const escapedEmail = normalizedEmail.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+      const user = await User.findOne({ 
+        email: { $regex: new RegExp(`^${escapedEmail}$`, 'i') }, 
+        password 
+      });
 
       if (user) {
         const avatarUrl = user.avatar ? `${req.protocol}://${req.get('host')}/api/auth/user/${user.id}/avatar` : undefined;
-        res.json({ id: user.id, firstName: user.firstName, lastName: user.lastName, email: user.email, role: user.role, avatar: avatarUrl, phone: user.phone });
+        // Fallback to splitting name for old users if firstName is missing
+        let fName = user.firstName;
+        let lName = user.lastName;
+        if (!fName && !lName && (user as any).name) {
+          const parts = (user as any).name.split(' ');
+          fName = parts[0] || 'User';
+          lName = parts.slice(1).join(' ') || '';
+        }
+        res.json({ id: user.id, firstName: fName || 'User', lastName: lName || '', email: user.email, role: user.role, avatar: avatarUrl, phone: user.phone });
       } else {
         res.status(401).json({ error: "Invalid credentials" });
       }

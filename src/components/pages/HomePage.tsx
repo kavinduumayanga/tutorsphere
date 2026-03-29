@@ -58,7 +58,7 @@ export const HomePage: React.FC<HomePageProps> = ({ setActiveTab, currentUser, t
                       Tutor Dashboard <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                     </button>
                     <button
-                      onClick={() => setActiveTab('register')}
+                      onClick={() => setActiveTab('registerSelect')}
                       className="bg-white text-indigo-600 border border-indigo-200 px-8 py-4 rounded-2xl font-bold hover:bg-indigo-50 transition-all"
                     >
                       Update Profile
@@ -75,7 +75,7 @@ export const HomePage: React.FC<HomePageProps> = ({ setActiveTab, currentUser, t
                   Find Your Tutor <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                 </button>
                 <button
-                  onClick={() => setActiveTab('register')}
+                  onClick={() => setActiveTab('registerSelect')}
                   className="bg-white text-indigo-600 border border-indigo-200 px-8 py-4 rounded-2xl font-bold hover:bg-indigo-50 transition-all"
                 >
                   Join as Tutor

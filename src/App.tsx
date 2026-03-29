@@ -43,7 +43,7 @@ import Markdown from 'react-markdown';
 import CountUp from 'react-countup';
 import { localService } from './services/localService';
 import { apiService } from './services/apiService';
-import { BookingPage } from './components/pages/BookingPage';
+import { BookingPage } from './components/pages/BookingPage.tsx';
 import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz } from './types';
 
 const STEM_SUBJECTS = ['Mathematics', 'Physics', 'Chemistry', 'Biology', 'ICT', 'Computer Science', 'Software Engineering'];

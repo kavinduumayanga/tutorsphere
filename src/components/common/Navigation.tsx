@@ -90,10 +90,14 @@ export const Navigation: React.FC<NavigationProps> = ({
                     Login
                   </button>
                   <button
-                    onClick={() => {setAuthMode('signup'); setShowAuthModal(true)}}
+                    onClick={() => {
+                      setShowAuthModal(false);
+                      setAuthMode('login');
+                      setActiveTab('registerSelect');
+                    }}
                     className="bg-indigo-600 text-white px-3 py-2 rounded-full text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 whitespace-nowrap"
                   >
-                    Get Started
+                    Create Account
                   </button>
                 </>
               ) : (

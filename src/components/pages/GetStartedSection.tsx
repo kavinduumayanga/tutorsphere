@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GraduationCap, BookOpen, CheckCircle, X, User as UserIcon, Lock, Mail } from 'lucide-react';
+import { GraduationCap, BookOpen, CheckCircle, X, User as UserIcon, Lock, Mail, ArrowRight } from 'lucide-react';
 import { apiService } from '../../services/apiService';
 import { localService } from '../../services/localService';
 import { User, Tutor } from '../../types';
@@ -8,10 +8,19 @@ import { User, Tutor } from '../../types';
 interface GetStartedSectionProps {
   onAccountCreated: (user: User) => void;
   STEM_SUBJECTS: string[];
+  initialRole?: 'student' | 'tutor';
+  showRoleSelector?: boolean;
+  onBack?: () => void;
 }
 
-export const GetStartedSection: React.FC<GetStartedSectionProps> = ({ onAccountCreated, STEM_SUBJECTS }) => {
-  const [role, setRole] = useState<'student' | 'tutor'>('student');
+export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
+  onAccountCreated,
+  STEM_SUBJECTS,
+  initialRole = 'student',
+  showRoleSelector = true,
+  onBack
+}) => {
+  const [role, setRole] = useState<'student' | 'tutor'>(initialRole);
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -26,6 +35,21 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({ onAccountC
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [validationResult, setValidationResult] = useState<{isValid: boolean; reason: string} | null>(null);
+
+  useEffect(() => {
+    setRole(initialRole);
+  }, [initialRole]);
+
+  const heading = showRoleSelector
+    ? 'Create Account'
+    : role === 'tutor'
+      ? 'Create Tutor Account'
+      : 'Create Student Account';
+  const subtitle = showRoleSelector
+    ? 'Join our elite network of learners and educators. Choose your path below to begin your journey.'
+    : role === 'tutor'
+      ? 'Tell us about your expertise and start sharing your knowledge.'
+      : 'Start learning with expert tutors and AI-powered support.';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,36 +87,48 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({ onAccountC
   return (
     <div className="max-w-4xl mx-auto px-4 py-8">
       <div className="text-center mb-10">
-        <h2 className="text-4xl font-black text-slate-900 tracking-tight mb-4">Get Started</h2>
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex items-center gap-2 text-sm font-bold text-indigo-600 hover:text-indigo-700 mb-4"
+          >
+            <ArrowRight className="w-4 h-4 rotate-180" />
+            Back to role selection
+          </button>
+        )}
+        <h2 className="text-4xl font-black text-slate-900 tracking-tight mb-4">{heading}</h2>
         <p className="text-lg text-slate-500 max-w-2xl mx-auto">
-          Join our elite network of learners and educators. Choose your path below to begin your journey.
+          {subtitle}
         </p>
       </div>
 
-      <div className="flex justify-center gap-4 mb-8">
-        <button
-          onClick={() => setRole('student')}
-          className={`flex items-center gap-3 px-8 py-4 rounded-2xl font-bold transition-all text-lg ${
-            role === 'student' 
-              ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-200 scale-105' 
-              : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-          }`}
-        >
-          <GraduationCap className={role === 'student' ? 'text-white' : 'text-slate-400'} size={24} />
-          Student Registration
-        </button>
-        <button
-          onClick={() => setRole('tutor')}
-          className={`flex items-center gap-3 px-8 py-4 rounded-2xl font-bold transition-all text-lg ${
-            role === 'tutor' 
-              ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-200 scale-105' 
-              : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-          }`}
-        >
-          <BookOpen className={role === 'tutor' ? 'text-white' : 'text-slate-400'} size={24} />
-          Tutor Registration
-        </button>
-      </div>
+      {showRoleSelector && (
+        <div className="flex justify-center gap-4 mb-8">
+          <button
+            onClick={() => setRole('student')}
+            className={`flex items-center gap-3 px-8 py-4 rounded-2xl font-bold transition-all text-lg ${
+              role === 'student' 
+                ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-200 scale-105' 
+                : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+            }`}
+          >
+            <GraduationCap className={role === 'student' ? 'text-white' : 'text-slate-400'} size={24} />
+            Student Registration
+          </button>
+          <button
+            onClick={() => setRole('tutor')}
+            className={`flex items-center gap-3 px-8 py-4 rounded-2xl font-bold transition-all text-lg ${
+              role === 'tutor' 
+                ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-200 scale-105' 
+                : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+            }`}
+          >
+            <BookOpen className={role === 'tutor' ? 'text-white' : 'text-slate-400'} size={24} />
+            Tutor Registration
+          </button>
+        </div>
+      )}
 
       <motion.div
         key={role}

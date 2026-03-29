@@ -47,9 +47,11 @@ import { TutorProfilePage } from './components/pages/TutorProfilePage';
 import { GetStartedSection } from "./components/pages/GetStartedSection";
 import { TutorBookingPage } from './components/pages/TutorBookingPage';
 
+import { RegistrationSelectionPage } from './components/pages/RegistrationSelectionPage';
+
 const STEM_SUBJECTS = ['Mathematics', 'Physics', 'Chemistry', 'Biology', 'ICT', 'Computer Science', 'Software Engineering'];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking';
+type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'registerSelect' | 'registerStudent' | 'registerTutor';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
@@ -62,12 +64,15 @@ const NAV_LABELS: Record<Tab, string> = {
   dashboard: 'Dashboard',
   settings: 'Settings',
   tutorProfile: 'Tutor Profile',
-  tutorBooking: 'Book Session'
+  tutorBooking: 'Book Session',
+  registerSelect: 'Get Started',
+  registerStudent: 'Student Registration',
+  registerTutor: 'Tutor Registration'
 };
 
 const getAllowedTabs = (user: AppUser | null): Tab[] => {
   if (!user) {
-    return ['home', 'tutors', 'courses', 'resources', 'register', 'tutorProfile', 'tutorBooking'];
+    return ['home', 'tutors', 'courses', 'resources', 'register', 'tutorProfile', 'tutorBooking', 'registerSelect', 'registerStudent', 'registerTutor'];
   }
 
   if (user.role === 'student') {
@@ -810,7 +815,7 @@ export default function App() {
                     Find Your Tutor <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                   </button>
                   <button 
-                    onClick={() => setActiveTab('register')}
+                    onClick={() => setActiveTab('registerSelect')}
                     className="bg-white text-indigo-600 border border-indigo-200 px-8 py-4 rounded-2xl font-bold hover:bg-indigo-50 transition-all"
                   >
                     Join as Tutor
@@ -1637,6 +1642,40 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'registerSelect' && !currentUser && (
+          <RegistrationSelectionPage 
+            onSelectRole={(role) => setActiveTab(role === 'student' ? 'registerStudent' : 'registerTutor')} 
+          />
+        )}
+
+        {activeTab === 'registerStudent' && !currentUser && (
+          <GetStartedSection 
+             initialRole="student"
+            showRoleSelector={false}
+            onBack={() => setActiveTab('registerSelect')}
+            onAccountCreated={(user) => {
+              setCurrentUser(user);
+              setActiveTab('dashboard');
+              localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
+            }} 
+            STEM_SUBJECTS={STEM_SUBJECTS}
+          />
+        )}
+
+        {activeTab === 'registerTutor' && !currentUser && (
+          <GetStartedSection 
+             initialRole="tutor"
+            showRoleSelector={false}
+            onBack={() => setActiveTab('registerSelect')}
+            onAccountCreated={(user) => {
+              setCurrentUser(user);
+              setActiveTab('dashboard');
+              localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
+            }} 
+            STEM_SUBJECTS={STEM_SUBJECTS}
+          />
+        )}
+
         {activeTab === 'register' && isTutor && currentUser && (
           <div className="max-w-2xl mx-auto">
             <div className="text-center mb-10">
@@ -1752,7 +1791,7 @@ export default function App() {
               <h2 className="text-3xl font-black text-slate-900 tracking-tight">Tutor Workspace</h2>
               <p className="text-slate-500 mt-2">Manage your profile, subjects, schedule, bookings, feedback, and learning content.</p>
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-6">
-                <button onClick={() => setActiveTab('register')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
+                <button onClick={() => setActiveTab('registerSelect')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
                   <p className="font-black text-slate-900">Profile & Qualifications</p>
                   <p className="text-xs text-slate-500 mt-1">Update tutor profile details</p>
                 </button>
@@ -2473,7 +2512,7 @@ export default function App() {
                       Don't have an account?
                       <button 
                         type="button"
-                        onClick={() => { setShowAuthModal(false); setActiveTab('register'); }}
+                        onClick={() => { setShowAuthModal(false); setActiveTab('registerSelect'); }}
                         className="ml-2 text-indigo-600 font-bold hover:text-indigo-700 transition-colors"
                       >
                         Get Started
@@ -2653,7 +2692,7 @@ export default function App() {
               <ul className="space-y-2 text-sm">
                 <li><button onClick={() => setActiveTab('tutors')}>Find Tutors</button></li>
                 <li><button onClick={() => setActiveTab('questions')}>Q&A Support</button></li>
-                <li><button onClick={() => setActiveTab('register')}>Become a Tutor</button></li>
+                <li><button onClick={() => setActiveTab('registerSelect')}>Become a Tutor</button></li>
               </ul>
             </div>
             <div>

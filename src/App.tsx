@@ -42,14 +42,17 @@ import Markdown from 'react-markdown';
 import CountUp from 'react-countup';
 import { localService } from './services/localService';
 import { apiService } from './services/apiService';
+
 import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz } from './types';
 import { TutorProfilePage } from './components/pages/TutorProfilePage';
 import { GetStartedSection } from "./components/pages/GetStartedSection";
 import { TutorBookingPage } from './components/pages/TutorBookingPage';
+import { MOCK_TUTORS, MOCK_COURSES, MOCK_RESOURCES } from './data/mockData';
+import { RegistrationSelectionPage } from './components/pages/RegistrationSelectionPage';
 
 const STEM_SUBJECTS = ['Mathematics', 'Physics', 'Chemistry', 'Biology', 'ICT', 'Computer Science', 'Software Engineering'];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking';
+type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
@@ -58,6 +61,9 @@ const NAV_LABELS: Record<Tab, string> = {
   courses: 'Courses',
   resources: 'Resources',
   quizzes: 'Quizzes',
+  registerSelect: 'Register',
+  registerStudent: 'Register',
+  registerTutor: 'Register',
   register: 'Profile',
   dashboard: 'Dashboard',
   settings: 'Settings',
@@ -67,7 +73,17 @@ const NAV_LABELS: Record<Tab, string> = {
 
 const getAllowedTabs = (user: AppUser | null): Tab[] => {
   if (!user) {
-    return ['home', 'tutors', 'courses', 'resources', 'register', 'tutorProfile', 'tutorBooking'];
+    return [
+      'home',
+      'tutors',
+      'courses',
+      'resources',
+      'registerSelect',
+      'registerStudent',
+      'registerTutor',
+      'tutorProfile',
+      'tutorBooking'
+    ];
   }
 
   if (user.role === 'student') {
@@ -95,6 +111,7 @@ const getTutorDisplayName = (tutor: Tutor & { name?: string }) => {
 };
 
 export default function App() {
+  const [selectedTutor, setSelectedTutor] = useState<Tutor | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('home');
   const [viewingTutorId, setViewingTutorId] = useState<string | null>(null);
   const [bookingTutorId, setBookingTutorId] = useState<string | null>(null);
@@ -102,7 +119,7 @@ export default function App() {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
-  const [authData, setAuthData] = useState({ email: '', password: '', firstName: '', lastName: '', role: 'student' as 'student' | 'tutor' });
+  const [authData, setAuthData] = useState({ email: '', password: '', firstName: '', lastName: '', confirmPassword: '', role: 'student' as 'student' | 'tutor' });
 
   // Profile Update State
   const [profileData, setProfileData] = useState({ firstName: '', lastName: '', phone: '' });
@@ -143,6 +160,13 @@ export default function App() {
     setActiveTab(currentUser ? 'dashboard' : 'home');
   }, [activeTab, currentUser]);
 
+  useEffect(() => {
+    if (activeTab === 'registerSelect' || activeTab === 'registerStudent' || activeTab === 'registerTutor') {
+      setShowAuthModal(false);
+      setAuthMode('login');
+    }
+  }, [activeTab]);
+
   // Registration State
   const [regData, setRegData] = useState({
     firstName: '',
@@ -163,7 +187,6 @@ export default function App() {
 
   // Booking State
   const [bookings, setBookings] = useState<Booking[]>([]);
-  const [selectedTutor, setSelectedTutor] = useState<Tutor | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [userCourses, setUserCourses] = useState<string[]>([]);
 
@@ -212,7 +235,8 @@ export default function App() {
         const tutorsData = await apiService.getTutors();
         setTutors(tutorsData);
       } catch (error) {
-        console.error('Failed to fetch tutors:', error);
+        console.error('Failed to fetch tutors from API, using mock data:', error);
+        setTutors(MOCK_TUTORS);
       } finally {
         setIsLoadingTutors(false);
       }
@@ -224,7 +248,8 @@ export default function App() {
         const coursesData = await apiService.getCourses();
         setCourses(coursesData);
       } catch (error) {
-        console.error('Failed to fetch courses:', error);
+        console.error('Failed to fetch courses from API, using mock data:', error);
+        setCourses(MOCK_COURSES);
       } finally {
         setIsLoadingCourses(false);
       }
@@ -236,7 +261,8 @@ export default function App() {
         const resourcesData = await apiService.getResources();
         setResources(resourcesData);
       } catch (error) {
-        console.error('Failed to fetch resources:', error);
+        console.error('Failed to fetch resources from API, using mock data:', error);
+        setResources(MOCK_RESOURCES);
       } finally {
         setIsLoadingResources(false);
       }
@@ -330,6 +356,32 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isUserMenuOpen]);
 
+  const handleBookSession = async (tutor: Tutor, slotId: string) => {
+    if (!currentUser) {
+      setShowAuthModal(true);
+      return;
+    }
+    if (currentUser.role !== 'student') {
+      alert('Only student accounts can book sessions.');
+      return;
+    }
+    try {
+      const booking = await apiService.createBooking({
+        studentId: currentUser.id,
+        tutorId: tutor.id,
+        slotId,
+        status: 'confirmed',
+        subject: tutor.subjects?.[0] || 'General',
+        date: new Date().toLocaleDateString(),
+        meetingLink: 'https://meet.google.com/xyz-abc'
+      });
+      setBookings([booking, ...bookings]);
+      alert('Session booked successfully!');
+    } catch (error: any) {
+      alert(error.message || 'Failed to book session.');
+    }
+  };
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -340,17 +392,21 @@ export default function App() {
         setActiveTab('dashboard');
         localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
         setShowAuthModal(false);
-        setAuthData({ email: '', password: '', firstName: '', lastName: '', role: 'student' });
+        setAuthData({ email: '', password: '', firstName: '', lastName: '', confirmPassword: '', role: 'student' });
       } else {
         if (!authData.firstName.trim() || !authData.lastName.trim()) {
           alert('First name and last name are required.');
+          return;
+        }
+        if (authData.password !== authData.confirmPassword) {
+          alert('Passwords do not match.');
           return;
         }
         user = await apiService.signup(authData.firstName, authData.lastName, authData.email, authData.password, authData.role);
         // Show success message and switch to login mode
         alert('Account created successfully! Please sign in with your credentials.');
         setAuthMode('login');
-        setAuthData({ email: authData.email, password: '', firstName: '', lastName: '', role: 'student' });
+        setAuthData({ email: authData.email, password: '', firstName: '', lastName: '', confirmPassword: '', role: 'student' });
       }
     } catch (error: any) {
       alert(error.message || 'Authentication failed');
@@ -466,33 +522,6 @@ export default function App() {
     } catch (error) {
       console.error('Failed to generate study plan:', error);
       alert('Failed to generate study plan. Please try again.');
-    }
-  };
-
-  const handleBookSession = async (tutor: Tutor, slotId: string) => {
-    if (!currentUser) {
-      setShowAuthModal(true);
-      return;
-    }
-    if (currentUser.role !== 'student') {
-      alert('Only student accounts can book sessions.');
-      return;
-    }
-    try {
-      const booking = await apiService.createBooking({
-        studentId: currentUser.id,
-        tutorId: tutor.id,
-        slotId,
-        status: 'confirmed',
-        subject: tutor.subjects[0],
-        date: new Date().toLocaleDateString(),
-        meetingLink: 'https://meet.google.com/abc-defg-hij'
-      });
-      setBookings([booking, ...bookings]);
-      alert('Session booked successfully!');
-    } catch (error) {
-      console.error('Failed to book session:', error);
-      alert('Failed to book session. Please try again.');
     }
   };
 
@@ -669,13 +698,21 @@ export default function App() {
             {/* Center: Nav Links */}
             <div className="flex items-center justify-center gap-4 flex-1 flex-nowrap">
               {navTabs.map(tab => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`text-sm font-semibold whitespace-nowrap transition-colors px-1 ${activeTab === tab ? 'text-indigo-600' : 'text-slate-500 hover:text-indigo-500'}`}
-                >
-                  {NAV_LABELS[tab]}
-                </button>
+                <div key={tab} className="relative group">
+                  <button
+                    onClick={() => setActiveTab(tab)}
+                    className={`text-sm font-semibold whitespace-nowrap px-1 py-2 transition-colors ${activeTab === tab ? 'text-indigo-600' : 'text-slate-500 hover:text-indigo-500'}`}
+                  >
+                    {NAV_LABELS[tab]}
+                  </button>
+                  {activeTab === tab && (
+                    <motion.div
+                      layoutId="activeTabUnderline"
+                      className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600"
+                      transition={{ type: "spring", stiffness: 400, damping: 35 }}
+                    />
+                  )}
+                </div>
               ))}
             </div>
 
@@ -690,7 +727,7 @@ export default function App() {
                     Login
                   </button>
                   <button 
-                    onClick={() => {setAuthMode('signup'); setShowAuthModal(true)}} 
+                    onClick={() => setActiveTab('registerSelect')} 
                     className="w-[100px] bg-indigo-600 text-white py-2 rounded-full text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 whitespace-nowrap text-center"
                   >
                     Sign Up
@@ -810,7 +847,7 @@ export default function App() {
                     Find Your Tutor <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                   </button>
                   <button 
-                    onClick={() => setActiveTab('register')}
+                    onClick={() => setActiveTab('registerSelect')}
                     className="bg-white text-indigo-600 border border-indigo-200 px-8 py-4 rounded-2xl font-bold hover:bg-indigo-50 transition-all"
                   >
                     Join as Tutor
@@ -1148,41 +1185,45 @@ export default function App() {
                         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Hourly Rate</span>
                         <p className="text-2xl font-black text-slate-900">LKR {tutor.pricePerHour}</p>
                       </div>
-                      <div className="flex gap-3">
-                        <button
-                          onClick={() => {
-                            setViewingTutorId(tutor.id);
-                            setActiveTab('tutorProfile');
-                          }}
-                          className="px-6 py-3 rounded-2xl font-black text-sm transition-all bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
-                        >
-                          View Profile
-                        </button>
-                        {(!currentUser || isStudent) && (
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (!currentUser) {
-                                alert('Please login as a student to book sessions.');
-                                setActiveTab('register');
-                                return;
-                              }
-                              if (currentUser.role !== 'student') {
-                                alert('Only student accounts can book sessions.');
-                                return;
-                              }
-                              setBookingTutorId(tutor.id);
-                              setActiveTab('tutorBooking');
-                            }}
-                            className="px-6 py-3 rounded-2xl font-black text-sm transition-all bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700"
-                          >
-                            Book Session
-                          </button>
-                        )}
-                      </div>
+                      <button 
+                        onClick={() => setSelectedTutor(selectedTutor?.id === tutor.id ? null : tutor)}
+                        className={`px-6 py-3 rounded-2xl font-black text-sm transition-all ${
+                          selectedTutor?.id === tutor.id 
+                          ? 'bg-slate-900 text-white' 
+                          : 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700'
+                        }`}
+                      >
+                        {selectedTutor?.id === tutor.id ? 'Close' : (isStudent || !currentUser ? 'Book Session' : 'View Profile')}
+                      </button>
                     </div>
 
-                    
+                    <AnimatePresence>
+                      {selectedTutor?.id === tutor.id && (isStudent || !currentUser) && (
+                        <motion.div 
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="mt-6 pt-6 border-t border-slate-50 space-y-4 overflow-hidden"
+                        >
+                          <div className="flex justify-between items-center">
+                            <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">Available Slots</h4>
+                            <Calendar className="w-4 h-4 text-slate-400" />
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            {tutor.availability.map(slot => (
+                              <button 
+                                key={slot.id}
+                                onClick={() => handleBookSession(tutor, slot.id)}
+                                className="p-3 rounded-2xl border-2 border-slate-50 hover:border-indigo-200 hover:bg-indigo-50 transition-all text-left group"
+                              >
+                                <p className="font-black text-xs text-slate-700 group-hover:text-indigo-700">{slot.day}</p>
+                                <p className="text-[10px] font-bold text-slate-400 mt-0.5">{slot.startTime} - {slot.endTime}</p>
+                              </button>
+                            ))}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
                 </motion.div>
               ))}
@@ -1626,8 +1667,31 @@ export default function App() {
           </div>
         )}
 
-        {activeTab === 'register' && !currentUser && (
+        {activeTab === 'registerSelect' && !currentUser && (
+          <RegistrationSelectionPage
+            onSelectRole={(role) => setActiveTab(role === 'student' ? 'registerStudent' : 'registerTutor')}
+          />
+        )}
+
+        {activeTab === 'registerStudent' && !currentUser && (
           <GetStartedSection 
+            initialRole="student"
+            showRoleSelector={false}
+            onBack={() => setActiveTab('registerSelect')}
+            onAccountCreated={(user) => {
+              setCurrentUser(user);
+              setActiveTab('dashboard');
+              localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
+            }} 
+            STEM_SUBJECTS={STEM_SUBJECTS}
+          />
+        )}
+
+        {activeTab === 'registerTutor' && !currentUser && (
+          <GetStartedSection 
+            initialRole="tutor"
+            showRoleSelector={false}
+            onBack={() => setActiveTab('registerSelect')}
             onAccountCreated={(user) => {
               setCurrentUser(user);
               setActiveTab('dashboard');
@@ -2391,8 +2455,15 @@ export default function App() {
 
                 <div className="w-full max-w-xs sm:max-w-sm md:max-w-md mx-auto">
                   <div className="mb-6">
-                    <h2 className="text-2xl sm:text-3xl font-black text-slate-900 mb-3 tracking-tight">Sign In</h2>
-                    <p className="text-slate-500 text-sm font-medium">Enter your details to access your account.</p>
+                    <h2 className="text-2xl sm:text-3xl font-black text-slate-900 mb-3 tracking-tight">
+                      {authMode === 'login' ? 'Sign In' : 'Sign Up'}
+                    </h2>
+                    <p className="text-slate-500 text-sm font-medium">
+                      {authMode === 'login' 
+                        ? 'Enter your details to access your account.' 
+                        : 'Join TutorSphere and start your learning journey.'
+                      }
+                    </p>
                   </div>
 
                   {/* Social Logins */}
@@ -2418,6 +2489,40 @@ export default function App() {
                   </div>
                   
                   <form onSubmit={handleAuth} className="space-y-4">
+                    {authMode === 'signup' && (
+                      <>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">First Name</label>
+                            <div className="relative group">
+                              <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
+                              <input 
+                                required
+                                type="text" 
+                                value={authData.firstName || ''}
+                                onChange={e => setAuthData({...authData, firstName: e.target.value})}
+                                className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all bg-slate-50/50 font-medium"
+                                placeholder="John"
+                              />
+                            </div>
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Last Name</label>
+                            <div className="relative group">
+                              <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
+                              <input 
+                                required
+                                type="text" 
+                                value={authData.lastName || ''}
+                                onChange={e => setAuthData({...authData, lastName: e.target.value})}
+                                className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all bg-slate-50/50 font-medium"
+                                placeholder="Doe"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    )}
                     <div className="space-y-2">
                       <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Email Address</label>
                       <div className="relative group">
@@ -2451,6 +2556,22 @@ export default function App() {
                         />
                       </div>
                     </div>
+                    {authMode === 'signup' && (
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Confirm Password</label>
+                        <div className="relative group">
+                          <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
+                          <input 
+                            required
+                            type="password" 
+                            value={authData.confirmPassword || ''}
+                            onChange={e => setAuthData({...authData, confirmPassword: e.target.value})}
+                            className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all bg-slate-50/50 font-medium"
+                            placeholder="••••••••"
+                          />
+                        </div>
+                      </div>
+                    )}
 
                     {authMode === 'login' && (
                       <div className="flex items-center gap-2 ml-1">
@@ -2463,20 +2584,26 @@ export default function App() {
                       type="submit" 
                       className="w-full bg-indigo-600 text-white py-3 rounded-2xl font-bold hover:bg-indigo-700 shadow-xl shadow-indigo-200 transition-all mt-3 active:scale-[0.98] flex items-center justify-center gap-2"
                     >
-                      Sign In
+                      {authMode === 'login' ? 'Sign In' : 'Sign Up'}
                       <ArrowRight className="w-5 h-5" />
                     </button>
                   </form>
                   
                   <div className="mt-10 text-center">
                     <p className="text-slate-500 text-sm font-medium">
-                      Don't have an account?
+                      {authMode === 'login' ? "Don't have an account?" : "Already have an account?"}
                       <button 
                         type="button"
-                        onClick={() => { setShowAuthModal(false); setActiveTab('register'); }}
+                        onClick={() => {
+                          if (authMode === 'login') {
+                            setActiveTab('registerSelect');
+                          } else {
+                            setAuthMode('login');
+                          }
+                        }}
                         className="ml-2 text-indigo-600 font-bold hover:text-indigo-700 transition-colors"
                       >
-                        Get Started
+                        {authMode === 'login' ? 'Sign Up' : 'Sign In'}
                       </button>
                     </p>
                   </div>
@@ -2653,7 +2780,7 @@ export default function App() {
               <ul className="space-y-2 text-sm">
                 <li><button onClick={() => setActiveTab('tutors')}>Find Tutors</button></li>
                 <li><button onClick={() => setActiveTab('questions')}>Q&A Support</button></li>
-                <li><button onClick={() => setActiveTab('register')}>Become a Tutor</button></li>
+                <li><button onClick={() => setActiveTab('registerSelect')}>Become a Tutor</button></li>
               </ul>
             </div>
             <div>

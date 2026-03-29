@@ -25,7 +25,7 @@ export const HomePage: React.FC<HomePageProps> = ({ setActiveTab, currentUser, t
             <span className="text-xs font-bold text-indigo-700 uppercase tracking-widest">The Future of STEM Learning</span>
           </div>
           <h1 className="text-6xl md:text-7xl font-extrabold text-slate-900 leading-[1.1] tracking-tight">
-            Master STEM with <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-600">Expert Tutors</span>
+            Master STEM & ICT with <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-600">Expert Tutors</span>
           </h1>
           <p className="text-xl text-slate-600 leading-relaxed max-w-lg">
             Connect with top-tier educators in all STEM subjects. Personalized learning paths tailored to your needs.

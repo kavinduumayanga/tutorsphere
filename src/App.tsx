@@ -701,7 +701,7 @@ export default function App() {
                 <div key={tab} className="relative group">
                   <button
                     onClick={() => setActiveTab(tab)}
-                    className={`text-sm font-semibold whitespace-nowrap px-1 py-2 transition-colors ${activeTab === tab ? 'text-indigo-600' : 'text-slate-500 hover:text-indigo-500'}`}
+                    className={`text-base font-semibold whitespace-nowrap px-1 py-2 transition-colors ${activeTab === tab ? 'text-indigo-600' : 'text-slate-500 hover:text-indigo-500'}`}
                   >
                     {NAV_LABELS[tab]}
                   </button>
@@ -834,10 +834,10 @@ export default function App() {
                   <span className="text-xs font-bold text-indigo-700 uppercase tracking-widest">The Future of STEM Learning</span>
                 </div>
                 <h1 className="text-6xl md:text-7xl font-extrabold text-slate-900 leading-[1.1] tracking-tight">
-                  Master STEM with <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-600">Expert Tutors</span>
+                  Master STEM & ICT with <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-600">Expert Tutors</span>
                 </h1>
                 <p className="text-xl text-slate-600 leading-relaxed max-w-lg">
-                  Connect with top-tier educators in Mathematics, Physics, and ICT. Personalized learning paths powered by AI.
+                  Connect with top-tier educators in STEM and ICT. Personalized learning paths powered by AI.
                 </p>
                 <div className="flex flex-wrap gap-4">
                   <button 

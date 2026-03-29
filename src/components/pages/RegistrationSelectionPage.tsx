@@ -9,7 +9,7 @@ export const RegistrationSelectionPage: React.FC<RegistrationSelectionPageProps>
   return (
     <div className="max-w-4xl mx-auto px-4 py-10">
       <div className="text-center mb-10">
-        <h2 className="text-4xl font-black text-slate-900 tracking-tight mb-4">Create Account</h2>
+        <h2 className="text-4xl font-black text-slate-900 tracking-tight mb-4">Sign Up</h2>
         <p className="text-lg text-slate-500 max-w-2xl mx-auto">
           Choose the path that fits you best. Register as a student or apply to become a tutor.
         </p>

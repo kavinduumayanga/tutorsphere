@@ -41,7 +41,7 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
   }, [initialRole]);
 
   const heading = showRoleSelector
-    ? 'Create Account'
+    ? 'Sign Up'
     : role === 'tutor'
       ? 'Create Tutor Account'
       : 'Create Student Account';
@@ -316,7 +316,7 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
             disabled={isSubmitting || (role === 'tutor' && formData.subjects.length === 0)}
             className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold hover:bg-slate-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-xl shadow-slate-900/20 text-lg group"
           >
-            {isSubmitting ? 'Processing...' : role === 'tutor' ? 'Submit Application' : 'Create Account'}
+            {isSubmitting ? 'Processing...' : role === 'tutor' ? 'Submit Application' : 'Sign Up'}
           </button>
         </form>
       </motion.div>

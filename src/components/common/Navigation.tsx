@@ -97,7 +97,7 @@ export const Navigation: React.FC<NavigationProps> = ({
                     }}
                     className="bg-indigo-600 text-white px-3 py-2 rounded-full text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 whitespace-nowrap"
                   >
-                    Create Account
+                    Sign Up
                   </button>
                 </>
               ) : (

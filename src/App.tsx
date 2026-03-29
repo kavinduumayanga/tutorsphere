@@ -700,11 +700,7 @@ export default function App() {
                     Login
                   </button>
                   <button 
-                    onClick={() => {
-                      setShowAuthModal(false);
-                      setAuthMode('login');
-                      setActiveTab('registerSelect');
-                    }} 
+                    onClick={() => setActiveTab('registerSelect')} 
                     className="w-[100px] bg-indigo-600 text-white py-2 rounded-full text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 whitespace-nowrap text-center"
                   >
                     Sign Up
@@ -2433,7 +2429,7 @@ export default function App() {
                 <div className="w-full max-w-xs sm:max-w-sm md:max-w-md mx-auto">
                   <div className="mb-6">
                     <h2 className="text-2xl sm:text-3xl font-black text-slate-900 mb-3 tracking-tight">
-                      {authMode === 'login' ? 'Sign In' : 'Create Account'}
+                      {authMode === 'login' ? 'Sign In' : 'Sign Up'}
                     </h2>
                     <p className="text-slate-500 text-sm font-medium">
                       {authMode === 'login' 
@@ -2561,7 +2557,7 @@ export default function App() {
                       type="submit" 
                       className="w-full bg-indigo-600 text-white py-3 rounded-2xl font-bold hover:bg-indigo-700 shadow-xl shadow-indigo-200 transition-all mt-3 active:scale-[0.98] flex items-center justify-center gap-2"
                     >
-                      {authMode === 'login' ? 'Sign In' : 'Create Account'}
+                      {authMode === 'login' ? 'Sign In' : 'Sign Up'}
                       <ArrowRight className="w-5 h-5" />
                     </button>
                   </form>
@@ -2573,15 +2569,14 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           if (authMode === 'login') {
-                            setShowAuthModal(false);
                             setActiveTab('registerSelect');
-                            return;
+                          } else {
+                            setAuthMode('login');
                           }
-                          setAuthMode('login');
                         }}
                         className="ml-2 text-indigo-600 font-bold hover:text-indigo-700 transition-colors"
                       >
-                        {authMode === 'login' ? 'Create Account' : 'Sign In'}
+                        {authMode === 'login' ? 'Sign Up' : 'Sign In'}
                       </button>
                     </p>
                   </div>

@@ -29,7 +29,7 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
     confirmPassword: '',
     education: '',
     subjects: [] as string[],
-    teachingLevel: 'Undergraduate',
+    teachingLevel: '',
     hourlyRate: 50
   });
   const [error, setError] = useState('');
@@ -64,6 +64,13 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
 
     try {
       if (role === 'tutor') {
+        const hasSubjects = formData.subjects.length > 0;
+        const validTeachingLevel = formData.teachingLevel === 'School' || formData.teachingLevel === 'University';
+        
+        if (!hasSubjects || !validTeachingLevel || !formData.education.trim()) {
+          throw new Error('Please complete all required tutor fields (Education, Subjects, and Teaching Level).');
+        }
+
         const result = await localService.validateTutor(formData as any);
         setValidationResult(result);
         if (!result.isValid) {
@@ -75,7 +82,24 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
       // Real auth submission
       const user = await apiService.signup(formData.firstName, formData.lastName, formData.email, formData.password, role);
       
-      // If it's a tutor, maybe it sets it up via mock locally, but for the MVP:
+      if (role === 'tutor') {
+        await apiService.createTutor({
+          id: user.id,
+          name: `${user.firstName} ${user.lastName}`,
+          email: user.email,
+          role: 'tutor',
+          qualifications: formData.education,
+          subjects: formData.subjects,
+          teachingLevel: formData.teachingLevel as any,
+          pricePerHour: formData.hourlyRate,
+          rating: 0,
+          reviewCount: 0,
+          bio: 'New tutor on TutorSphere',
+          availability: [],
+          isVerified: false
+        } as any);
+      }
+
       onAccountCreated(user);
     } catch (err: any) {
       setError(err.message || 'Failed to create account');
@@ -222,23 +246,57 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
-                className="space-y-6 overflow-hidden"
+                className="space-y-6 overflow-hidden flex flex-col pt-6 mt-6 border-t border-slate-100"
               >
-                <div className="h-px w-full bg-slate-100 my-8" />
+                <div>
+                  <h3 className="text-xl font-black text-slate-800 mb-2">Tutor Profile Settings</h3>
+                  <p className="text-sm font-medium text-slate-500 mb-6">Let's set up your teaching credentials correctly.</p>
+                </div>
                 
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">Education Details</label>
-                  <textarea
-                    required
-                    value={formData.education}
-                    onChange={e => setFormData({...formData, education: e.target.value})}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 h-24 bg-slate-50 focus:bg-white"
-                    placeholder="e.g. BSc in Computer Science, University of Colombo"
-                  />
+                <div className="grid md:grid-cols-2 gap-6">
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <label className="text-sm font-bold text-slate-700">Educational Background</label>
+                      <textarea
+                        required
+                        value={formData.education}
+                        onChange={e => setFormData({...formData, education: e.target.value})}
+                        className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 h-[104px] bg-slate-50 focus:bg-white resize-none"
+                        placeholder="e.g. BSc in Computer Science, University of Colombo"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                       <label className="text-sm font-bold text-slate-700">Teaching Level</label>
+                       <select
+                         required
+                         value={formData.teachingLevel}
+                         onChange={e => setFormData({...formData, teachingLevel: e.target.value})}
+                         className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50 focus:bg-white transition-colors"
+                       >
+                         <option value="" disabled>Select a Level</option>
+                         <option value="School">School Level</option>
+                         <option value="University">University Level</option>
+                       </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-bold text-slate-700">Hourly Rate ($)</label>
+                      <input
+                        type="number"
+                        required
+                        min={10}
+                        value={formData.hourlyRate}
+                        onChange={e => setFormData({...formData, hourlyRate: Number(e.target.value)})}
+                        className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50 focus:bg-white transition-colors"
+                      />
+                    </div>
+                  </div>
                 </div>
 
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">Subjects (STEM/ICT Only)</label>
+                <div className="space-y-3 pt-2">
+                  <label className="text-sm font-bold text-slate-700">Select Subject Streams</label>
                   <div className="flex flex-wrap gap-2">
                     {STEM_SUBJECTS.map(s => (
                       <button
@@ -250,41 +308,15 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
                             : [...formData.subjects, s];
                           setFormData({...formData, subjects: newSubs});
                         }}
-                        className={`px-4 py-2 rounded-full text-sm font-bold transition-all ${
+                        className={`px-4 py-2 rounded-xl text-sm font-bold transition-all border-2 ${
                           formData.subjects.includes(s)
-                            ? 'bg-indigo-600 text-white'
-                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200'
+                            ? 'bg-indigo-50 border-indigo-500 text-indigo-700 shadow-sm shadow-indigo-100'
+                            : 'bg-white border-slate-100 text-slate-600 hover:border-slate-300 hover:bg-slate-50'
                         }`}
                       >
                         {s}
                       </button>
                     ))}
-                  </div>
-                </div>
-
-                <div className="grid md:grid-cols-2 gap-6">
-                  <div className="space-y-2">
-                    <label className="text-sm font-bold text-slate-700">Teaching Level</label>
-                    <select
-                      value={formData.teachingLevel}
-                      onChange={e => setFormData({...formData, teachingLevel: e.target.value})}
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50 focus:bg-white transition-colors"
-                    >
-                      <option value="A/L">A/L</option>
-                      <option value="Undergraduate">Undergraduate</option>
-                      <option value="Postgraduate">Postgraduate</option>
-                    </select>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-bold text-slate-700">Hourly Rate ($)</label>
-                    <input
-                      type="number"
-                      required
-                      min={10}
-                      value={formData.hourlyRate}
-                      onChange={e => setFormData({...formData, hourlyRate: Number(e.target.value)})}
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50 focus:bg-white transition-colors"
-                    />
                   </div>
                 </div>
               </motion.div>

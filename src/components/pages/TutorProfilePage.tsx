@@ -197,6 +197,17 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
                     {tutor.qualifications}
                   </h2>
 
+                  {/* Subjects */}
+                  {tutor.subjects && tutor.subjects.length > 0 && (
+                    <div className="flex flex-wrap justify-center gap-2 mb-4">
+                      {tutor.subjects.map(subject => (
+                        <span key={subject} className="px-3 py-1 bg-indigo-50 text-indigo-700 rounded-full text-xs font-bold border border-indigo-100 shadow-sm">
+                          {subject}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
                   {/* Top Rated Badge */}
                   {tutor.rating >= 4.8 && (
                     <div className="mb-6">

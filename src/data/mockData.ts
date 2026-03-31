@@ -8,7 +8,7 @@ export const MOCK_TUTORS: Tutor[] = [
     email: 'aruni@example.com',
     role: 'tutor',
     qualifications: 'PhD in Computer Science',
-    subjects: ['ICT', 'Software Engineering'],
+    subjects: ['Tech', 'Engineering'],
     teachingLevel: 'University',
     pricePerHour: 2500,
     rating: 4.9,
@@ -28,7 +28,7 @@ export const MOCK_TUTORS: Tutor[] = [
     email: 'kamal@example.com',
     role: 'tutor',
     qualifications: 'BSc in Mathematics',
-    subjects: ['Mathematics', 'Physics'],
+    subjects: ['Maths', 'Science'],
     teachingLevel: 'School',
     pricePerHour: 1500,
     rating: 4.7,
@@ -47,7 +47,7 @@ export const MOCK_TUTORS: Tutor[] = [
     email: 'dilini@example.com',
     role: 'tutor',
     qualifications: 'MSc in Applied Physics',
-    subjects: ['Physics', 'Mathematics'],
+    subjects: ['Science', 'Maths'],
     teachingLevel: 'Both',
     pricePerHour: 1800,
     rating: 4.8,
@@ -66,7 +66,7 @@ export const MOCK_TUTORS: Tutor[] = [
     email: 'sameera@example.com',
     role: 'tutor',
     qualifications: 'PhD in Organic Chemistry',
-    subjects: ['Chemistry'],
+    subjects: ['Science'],
     teachingLevel: 'University',
     pricePerHour: 3000,
     rating: 5.0,
@@ -120,6 +120,6 @@ export const MOCK_RESOURCES: Resource[] = [
   { id: 'r2', title: 'Physics Mechanics Notes', type: 'Note', subject: 'Physics', url: '#', isFree: true }
 ];
 
-export const STEM_SUBJECTS = ['Mathematics', 'Physics', 'Chemistry', 'Biology', 'ICT', 'Computer Science', 'Software Engineering'];
+export const STEM_SUBJECTS = ['Maths', 'Science', 'Engineering', 'Tech', 'ICT'];
 
-export type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'register' | 'dashboard';
+export type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'register' | 'dashboard' | 'about';

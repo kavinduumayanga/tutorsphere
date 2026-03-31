@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactCrop, { Crop, PixelCrop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
@@ -142,6 +142,7 @@ export default function App() {
     bio: ''
   });
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+  const [activeBookingActionId, setActiveBookingActionId] = useState<string | null>(null);
 
   // Subject Cycling State
   const [currentSubjectIndex, setCurrentSubjectIndex] = useState(0);
@@ -183,6 +184,12 @@ export default function App() {
 
     if (activeTab === 'tutorBooking' && !bookingTutorId) {
       setActiveTab('tutors');
+      return;
+    }
+
+    // Internal detail views are controlled by their ID guards above and
+    // intentionally excluded from top-level navigation permissions.
+    if (isInternalTab(activeTab)) {
       return;
     }
 
@@ -231,6 +238,7 @@ export default function App() {
   // Booking State
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
+  const [allReviews, setAllReviews] = useState<Review[]>([]);
   const [userCourses, setUserCourses] = useState<string[]>([]);
 
   // API Data State
@@ -263,11 +271,62 @@ export default function App() {
   const [chatInput, setChatInput] = useState('');
   const [isSpeaking, setIsSpeaking] = useState<string | null>(null);
 
+  const tutorReviewStats = useMemo(() => {
+    const aggregates = new Map<string, { sum: number; count: number }>();
+
+    for (const review of allReviews) {
+      const current = aggregates.get(review.tutorId) || { sum: 0, count: 0 };
+      aggregates.set(review.tutorId, {
+        sum: current.sum + review.rating,
+        count: current.count + 1,
+      });
+    }
+
+    const stats = new Map<string, { averageRating: number; reviewCount: number }>();
+    aggregates.forEach((value, tutorId) => {
+      stats.set(tutorId, {
+        averageRating: Number((value.sum / value.count).toFixed(1)),
+        reviewCount: value.count,
+      });
+    });
+
+    return stats;
+  }, [allReviews]);
+
+  const tutorsWithLiveStats = useMemo(
+    () =>
+      tutors.map((tutor) => {
+        const stats = tutorReviewStats.get(tutor.id);
+        if (!stats) {
+          return tutor;
+        }
+        return {
+          ...tutor,
+          rating: stats.averageRating,
+          reviewCount: stats.reviewCount,
+        };
+      }),
+    [tutors, tutorReviewStats]
+  );
+
   const isStudent = currentUser?.role === 'student';
   const isTutor = currentUser?.role === 'tutor';
+  const currentUserAvatarUrl = useMemo(() => {
+    if (!currentUser?.avatar) {
+      return null;
+    }
+
+    const separator = currentUser.avatar.includes('?') ? '&' : '?';
+    return `${currentUser.avatar}${separator}t=${Date.now()}`;
+  }, [currentUser]);
   const currentTutor = currentUser?.role === 'tutor'
-    ? tutors.find((t) => t.id === currentUser.id || t.email === currentUser.email)
+    ? tutorsWithLiveStats.find((t) => t.id === currentUser.id || t.email === currentUser.email)
     : undefined;
+  const currentTutorReviewCount = useMemo(() => {
+    if (!currentTutor) return 0;
+    const stats = tutorReviewStats.get(currentTutor.id);
+    return stats?.reviewCount ?? currentTutor.reviewCount ?? 0;
+  }, [currentTutor, tutorReviewStats]);
   const availabilityByDay = WEEK_DAYS.map((day) => ({
     day,
     count: currentTutor?.availability?.filter((slot) => slot.day === day).length || 0,
@@ -318,9 +377,20 @@ export default function App() {
       }
     };
 
+    const fetchReviews = async () => {
+      try {
+        const reviewsData = await apiService.getReviews();
+        setAllReviews(reviewsData);
+      } catch (error) {
+        console.error('Failed to fetch reviews from API, using empty fallback:', error);
+        setAllReviews([]);
+      }
+    };
+
     fetchTutors();
     fetchCourses();
     fetchResources();
+    fetchReviews();
   }, []);
 
   // Fetch user-specific data when user logs in
@@ -329,11 +399,16 @@ export default function App() {
       if (!currentUser) return;
 
       try {
+        const tutorIdentityIds =
+          currentUser.role === 'tutor'
+            ? Array.from(new Set([currentUser.id, currentTutor?.id].filter(Boolean))) as string[]
+            : [];
+
         // Fetch user's bookings (student booking history vs tutor booking management)
         const userBookings = await apiService.getBookings();
         setBookings(
           currentUser.role === 'tutor'
-            ? userBookings.filter(b => b.tutorId === currentUser.id)
+            ? userBookings.filter((b) => tutorIdentityIds.includes(b.tutorId))
             : userBookings.filter(b => b.studentId === currentUser.id)
         );
 
@@ -341,7 +416,7 @@ export default function App() {
         const userReviews = await apiService.getReviews();
         setReviews(
           currentUser.role === 'tutor'
-            ? userReviews.filter(r => r.tutorId === currentUser.id)
+            ? userReviews.filter((r) => tutorIdentityIds.includes(r.tutorId))
             : userReviews.filter(r => r.studentId === currentUser.id)
         );
 
@@ -381,7 +456,7 @@ export default function App() {
     };
 
     fetchUserData();
-  }, [currentUser]);
+  }, [currentUser, currentTutor?.id]);
 
   // Sync profile data with current user
   useEffect(() => {
@@ -621,7 +696,8 @@ export default function App() {
         comment,
         date: new Date().toISOString().split('T')[0]
       });
-      setReviews([review, ...reviews]);
+      setReviews((prev) => [review, ...prev]);
+      setAllReviews((prev) => [review, ...prev]);
       alert('Review submitted successfully!');
     } catch (error) {
       console.error('Failed to submit review:', error);
@@ -779,6 +855,65 @@ export default function App() {
     });
   };
 
+  const updateTutorBooking = async (bookingId: string, updates: Partial<Booking>) => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      alert('Only tutor accounts can update bookings.');
+      return;
+    }
+
+    setActiveBookingActionId(bookingId);
+    try {
+      const updatedBooking = await apiService.updateBooking(bookingId, updates);
+      setBookings((prevBookings) =>
+        prevBookings.map((booking) =>
+          booking.id === bookingId
+            ? { ...booking, ...updatedBooking }
+            : booking
+        )
+      );
+    } catch (error) {
+      console.error('Failed to update booking:', error);
+      alert('Failed to update booking. Please try again.');
+    } finally {
+      setActiveBookingActionId(null);
+    }
+  };
+
+  const handleTutorBookingStatusChange = async (booking: Booking, status: Booking['status']) => {
+    if (booking.status === status) {
+      return;
+    }
+
+    if (status === 'confirmed' && !booking.meetingLink) {
+      const meetingLink = prompt('Add meeting link before confirming this booking:')?.trim();
+      if (!meetingLink) {
+        alert('Meeting link is required to confirm the booking.');
+        return;
+      }
+
+      await updateTutorBooking(booking.id, { status, meetingLink });
+      return;
+    }
+
+    await updateTutorBooking(booking.id, { status });
+  };
+
+  const handleTutorMeetingLinkUpdate = async (booking: Booking) => {
+    const nextMeetingLink = prompt('Enter meeting link:', booking.meetingLink || '')?.trim();
+    if (!nextMeetingLink || nextMeetingLink === booking.meetingLink) {
+      return;
+    }
+
+    await updateTutorBooking(booking.id, { meetingLink: nextMeetingLink });
+  };
+
+  const getBookingStatusPillClassName = (status: Booking['status']) => {
+    if (status === 'completed') return 'text-emerald-700 bg-emerald-50 border-emerald-200';
+    if (status === 'confirmed') return 'text-indigo-700 bg-indigo-50 border-indigo-200';
+    if (status === 'pending') return 'text-amber-700 bg-amber-50 border-amber-200';
+    return 'text-rose-700 bg-rose-50 border-rose-200';
+  };
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] font-sans text-slate-900">
       {/* Navbar */}
@@ -849,6 +984,21 @@ export default function App() {
                         <User className="w-4 h-4" />
                         Dashboard
                       </button>
+                      {isTutor && currentTutor && (
+                        <button 
+                          onClick={() => {
+                            setViewingTutorId(currentTutor.id);
+                            setActiveTab('tutorProfile');
+                            setIsUserMenuOpen(false);
+                          }}
+                          className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                          My Profile
+                        </button>
+                      )}
                       <button 
                         onClick={() => {setActiveTab('settings'); setIsUserMenuOpen(false)}}
                         className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
@@ -882,7 +1032,8 @@ export default function App() {
         {activeTab === 'tutorProfile' && viewingTutorId && (
           <TutorProfilePage 
             tutorId={viewingTutorId}
-            initialTutor={tutors.find(t => t.id === viewingTutorId)}
+            initialTutor={tutorsWithLiveStats.find(t => t.id === viewingTutorId)}
+            reviews={allReviews}
             courses={courses.filter(c => c.tutorId === viewingTutorId)}
             onBack={() => {
               setViewingTutorId(null);
@@ -899,7 +1050,7 @@ export default function App() {
 
         {activeTab === 'tutorBooking' && bookingTutorId && (
           <TutorBookingPage
-            tutor={tutors.find(t => t.id === bookingTutorId) || null}
+            tutor={tutorsWithLiveStats.find(t => t.id === bookingTutorId) || null}
             onBack={() => {
               setBookingTutorId(null);
               if (viewingTutorId === bookingTutorId) {
@@ -1142,7 +1293,7 @@ export default function App() {
                 <p className="text-lg text-slate-600 max-w-2xl mx-auto">Learn from the best minds in the country. Our tutors are verified experts with proven track records in guiding students to success.</p>
               </div>
               <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
-                {[...tutors].sort((a, b) => b.rating - a.rating).slice(0, 4).map(tutor => (
+                {[...tutorsWithLiveStats].sort((a, b) => b.rating - a.rating).slice(0, 4).map(tutor => (
                   <motion.div 
                     whileHover={{ y: -8 }}
                     key={tutor.id}
@@ -1245,7 +1396,7 @@ export default function App() {
               </div>
             ) : (
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-                {tutors.map(tutor => (
+                {tutorsWithLiveStats.map(tutor => (
                 <motion.div 
                   layout
                   whileHover={{ y: -10 }}
@@ -1845,9 +1996,9 @@ export default function App() {
                 </h3>
                 <div className="flex flex-col sm:flex-row items-center gap-8">
                   <div className="relative group cursor-pointer" onClick={() => setShowImageModal(true)}>
-                    {currentUser.avatar ? (
+                    {currentUserAvatarUrl ? (
                       <img
-                        src={`${currentUser.avatar}?t=${Date.now()}`}
+                        src={currentUserAvatarUrl}
                         alt="Avatar"
                         className="w-32 h-32 rounded-full object-cover border-4 border-indigo-50 shadow-xl"
                         onError={(e) => {
@@ -1856,7 +2007,7 @@ export default function App() {
                         }}
                       />
                     ) : null}
-                    <div className="w-32 h-32 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-full flex items-center justify-center text-white text-4xl font-black shadow-xl border-4 border-indigo-50" style={{ display: currentUser.avatar ? 'none' : 'flex' }}>
+                    <div className="w-32 h-32 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-full flex items-center justify-center text-white text-4xl font-black shadow-xl border-4 border-indigo-50" style={{ display: currentUserAvatarUrl ? 'none' : 'flex' }}>
                       {(currentUser.firstName + ' ' + currentUser.lastName).charAt(0)}
                     </div>
                     <div className="absolute inset-0 bg-black/40 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
@@ -2183,17 +2334,77 @@ export default function App() {
                   <p className="text-slate-500">No student bookings yet.</p>
                 ) : (
                   <div className="space-y-3">
-                    {bookings.slice(0, 5).map(booking => (
-                      <div key={booking.id} className="p-4 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-between gap-3">
-                        <div>
-                          <p className="font-bold text-slate-900">{booking.subject}</p>
-                          <p className="text-xs text-slate-500">{booking.date} • {booking.status}</p>
+                    {bookings.slice(0, 8).map((booking) => {
+                      const isLoading = activeBookingActionId === booking.id;
+                      const canConfirm = booking.status === 'pending';
+                      const canComplete = booking.status === 'confirmed';
+                      const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed';
+
+                      return (
+                        <div key={booking.id} className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-bold text-slate-900">{booking.subject}</p>
+                              <p className="text-xs text-slate-500">{booking.date} • Student ID: {booking.studentId}</p>
+                            </div>
+                            <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getBookingStatusPillClassName(booking.status)}`}>
+                              {booking.status}
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2">
+                            {canConfirm && (
+                              <button
+                                type="button"
+                                disabled={isLoading}
+                                onClick={() => handleTutorBookingStatusChange(booking, 'confirmed')}
+                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
+                              >
+                                Confirm
+                              </button>
+                            )}
+                            {canComplete && (
+                              <button
+                                type="button"
+                                disabled={isLoading}
+                                onClick={() => handleTutorBookingStatusChange(booking, 'completed')}
+                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                              >
+                                Mark Completed
+                              </button>
+                            )}
+                            {canCancel && (
+                              <button
+                                type="button"
+                                disabled={isLoading}
+                                onClick={() => handleTutorBookingStatusChange(booking, 'cancelled')}
+                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
+                              >
+                                Cancel
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              disabled={isLoading}
+                              onClick={() => handleTutorMeetingLinkUpdate(booking)}
+                              className="px-3 py-1.5 rounded-lg text-[11px] font-bold border border-slate-200 text-slate-700 bg-white hover:bg-slate-100 disabled:opacity-60"
+                            >
+                              {booking.meetingLink ? 'Edit Link' : 'Add Link'}
+                            </button>
+                            {booking.meetingLink && (
+                              <a
+                                href={booking.meetingLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+                              >
+                                Open Link
+                              </a>
+                            )}
+                          </div>
                         </div>
-                        <a href={booking.meetingLink} target="_blank" rel="noopener noreferrer" className="text-indigo-600 text-xs font-bold hover:underline">
-                          Open Link
-                        </a>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -2207,7 +2418,7 @@ export default function App() {
                   </div>
                   <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
                     <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Reviews</p>
-                    <p className="text-3xl font-black text-slate-900">{reviews.length}</p>
+                    <p className="text-3xl font-black text-slate-900">{currentTutorReviewCount}</p>
                   </div>
                 </div>
               </div>
@@ -2220,9 +2431,9 @@ export default function App() {
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 bg-white p-8 rounded-[3rem] border border-slate-100 shadow-sm">
               <div className="flex items-center gap-6">
                 <div className="relative">
-                  {currentUser.avatar ? (
+                  {currentUserAvatarUrl ? (
                     <img 
-                      src={`${currentUser.avatar}?t=${Date.now()}`} 
+                      src={currentUserAvatarUrl} 
                       alt={`${currentUser.firstName} ${currentUser.lastName}`} 
                       className="w-20 h-20 rounded-3xl object-cover shadow-xl shadow-indigo-200"
                       onError={(e) => {
@@ -2231,7 +2442,7 @@ export default function App() {
                       }}
                     />
                   ) : null}
-                  <div className="w-20 h-20 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-3xl flex items-center justify-center text-white text-3xl font-black shadow-xl shadow-indigo-200" style={{ display: currentUser.avatar ? 'none' : 'flex' }}>
+                  <div className="w-20 h-20 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-3xl flex items-center justify-center text-white text-3xl font-black shadow-xl shadow-indigo-200" style={{ display: currentUserAvatarUrl ? 'none' : 'flex' }}>
                     {(currentUser.firstName + ' ' + currentUser.lastName).charAt(0)}
                   </div>
                 </div>
@@ -2500,9 +2711,9 @@ export default function App() {
                 <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-indigo-50/30 text-center relative overflow-hidden">
                   <div className="absolute top-0 left-0 w-full h-24 bg-gradient-to-r from-indigo-600 to-violet-600 opacity-10" />
                   <div className="relative z-10">
-                    {currentUser.avatar ? (
+                    {currentUserAvatarUrl ? (
                       <img 
-                        src={`${currentUser.avatar}?t=${Date.now()}`} 
+                        src={currentUserAvatarUrl} 
                         alt="Avatar" 
                         className="w-28 h-28 rounded-[2rem] mx-auto mb-6 border-4 border-white shadow-2xl object-cover"
                         onError={(e) => {
@@ -2515,7 +2726,7 @@ export default function App() {
                       src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.firstName + ' ' + currentUser.lastName}`} 
                       alt="Avatar" 
                       className="w-28 h-28 rounded-[2rem] mx-auto mb-6 border-4 border-white shadow-2xl object-cover" 
-                      style={{ display: currentUser.avatar ? 'none' : 'block' }}
+                      style={{ display: currentUserAvatarUrl ? 'none' : 'block' }}
                     />
                     <h3 className="font-black text-2xl text-slate-900 tracking-tight">{currentUser.firstName} {currentUser.lastName}</h3>
                     <p className="text-slate-400 font-bold text-xs uppercase tracking-widest mt-1">{currentUser.email}</p>
@@ -2591,9 +2802,9 @@ export default function App() {
                 </h3>
                 <div className="flex flex-col sm:flex-row items-center gap-8">
                   <div className="relative group cursor-pointer" onClick={() => setShowImageModal(true)}>
-                    {currentUser.avatar ? (
+                    {currentUserAvatarUrl ? (
                       <img
-                        src={`${currentUser.avatar}?t=${Date.now()}`}
+                        src={currentUserAvatarUrl}
                         alt="Avatar"
                         className="w-32 h-32 rounded-full object-cover border-4 border-indigo-50 shadow-xl"
                         onError={(e) => {
@@ -2602,7 +2813,7 @@ export default function App() {
                         }}
                       />
                     ) : null}
-                    <div className="w-32 h-32 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-full flex items-center justify-center text-white text-4xl font-black shadow-xl border-4 border-indigo-50" style={{ display: currentUser.avatar ? 'none' : 'flex' }}>
+                    <div className="w-32 h-32 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-full flex items-center justify-center text-white text-4xl font-black shadow-xl border-4 border-indigo-50" style={{ display: currentUserAvatarUrl ? 'none' : 'flex' }}>
                       {(currentUser.firstName + ' ' + currentUser.lastName).charAt(0)}
                     </div>
                     <div className="absolute inset-0 bg-black/40 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">

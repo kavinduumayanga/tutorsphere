@@ -1,17 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  ArrowLeft, Star, Clock, BookOpen, GraduationCap, CheckCircle, BadgeCheck, Check,
-  Calendar, Award, User as UserIcon, Users, TrendingUp, Share2, Heart, 
+  Star, Clock, BookOpen, GraduationCap, CheckCircle, BadgeCheck, Check,
+  Calendar, Award, User as UserIcon, Users, TrendingUp,
   MessageSquare, Shield, MapPin, Globe, ChevronRight, PlayCircle, 
   Video, Mail, Phone, Briefcase, Languages, Lightbulb, Target, MessageCircle, Zap
 } from 'lucide-react';
 import { apiService } from '../../services/apiService';
-import { Tutor, Course } from '../../types';
+import { Tutor, Course, Review } from '../../types';
 
 interface TutorProfilePageProps {
   tutorId: string;
   initialTutor?: Tutor;
+  reviews?: Review[];
   courses?: Course[];
   onBack: () => void;
   onBookSession: (tutorId: string) => void;
@@ -40,6 +41,7 @@ const TabButton = ({ active, onClick, children }: { active: boolean; onClick: ()
 export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({ 
   tutorId, 
   initialTutor,
+  reviews,
   courses = [],
   onBack, 
   onBookSession,
@@ -48,8 +50,8 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
 }) => {
   const [tutor, setTutor] = useState<Tutor | null>(initialTutor || null);
   const [loading, setLoading] = useState(!initialTutor);
+  const [fallbackReviews, setFallbackReviews] = useState<Review[]>([]);
   const [activeTab, setActiveTab] = useState<'about' | 'courses' | 'reviews'>('about');
-  const [isFavorite, setIsFavorite] = useState(false);
 
   useEffect(() => {
     if (initialTutor) {
@@ -74,7 +76,28 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
     return () => { mounted = false; };
   }, [tutorId, initialTutor]);
 
-  const toggleFavorite = () => setIsFavorite(!isFavorite);
+  useEffect(() => {
+    if (reviews) {
+      return;
+    }
+
+    let mounted = true;
+    const fetchTutorReviews = async () => {
+      try {
+        const tutorReviews = await apiService.getTutorReviews(tutorId);
+        if (mounted) {
+          setFallbackReviews(tutorReviews);
+        }
+      } catch (err) {
+        console.error('Failed to load tutor reviews', err);
+      }
+    };
+
+    fetchTutorReviews();
+    return () => {
+      mounted = false;
+    };
+  }, [reviews, tutorId]);
 
   if (loading) {
     return (
@@ -109,46 +132,43 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
 
   const displayName = (tutor as any).name || `${tutor.firstName || ''} ${tutor.lastName || ''}`.trim() || 'Tutor';
   const availableSlots = tutor.availability?.filter(slot => !slot.isBooked) || [];
+  const tutorReviews = useMemo(() => {
+    const sourceReviews = reviews ?? fallbackReviews;
+    return sourceReviews
+      .filter((review) => review.tutorId === tutor.id)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [reviews, fallbackReviews, tutor.id]);
+  const reviewCount = tutorReviews.length;
+  const averageRating = reviewCount
+    ? Number((tutorReviews.reduce((sum, review) => sum + review.rating, 0) / reviewCount).toFixed(1))
+    : tutor.rating;
+
+  const getInitials = (name: string) => {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return 'S';
+    if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
+    return `${parts[0].charAt(0)}${parts[1].charAt(0)}`.toUpperCase();
+  };
+
+  const formatReviewDate = (date: string) => {
+    const parsed = new Date(date);
+    if (Number.isNaN(parsed.getTime())) {
+      return date;
+    }
+    return parsed.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-indigo-100 selection:text-indigo-900">
-      
-      {/* Dynamic Header */}
-      <nav className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200/60 supports-[backdrop-filter]:bg-white/60 transition-all duration-300">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <button 
-            onClick={onBack}
-            className="flex items-center text-slate-600 hover:text-indigo-600 transition-colors group px-3 py-2 rounded-lg hover:bg-slate-100/50"
-          >
-            <ArrowLeft className="w-5 h-5 mr-2 group-hover:-translate-x-1 transition-transform" />
-            <span className="font-medium">Back</span>
-          </button>
-          
-          <div className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600">
-             <a href="#about" onClick={(e) => { e.preventDefault(); setActiveTab('about'); }} className={`hover:text-indigo-600 transition-colors ${activeTab === 'about' ? 'text-indigo-600' : ''}`}>About</a>
-             <a href="#courses" onClick={(e) => { e.preventDefault(); setActiveTab('courses'); }} className={`hover:text-indigo-600 transition-colors ${activeTab === 'courses' ? 'text-indigo-600' : ''}`}>Courses</a>
-             <a href="#reviews" onClick={(e) => { e.preventDefault(); setActiveTab('reviews'); }} className={`hover:text-indigo-600 transition-colors ${activeTab === 'reviews' ? 'text-indigo-600' : ''}`}>Reviews</a>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-all duration-200">
-              <Share2 className="w-5 h-5" />
-            </button>
-            <button 
-              onClick={toggleFavorite}
-              className={`p-2 rounded-full transition-all duration-200 ${isFavorite ? 'text-pink-500 bg-pink-50' : 'text-slate-500 hover:text-pink-500 hover:bg-pink-50'}`}
-            >
-              <Heart className={`w-5 h-5 ${isFavorite ? 'fill-current' : ''}`} />
-            </button>
-          </div>
-        </div>
-      </nav>
-
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           
           {/* LEFT COLUMN - Main Content (8 cols) */}
-          <div className="lg:col-span-8 flex flex-col gap-8">
+          <div className={isStudent ? "lg:col-span-8 flex flex-col gap-8" : "lg:col-span-12 flex flex-col gap-8"}>
             
             {/* Hero Card */}
             <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200/60 overflow-hidden relative group">
@@ -209,7 +229,7 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
                   )}
 
                   {/* Top Rated Badge */}
-                  {tutor.rating >= 4.8 && (
+                  {averageRating >= 4.8 && (
                     <div className="mb-6">
                       <span className="px-3 py-1.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-bold uppercase tracking-wider border border-amber-100 shadow-sm inline-flex items-center gap-1.5">
                         <Award className="w-3.5 h-3.5" /> Top Rated
@@ -221,13 +241,13 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
                   <div className="flex flex-wrap justify-center items-center mb-6 pb-6 border-b border-slate-100 divide-x divide-slate-200 overflow-hidden w-full">
                     <div className="flex items-center gap-2.5 px-4 sm:px-6 py-1">
                       <Star className="w-5 h-5 text-amber-500 fill-amber-500" />
-                      <span className="text-xl font-bold text-slate-900">{tutor.rating.toFixed(1)}</span>
+                      <span className="text-xl font-bold text-slate-900">{averageRating.toFixed(1)}</span>
                       <span className="text-xs text-slate-500 font-bold uppercase tracking-wider mt-0.5">Rating</span>
                     </div>
 
                     <div className="flex items-center gap-2.5 px-4 sm:px-6 py-1">
                       <Users className="w-5 h-5 text-blue-500" />
-                      <span className="text-xl font-bold text-slate-900">{tutor.reviewCount}</span>
+                      <span className="text-xl font-bold text-slate-900">{reviewCount}</span>
                       <span className="text-xs text-slate-500 font-bold uppercase tracking-wider mt-0.5">Students</span>
                     </div>
 
@@ -369,41 +389,55 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
                         <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-full border border-slate-100">
                           <div className="flex text-amber-400">
                             {[...Array(5)].map((_, i) => (
-                              <Star key={i} className={`w-4 h-4 ${i < Math.round(tutor.rating) ? 'fill-current' : 'text-slate-200 fill-slate-200'}`} />
+                              <Star key={i} className={`w-4 h-4 ${i < Math.round(averageRating) ? 'fill-current' : 'text-slate-200 fill-slate-200'}`} />
                             ))}
                           </div>
-                          <span className="font-bold text-slate-900">{tutor.rating.toFixed(1)}</span>
-                          <span className="text-slate-400 text-sm">({tutor.reviewCount} verified reviews)</span>
+                          <span className="font-bold text-slate-900">{averageRating.toFixed(1)}</span>
+                          <span className="text-slate-400 text-sm">({reviewCount} verified reviews)</span>
                         </div>
                       </div>
                       
                       <div className="space-y-8">
-                        {[1, 2, 3].map((i) => (
-                          <div key={i} className="border-b border-slate-100 last:border-0 pb-8 last:pb-0">
-                            <div className="flex items-start gap-4">
-                              <div className="w-12 h-12 rounded-full bg-indigo-50 flex items-center justify-center font-bold text-indigo-600 text-lg shrink-0 border border-indigo-100">
-                                {String.fromCharCode(64 + i)}
-                              </div>
-                              <div className="flex-1">
-                                <div className="flex justify-between items-start mb-2">
-                                  <h5 className="font-bold text-slate-900">Student Name</h5>
-                                  <span className="text-xs text-slate-400 font-medium">2 weeks ago</span>
+                        {tutorReviews.length === 0 ? (
+                          <div className="text-center py-12 border border-dashed border-slate-200 rounded-2xl bg-slate-50/70">
+                            <p className="text-slate-600 font-medium">No student reviews yet.</p>
+                            <p className="text-slate-400 text-sm mt-1">Reviews will appear here once students submit feedback.</p>
+                          </div>
+                        ) : (
+                          tutorReviews.slice(0, 6).map((review) => (
+                            <div key={review.id} className="border-b border-slate-100 last:border-0 pb-8 last:pb-0">
+                              <div className="flex items-start gap-4">
+                                <div className="w-12 h-12 rounded-full bg-indigo-50 flex items-center justify-center font-bold text-indigo-600 text-lg shrink-0 border border-indigo-100">
+                                  {getInitials(review.studentName)}
                                 </div>
-                                <div className="flex text-amber-400 mb-3 text-xs">
-                                    {[...Array(5)].map((_, j) => <Star key={j} className="w-3.5 h-3.5 fill-current" />)}
+                                <div className="flex-1">
+                                  <div className="flex justify-between items-start mb-2">
+                                    <h5 className="font-bold text-slate-900">{review.studentName}</h5>
+                                    <span className="text-xs text-slate-400 font-medium">{formatReviewDate(review.date)}</span>
+                                  </div>
+                                  <div className="flex text-amber-400 mb-3 text-xs">
+                                    {[...Array(5)].map((_, index) => (
+                                      <Star
+                                        key={index}
+                                        className={`w-3.5 h-3.5 ${index < review.rating ? 'fill-current' : 'text-slate-200 fill-slate-200'}`}
+                                      />
+                                    ))}
+                                  </div>
+                                  <p className="text-slate-600 text-sm leading-relaxed bg-slate-50 p-4 rounded-xl rounded-tl-none">
+                                    "{review.comment}"
+                                  </p>
                                 </div>
-                                <p className="text-slate-600 text-sm leading-relaxed bg-slate-50 p-4 rounded-xl rounded-tl-none">
-                                  "Great tutor! Explained complex concepts very clearly. The examples provided were extremely helpful for my exam preparation. Highly recommended!"
-                                </p>
                               </div>
                             </div>
-                          </div>
-                        ))}
+                          ))
+                        )}
                       </div>
                       
-                      <button className="w-full mt-8 py-3.5 bg-white border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-sm">
-                        Show All {tutor.reviewCount} Reviews
-                      </button>
+                      {reviewCount > 6 && (
+                        <button className="w-full mt-8 py-3.5 bg-white border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-sm">
+                          Showing 6 of {reviewCount} Reviews
+                        </button>
+                      )}
                     </div>
                   </motion.div>
                 )}
@@ -412,6 +446,7 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
           </div>
 
           {/* RIGHT COLUMN - Sticky Sidebar (4 cols) */}
+          {isStudent && (
           <div className="lg:col-span-4 space-y-6 lg:sticky lg:top-24 h-fit">
               
               {/* Booking Card */}
@@ -486,6 +521,7 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
               </div>
 
           </div>
+          )}
 
         </div>
       </main>

@@ -6,6 +6,7 @@ import fs from "fs/promises";
 import dotenv from "dotenv";
 import multer from "multer";
 import cors from "cors";
+import { jsPDF } from "jspdf";
 import { connectDB } from "./src/database.js";
 import { User } from "./src/models/User.js";
 import { Tutor } from "./src/models/Tutor.js";
@@ -17,6 +18,7 @@ import { Question } from "./src/models/Question.js";
 import { Quiz } from "./src/models/Quiz.js";
 import { StudyPlan } from "./src/models/StudyPlan.js";
 import { SkillLevel } from "./src/models/SkillLevel.js";
+import { CourseEnrollment } from "./src/models/CourseEnrollment.js";
 
 // Load environment variables
 dotenv.config();
@@ -90,6 +92,149 @@ const resolveStoredAvatarPath = (storedAvatar?: string): string | null => {
   }
 
   return null;
+};
+
+const createEntityId = () => Math.random().toString(36).substr(2, 9);
+
+const sanitizeFileSegment = (value: string): string =>
+  value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'certificate';
+
+const formatCertificateDate = (dateValue: Date | string): string => {
+  const parsed = new Date(dateValue);
+  if (Number.isNaN(parsed.getTime())) {
+    return String(dateValue);
+  }
+  return parsed.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+};
+
+type CertificatePdfInput = {
+  studentName: string;
+  courseTitle: string;
+  subject: string;
+  completedDate: string;
+  certificateId: string;
+  tutorLabel: string;
+};
+
+const buildBrandedCertificatePdf = (input: CertificatePdfInput): Buffer => {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+
+  // Soft background and two-layer frame for a premium certificate look.
+  doc.setFillColor(248, 250, 252);
+  doc.rect(0, 0, pageWidth, pageHeight, 'F');
+
+  doc.setDrawColor(109, 40, 217);
+  doc.setLineWidth(4);
+  doc.roundedRect(24, 24, pageWidth - 48, pageHeight - 48, 14, 14, 'S');
+
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(1);
+  doc.roundedRect(40, 40, pageWidth - 80, pageHeight - 80, 12, 12, 'S');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(20);
+  doc.setTextColor(109, 40, 217);
+  doc.text('TutorSphere', 60, 78);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(12);
+  doc.setTextColor(71, 85, 105);
+  doc.text('Certificate of Completion', pageWidth - 60, 78, { align: 'right' });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.setTextColor(148, 163, 184);
+  doc.text('PROUDLY PRESENTED TO', pageWidth / 2, 130, { align: 'center' });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(44);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Certificate', pageWidth / 2, 180, { align: 'center' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(16);
+  doc.setTextColor(71, 85, 105);
+  doc.text('This certifies that', pageWidth / 2, 220, { align: 'center' });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(32);
+  doc.setTextColor(17, 24, 39);
+  doc.text(input.studentName, pageWidth / 2, 268, { align: 'center', maxWidth: pageWidth - 140 });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(15);
+  doc.setTextColor(71, 85, 105);
+  doc.text('has successfully completed the course', pageWidth / 2, 300, { align: 'center' });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(24);
+  doc.setTextColor(30, 41, 59);
+  doc.text(input.courseTitle, pageWidth / 2, 338, { align: 'center', maxWidth: pageWidth - 180 });
+
+  const subjectBadge = `Subject: ${input.subject || 'General'}`;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  const badgePadding = 14;
+  const badgeHeight = 26;
+  const badgeWidth = doc.getTextWidth(subjectBadge) + badgePadding * 2;
+  const badgeX = (pageWidth - badgeWidth) / 2;
+  const badgeY = 356;
+
+  doc.setFillColor(237, 233, 254);
+  doc.setDrawColor(167, 139, 250);
+  doc.roundedRect(badgeX, badgeY, badgeWidth, badgeHeight, 8, 8, 'FD');
+  doc.setTextColor(91, 33, 182);
+  doc.text(subjectBadge, pageWidth / 2, badgeY + 17, { align: 'center' });
+
+  const detailsStartY = 432;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(12);
+  doc.setTextColor(71, 85, 105);
+  doc.text(`Completed on: ${input.completedDate}`, 90, detailsStartY);
+  doc.text(`Certificate ID: ${input.certificateId}`, 90, detailsStartY + 22);
+  doc.text(`Tutor: ${input.tutorLabel}`, 90, detailsStartY + 44);
+
+  const signatureLineY = detailsStartY + 12;
+  doc.setDrawColor(148, 163, 184);
+  doc.line(pageWidth - 280, signatureLineY, pageWidth - 90, signatureLineY);
+  doc.setFontSize(11);
+  doc.setTextColor(100, 116, 139);
+  doc.text('TutorSphere Academic Team', pageWidth - 185, signatureLineY + 18, { align: 'center' });
+
+  doc.setFontSize(10);
+  doc.setTextColor(148, 163, 184);
+  doc.text('Issued by TutorSphere Learning Platform', pageWidth / 2, pageHeight - 40, { align: 'center' });
+
+  return Buffer.from(doc.output('arraybuffer'));
+};
+
+const calculateProgress = (completedModuleCount: number, totalModuleCount: number): number => {
+  if (totalModuleCount <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, Math.round((completedModuleCount / totalModuleCount) * 100)));
+};
+
+const toFinitePrice = (value: unknown): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+};
+
+const resolveCourseIsFree = (value: unknown, fallbackPrice: number): boolean => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  return fallbackPrice <= 0;
 };
 
 const isStoredAvatarFilePath = (avatar?: string): avatar is string => {
@@ -218,6 +363,45 @@ async function migrateMockData() {
   }
 }
 
+async function normalizeCourseAccessData() {
+  try {
+    const courses = await Course.find();
+    let updatedCount = 0;
+
+    for (const course of courses) {
+      const currentPrice = toFinitePrice(course.price);
+      const currentIsFree = resolveCourseIsFree((course as any).isFree, currentPrice);
+
+      let nextPrice = currentPrice;
+      let nextIsFree = currentIsFree;
+
+      if (currentIsFree) {
+        nextPrice = 0;
+      } else if (currentPrice <= 0) {
+        nextIsFree = true;
+        nextPrice = 0;
+      }
+
+      const isFreeChanged = (course as any).isFree !== nextIsFree;
+      const priceChanged = course.price !== nextPrice;
+
+      if (!isFreeChanged && !priceChanged) {
+        continue;
+      }
+
+      course.set({ isFree: nextIsFree, price: nextPrice });
+      await course.save();
+      updatedCount += 1;
+    }
+
+    if (updatedCount > 0) {
+      console.log(`Normalized access flags for ${updatedCount} courses`);
+    }
+  } catch (error) {
+    console.log('Course access normalization skipped or failed:', (error as Error).message);
+  }
+}
+
 async function startServer() {
   // Connect to MongoDB
   await connectDB();
@@ -227,6 +411,9 @@ async function startServer() {
 
   // Migrate mock data to MongoDB if needed
   await migrateMockData();
+
+  // Keep legacy courses compatible with free/paid access rules.
+  await normalizeCourseAccessData();
 
   // Ensure uploads directory exists before handling multipart avatar uploads
   await fs.mkdir(path.join(__dirname, 'uploads'), { recursive: true });
@@ -569,7 +756,9 @@ async function startServer() {
   // Course APIs
   app.get("/api/courses", async (req, res) => {
     try {
-      const courses = await Course.find();
+      const tutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
+      const query = tutorId ? { tutorId } : {};
+      const courses = await Course.find(query);
       res.json(courses);
     } catch (error) {
       console.error("Get courses error:", error);
@@ -594,8 +783,50 @@ async function startServer() {
   app.post("/api/courses", async (req, res) => {
     try {
       const courseData = req.body;
-      const id = Math.random().toString(36).substr(2, 9);
-      const course = new Course({ ...courseData, id });
+
+      if (!courseData?.tutorId) {
+        return res.status(400).json({ error: "tutorId is required to create a course" });
+      }
+
+      const tutorUser = await User.findOne({ id: courseData.tutorId, role: 'tutor' });
+      if (!tutorUser) {
+        return res.status(400).json({ error: "Invalid tutorId. Tutor account not found." });
+      }
+
+      const modules = Array.isArray(courseData.modules)
+        ? courseData.modules
+            .map((module: any) => ({
+              id: module?.id || createEntityId(),
+              title: String(module?.title || '').trim(),
+              videoUrl: String(module?.videoUrl || '').trim(),
+              resources: Array.isArray(module?.resources)
+                ? module.resources.map((resource: any) => String(resource).trim()).filter(Boolean)
+                : [],
+            }))
+            .filter((module: any) => module.title && module.videoUrl)
+        : [];
+
+      if (modules.length === 0) {
+        return res.status(400).json({ error: "At least one video module is required." });
+      }
+
+      const incomingPrice = toFinitePrice(courseData?.price);
+      const isFree = resolveCourseIsFree(courseData?.isFree, incomingPrice);
+      const price = isFree ? 0 : incomingPrice;
+
+      if (!isFree && price <= 0) {
+        return res.status(400).json({ error: "Paid courses must include a valid price greater than zero." });
+      }
+
+      const id = createEntityId();
+      const course = new Course({
+        ...courseData,
+        id,
+        isFree,
+        price,
+        modules,
+        enrolledStudents: Array.isArray(courseData.enrolledStudents) ? courseData.enrolledStudents : [],
+      });
       await course.save();
       res.json(course);
     } catch (error) {
@@ -606,9 +837,63 @@ async function startServer() {
 
   app.put("/api/courses/:id", async (req, res) => {
     try {
+      const actorId =
+        (typeof req.body?.actorId === 'string' && req.body.actorId.trim()) ||
+        (typeof req.query.actorId === 'string' && req.query.actorId.trim()) ||
+        '';
+
+      const existingCourse = await Course.findOne({ id: req.params.id });
+      if (!existingCourse) {
+        return res.status(404).json({ error: "Course not found" });
+      }
+
+      if (actorId && existingCourse.tutorId !== actorId) {
+        return res.status(403).json({ error: "You can only manage your own courses." });
+      }
+
+      const updatePayload = { ...req.body };
+      delete updatePayload.actorId;
+      delete updatePayload.enrolledStudents;
+
+      if (updatePayload.tutorId && updatePayload.tutorId !== existingCourse.tutorId) {
+        return res.status(400).json({ error: "Course owner cannot be changed." });
+      }
+
+      const existingIsFree = resolveCourseIsFree((existingCourse as any).isFree, toFinitePrice(existingCourse.price));
+      const nextIsFree = typeof updatePayload.isFree === 'boolean' ? updatePayload.isFree : existingIsFree;
+      const nextPrice = updatePayload.price !== undefined
+        ? toFinitePrice(updatePayload.price)
+        : toFinitePrice(existingCourse.price);
+
+      if (!nextIsFree && nextPrice <= 0) {
+        return res.status(400).json({ error: "Paid courses must include a valid price greater than zero." });
+      }
+
+      updatePayload.isFree = nextIsFree;
+      updatePayload.price = nextIsFree ? 0 : nextPrice;
+
+      if (Array.isArray(updatePayload.modules)) {
+        const normalizedModules = updatePayload.modules
+          .map((module: any) => ({
+            id: module?.id || createEntityId(),
+            title: String(module?.title || '').trim(),
+            videoUrl: String(module?.videoUrl || '').trim(),
+            resources: Array.isArray(module?.resources)
+              ? module.resources.map((resource: any) => String(resource).trim()).filter(Boolean)
+              : [],
+          }))
+          .filter((module: any) => module.title && module.videoUrl);
+
+        if (normalizedModules.length === 0) {
+          return res.status(400).json({ error: "At least one video module is required." });
+        }
+
+        updatePayload.modules = normalizedModules;
+      }
+
       const course = await Course.findOneAndUpdate(
         { id: req.params.id },
-        req.body,
+        updatePayload,
         { new: true }
       );
       if (course) {
@@ -624,8 +909,23 @@ async function startServer() {
 
   app.delete("/api/courses/:id", async (req, res) => {
     try {
+      const actorId =
+        (typeof req.body?.actorId === 'string' && req.body.actorId.trim()) ||
+        (typeof req.query.actorId === 'string' && req.query.actorId.trim()) ||
+        '';
+
+      const existingCourse = await Course.findOne({ id: req.params.id });
+      if (!existingCourse) {
+        return res.status(404).json({ error: "Course not found" });
+      }
+
+      if (actorId && existingCourse.tutorId !== actorId) {
+        return res.status(403).json({ error: "You can only delete your own courses." });
+      }
+
       const course = await Course.findOneAndDelete({ id: req.params.id });
       if (course) {
+        await CourseEnrollment.deleteMany({ courseId: req.params.id });
         res.json({ message: "Course deleted successfully" });
       } else {
         res.status(404).json({ error: "Course not found" });
@@ -638,12 +938,51 @@ async function startServer() {
 
   app.post("/api/courses/:id/enroll", async (req, res) => {
     try {
-      const { studentId } = req.body;
+      const { studentId, paymentConfirmed, paymentReference } = req.body;
+
+      if (!studentId) {
+        return res.status(400).json({ error: "studentId is required for enrollment" });
+      }
+
+      const student = await User.findOne({ id: studentId, role: 'student' });
+      if (!student) {
+        return res.status(400).json({ error: "Invalid studentId. Student account not found." });
+      }
+
+      const existingCourse = await Course.findOne({ id: req.params.id });
+      if (!existingCourse) {
+        return res.status(404).json({ error: "Course not found" });
+      }
+
+      const isFreeCourse = resolveCourseIsFree((existingCourse as any).isFree, toFinitePrice(existingCourse.price));
+      if (!isFreeCourse) {
+        if (!paymentConfirmed) {
+          return res.status(402).json({ error: "This is a paid course. Payment is required before enrollment." });
+        }
+
+        if (!String(paymentReference || '').trim()) {
+          return res.status(400).json({ error: "Payment reference is required for paid course enrollment." });
+        }
+      }
+
       const course = await Course.findOneAndUpdate(
         { id: req.params.id },
         { $addToSet: { enrolledStudents: studentId } },
         { new: true }
       );
+
+      const existingEnrollment = await CourseEnrollment.findOne({ courseId: req.params.id, studentId });
+      if (!existingEnrollment) {
+        await CourseEnrollment.create({
+          id: createEntityId(),
+          courseId: req.params.id,
+          studentId,
+          completedModuleIds: [],
+          progress: 0,
+          enrolledAt: new Date(),
+        });
+      }
+
       if (course) {
         res.json(course);
       } else {
@@ -655,10 +994,187 @@ async function startServer() {
     }
   });
 
+  app.post("/api/courses/:id/unenroll", async (req, res) => {
+    try {
+      const { studentId } = req.body;
+      if (!studentId) {
+        return res.status(400).json({ error: "studentId is required for unenrollment" });
+      }
+
+      await Course.findOneAndUpdate(
+        { id: req.params.id },
+        { $pull: { enrolledStudents: studentId } }
+      );
+
+      await CourseEnrollment.findOneAndDelete({
+        courseId: req.params.id,
+        studentId: studentId
+      });
+
+      res.status(200).json({ success: true });
+    } catch (error) {
+      console.error("Unenroll from course error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get("/api/course-enrollments", async (req, res) => {
+    try {
+      const studentId = typeof req.query.studentId === 'string' ? req.query.studentId.trim() : '';
+      const courseId = typeof req.query.courseId === 'string' ? req.query.courseId.trim() : '';
+      const tutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
+
+      const query: Record<string, string> = {};
+      if (studentId) query.studentId = studentId;
+      if (courseId) query.courseId = courseId;
+
+      let enrollments = await CourseEnrollment.find(query).sort({ updatedAt: -1 });
+
+      if (tutorId) {
+        const tutorCourseIds = await Course.find({ tutorId }).distinct('id');
+        const tutorCourseSet = new Set(tutorCourseIds as string[]);
+        enrollments = enrollments.filter((enrollment) => tutorCourseSet.has(enrollment.courseId));
+      }
+
+      res.json(enrollments);
+    } catch (error) {
+      console.error("Get course enrollments error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.put("/api/course-enrollments/:id/progress", async (req, res) => {
+    try {
+      const { studentId, completedModuleIds } = req.body;
+
+      if (!studentId) {
+        return res.status(400).json({ error: "studentId is required to update progress" });
+      }
+
+      const enrollment = await CourseEnrollment.findOne({ id: req.params.id });
+      if (!enrollment) {
+        return res.status(404).json({ error: "Enrollment not found" });
+      }
+
+      if (enrollment.studentId !== studentId) {
+        return res.status(403).json({ error: "You can only update your own learning progress." });
+      }
+
+      const course = await Course.findOne({ id: enrollment.courseId });
+      if (!course) {
+        return res.status(404).json({ error: "Course not found for this enrollment" });
+      }
+
+      const validModuleIds = new Set(course.modules.map((module: any) => module.id));
+      const normalizedCompletedModuleIds = Array.isArray(completedModuleIds)
+        ? Array.from(
+            new Set(
+              completedModuleIds
+                .map((moduleId: any) => String(moduleId).trim())
+                .filter((moduleId: string) => validModuleIds.has(moduleId))
+            )
+          )
+        : [];
+
+      const nextProgress = calculateProgress(normalizedCompletedModuleIds.length, course.modules.length);
+      const updatePayload: any = {
+        $set: {
+          completedModuleIds: normalizedCompletedModuleIds,
+          progress: nextProgress,
+        },
+      };
+
+      if (nextProgress >= 100) {
+        updatePayload.$set.completedAt = enrollment.completedAt || new Date();
+        updatePayload.$set.certificateId = enrollment.certificateId || `CERT-${course.id}-${studentId}-${Date.now().toString(36).toUpperCase()}`;
+      } else {
+        updatePayload.$unset = {
+          completedAt: '',
+          certificateId: '',
+        };
+      }
+
+      const updatedEnrollment = await CourseEnrollment.findOneAndUpdate(
+        { id: req.params.id },
+        updatePayload,
+        { new: true }
+      );
+
+      res.json(updatedEnrollment);
+    } catch (error) {
+      console.error("Update enrollment progress error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get("/api/course-enrollments/:id/certificate", async (req, res) => {
+    try {
+      const enrollment = await CourseEnrollment.findOne({ id: req.params.id });
+      if (!enrollment) {
+        return res.status(404).json({ error: "Enrollment not found" });
+      }
+
+      const requestStudentId = typeof req.query.studentId === 'string' ? req.query.studentId.trim() : '';
+      if (requestStudentId && requestStudentId !== enrollment.studentId) {
+        return res.status(403).json({ error: "You can only access your own certificate." });
+      }
+
+      if (enrollment.progress < 100 || !enrollment.completedAt) {
+        return res.status(400).json({ error: "Certificate is available only after course completion." });
+      }
+
+      const [course, student] = await Promise.all([
+        Course.findOne({ id: enrollment.courseId }),
+        User.findOne({ id: enrollment.studentId }),
+      ]);
+
+      if (!course || !student) {
+        return res.status(404).json({ error: "Course or student not found for this certificate" });
+      }
+
+      const completedDate = formatCertificateDate(enrollment.completedAt);
+      const certificateId = enrollment.certificateId || `CERT-${course.id}-${enrollment.studentId}-${Date.now().toString(36).toUpperCase()}`;
+
+      if (!enrollment.certificateId) {
+        await CourseEnrollment.updateOne({ id: enrollment.id }, { certificateId });
+      }
+
+      const studentName = `${student.firstName} ${student.lastName}`.trim() || 'Student';
+      const tutorUser = await User.findOne({ id: course.tutorId });
+      const tutorLabel = tutorUser
+        ? `${tutorUser.firstName} ${tutorUser.lastName}`.trim() || course.tutorId
+        : course.tutorId;
+
+      const pdfBuffer = buildBrandedCertificatePdf({
+        studentName,
+        courseTitle: course.title,
+        subject: course.subject,
+        completedDate,
+        certificateId,
+        tutorLabel,
+      });
+
+      const fileNameSafeCourse = sanitizeFileSegment(course.title);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileNameSafeCourse}-certificate.pdf"`);
+      res.send(pdfBuffer);
+    } catch (error) {
+      console.error("Download certificate error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // Resource APIs
   app.get("/api/resources", async (req, res) => {
     try {
-      const resources = await Resource.find();
+      const tutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
+      const freeOnly = req.query.freeOnly === 'true';
+
+      const query: Record<string, any> = {};
+      if (tutorId) query.tutorId = tutorId;
+      if (freeOnly) query.isFree = true;
+
+      const resources = await Resource.find(query);
       res.json(resources);
     } catch (error) {
       console.error("Get resources error:", error);
@@ -669,8 +1185,18 @@ async function startServer() {
   app.post("/api/resources", async (req, res) => {
     try {
       const resourceData = req.body;
-      const id = Math.random().toString(36).substr(2, 9);
-      const resource = new Resource({ ...resourceData, id });
+
+      if (!resourceData?.tutorId) {
+        return res.status(400).json({ error: "tutorId is required to create a resource" });
+      }
+
+      const tutorUser = await User.findOne({ id: resourceData.tutorId, role: 'tutor' });
+      if (!tutorUser) {
+        return res.status(400).json({ error: "Invalid tutorId. Tutor account not found." });
+      }
+
+      const id = createEntityId();
+      const resource = new Resource({ ...resourceData, id, isFree: true });
       await resource.save();
       res.json(resource);
     } catch (error) {
@@ -681,9 +1207,30 @@ async function startServer() {
 
   app.put("/api/resources/:id", async (req, res) => {
     try {
+      const actorId =
+        (typeof req.body?.actorId === 'string' && req.body.actorId.trim()) ||
+        (typeof req.query.actorId === 'string' && req.query.actorId.trim()) ||
+        '';
+
+      const existingResource = await Resource.findOne({ id: req.params.id });
+      if (!existingResource) {
+        return res.status(404).json({ error: "Resource not found" });
+      }
+
+      if (actorId && existingResource.tutorId !== actorId) {
+        return res.status(403).json({ error: "You can only manage your own resources." });
+      }
+
+      const updatePayload = { ...req.body };
+      delete updatePayload.actorId;
+
+      if (updatePayload.tutorId && updatePayload.tutorId !== existingResource.tutorId) {
+        return res.status(400).json({ error: "Resource owner cannot be changed." });
+      }
+
       const resource = await Resource.findOneAndUpdate(
         { id: req.params.id },
-        req.body,
+        updatePayload,
         { new: true }
       );
       if (resource) {
@@ -699,6 +1246,20 @@ async function startServer() {
 
   app.delete("/api/resources/:id", async (req, res) => {
     try {
+      const actorId =
+        (typeof req.body?.actorId === 'string' && req.body.actorId.trim()) ||
+        (typeof req.query.actorId === 'string' && req.query.actorId.trim()) ||
+        '';
+
+      const existingResource = await Resource.findOne({ id: req.params.id });
+      if (!existingResource) {
+        return res.status(404).json({ error: "Resource not found" });
+      }
+
+      if (actorId && existingResource.tutorId !== actorId) {
+        return res.status(403).json({ error: "You can only delete your own resources." });
+      }
+
       const resource = await Resource.findOneAndDelete({ id: req.params.id });
       if (resource) {
         res.json({ message: "Resource deleted successfully" });

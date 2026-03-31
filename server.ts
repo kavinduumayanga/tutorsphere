@@ -92,6 +92,41 @@ const resolveStoredAvatarPath = (storedAvatar?: string): string | null => {
   return null;
 };
 
+const isStoredAvatarFilePath = (avatar?: string): avatar is string => {
+  return typeof avatar === 'string' && !avatar.includes('\x00');
+};
+
+const buildAvatarResponseUrl = async (
+  req: express.Request,
+  user: { id: string; avatar?: string }
+): Promise<string | undefined> => {
+  if (!user.avatar) {
+    return undefined;
+  }
+
+  if (!isStoredAvatarFilePath(user.avatar)) {
+    return `${req.protocol}://${req.get('host')}/api/auth/user/${user.id}/avatar`;
+  }
+
+  const avatarPath = resolveStoredAvatarPath(user.avatar);
+  if (!avatarPath) {
+    return `${req.protocol}://${req.get('host')}/api/auth/user/${user.id}/avatar`;
+  }
+
+  try {
+    await fs.access(avatarPath);
+    return `${req.protocol}://${req.get('host')}/api/auth/user/${user.id}/avatar`;
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      // Clean stale DB references when the file no longer exists on disk.
+      await User.updateOne({ id: user.id, avatar: user.avatar }, { $unset: { avatar: '' } });
+      return undefined;
+    }
+    throw error;
+  }
+};
+
 async function migrateUsers() {
   try {
     const userCount = await User.countDocuments();
@@ -243,7 +278,13 @@ async function startServer() {
       });
 
       if (user) {
-        const avatarUrl = user.avatar ? `${req.protocol}://${req.get('host')}/api/auth/user/${user.id}/avatar` : undefined;
+        let avatarUrl: string | undefined;
+        try {
+          avatarUrl = await buildAvatarResponseUrl(req, user as { id: string; avatar?: string });
+        } catch (avatarError) {
+          console.warn('Failed to build avatar URL during login:', avatarError);
+          avatarUrl = undefined;
+        }
         // Fallback to splitting name for old users if firstName is missing
         let fName = user.firstName;
         let lName = user.lastName;
@@ -297,7 +338,13 @@ async function startServer() {
 
       await user.save();
 
-      const avatarUrl = user.avatar ? `${req.protocol}://${req.get('host')}/api/auth/user/${user.id}/avatar` : undefined;
+      let avatarUrl: string | undefined;
+      try {
+        avatarUrl = await buildAvatarResponseUrl(req, user as { id: string; avatar?: string });
+      } catch (avatarError) {
+        console.warn('Failed to build avatar URL after profile update:', avatarError);
+        avatarUrl = undefined;
+      }
       res.json({ id: user.id, firstName: user.firstName, lastName: user.lastName, email: user.email, role: user.role, avatar: avatarUrl, phone: user.phone });
     } catch (error) {
       console.error("Update user error:", error);
@@ -318,10 +365,13 @@ async function startServer() {
       }
 
       // Check if avatar is a file path (new format) or binary data (old format)
-      if (typeof user.avatar === 'string' && !user.avatar.includes('\x00')) {
+      if (isStoredAvatarFilePath(user.avatar)) {
         // New format: file path
         try {
-          const avatarPath = resolveStoredAvatarPath(user.avatar) || path.resolve(user.avatar);
+          const avatarPath = resolveStoredAvatarPath(user.avatar);
+          if (!avatarPath) {
+            return res.status(404).json({ error: 'Avatar file not found' });
+          }
           console.log('Reading avatar from path:', avatarPath);
           const avatarData = await fs.readFile(avatarPath);
 
@@ -332,8 +382,15 @@ async function startServer() {
           res.set('Content-Type', contentType);
           res.send(avatarData);
         } catch (fileError) {
+          const err = fileError as NodeJS.ErrnoException;
+          if (err.code === 'ENOENT') {
+            console.warn('Avatar file missing on disk, clearing stale avatar value for user:', id);
+            await User.updateOne({ id, avatar: user.avatar }, { $unset: { avatar: '' } });
+            return res.status(404).json({ error: 'Avatar file not found' });
+          }
+
           console.error('Error reading avatar file:', fileError);
-          res.status(404).json({ error: "Avatar file not found" });
+          return res.status(500).json({ error: 'Failed to load avatar' });
         }
       } else {
         // Old format: binary data stored in database

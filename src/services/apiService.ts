@@ -1,6 +1,20 @@
-import { User, Tutor, Review, Course, Resource, Booking, Question, Quiz, StudyPlan, SkillLevel } from '../types';
+import { User, Tutor, Review, Course, Resource, Booking, Question, Quiz, StudyPlan, SkillLevel, CourseEnrollment } from '../types';
 
 const API_BASE_URL = `${window.location.origin}/api`;
+
+const getDownloadFileName = (contentDisposition: string | null): string | null => {
+  if (!contentDisposition) {
+    return null;
+  }
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+
+  const basicMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+  return basicMatch?.[1] || null;
+};
 
 class ApiService {
   private sanitizeTutorName(value: string): string {
@@ -154,8 +168,13 @@ class ApiService {
   }
 
   // Course methods
-  async getCourses(): Promise<Course[]> {
-    return this.request('/courses');
+  async getCourses(filters?: { tutorId?: string }): Promise<Course[]> {
+    const params = new URLSearchParams();
+    if (filters?.tutorId) {
+      params.set('tutorId', filters.tutorId);
+    }
+    const query = params.toString();
+    return this.request(`/courses${query ? `?${query}` : ''}`);
   }
 
   async getCourse(id: string): Promise<Course> {
@@ -169,29 +188,116 @@ class ApiService {
     });
   }
 
-  async updateCourse(id: string, course: Partial<Course>): Promise<Course> {
-    return this.request(`/courses/${id}`, {
+  async updateCourse(id: string, course: Partial<Course>, actorId?: string): Promise<Course> {
+    const params = new URLSearchParams();
+    if (actorId) {
+      params.set('actorId', actorId);
+    }
+    const query = params.toString();
+    return this.request(`/courses/${id}${query ? `?${query}` : ''}`, {
       method: 'PUT',
-      body: JSON.stringify(course),
+      body: JSON.stringify({ ...course, actorId }),
     });
   }
 
-  async deleteCourse(id: string): Promise<void> {
-    return this.request(`/courses/${id}`, {
+  async deleteCourse(id: string, actorId?: string): Promise<void> {
+    const params = new URLSearchParams();
+    if (actorId) {
+      params.set('actorId', actorId);
+    }
+    const query = params.toString();
+    return this.request(`/courses/${id}${query ? `?${query}` : ''}`, {
       method: 'DELETE',
     });
   }
 
-  async enrollInCourse(courseId: string, studentId: string): Promise<Course> {
+  async enrollInCourse(
+    courseId: string,
+    studentId: string,
+    options?: { paymentConfirmed?: boolean; paymentReference?: string }
+  ): Promise<Course> {
     return this.request(`/courses/${courseId}/enroll`, {
+      method: 'POST',
+      body: JSON.stringify({
+        studentId,
+        paymentConfirmed: Boolean(options?.paymentConfirmed),
+        paymentReference: options?.paymentReference?.trim() || undefined,
+      }),
+    });
+  }
+
+  async unenrollFromCourse(courseId: string, studentId: string): Promise<void> {
+    return this.request(`/courses/${courseId}/unenroll`, {
       method: 'POST',
       body: JSON.stringify({ studentId }),
     });
   }
 
+  async getCourseEnrollments(filters?: { studentId?: string; tutorId?: string; courseId?: string }): Promise<CourseEnrollment[]> {
+    const params = new URLSearchParams();
+    if (filters?.studentId) {
+      params.set('studentId', filters.studentId);
+    }
+    if (filters?.tutorId) {
+      params.set('tutorId', filters.tutorId);
+    }
+    if (filters?.courseId) {
+      params.set('courseId', filters.courseId);
+    }
+    const query = params.toString();
+    return this.request(`/course-enrollments${query ? `?${query}` : ''}`);
+  }
+
+  async updateCourseProgress(enrollmentId: string, studentId: string, completedModuleIds: string[]): Promise<CourseEnrollment> {
+    return this.request(`/course-enrollments/${enrollmentId}/progress`, {
+      method: 'PUT',
+      body: JSON.stringify({ studentId, completedModuleIds }),
+    });
+  }
+
+  async downloadCourseCertificate(enrollmentId: string, studentId: string, fileBaseName: string): Promise<void> {
+    const response = await fetch(
+      `${API_BASE_URL}/course-enrollments/${enrollmentId}/certificate?studentId=${encodeURIComponent(studentId)}`
+    );
+
+    if (!response.ok) {
+      let errorMessage = `Certificate download failed: ${response.statusText}`;
+      try {
+        const data = await response.json();
+        if (data?.error) {
+          errorMessage = data.error;
+        }
+      } catch {
+        // Keep default message
+      }
+      throw new Error(errorMessage);
+    }
+
+    const blob = await response.blob();
+    const suggestedFileName = getDownloadFileName(response.headers.get('Content-Disposition'));
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download =
+      suggestedFileName ||
+      `${fileBaseName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-certificate.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(objectUrl);
+  }
+
   // Resource methods
-  async getResources(): Promise<Resource[]> {
-    return this.request('/resources');
+  async getResources(filters?: { tutorId?: string; freeOnly?: boolean }): Promise<Resource[]> {
+    const params = new URLSearchParams();
+    if (filters?.tutorId) {
+      params.set('tutorId', filters.tutorId);
+    }
+    if (filters?.freeOnly) {
+      params.set('freeOnly', 'true');
+    }
+    const query = params.toString();
+    return this.request(`/resources${query ? `?${query}` : ''}`);
   }
 
   async createResource(resource: Omit<Resource, 'id'>): Promise<Resource> {
@@ -201,15 +307,25 @@ class ApiService {
     });
   }
 
-  async updateResource(id: string, resource: Partial<Resource>): Promise<Resource> {
-    return this.request(`/resources/${id}`, {
+  async updateResource(id: string, resource: Partial<Resource>, actorId?: string): Promise<Resource> {
+    const params = new URLSearchParams();
+    if (actorId) {
+      params.set('actorId', actorId);
+    }
+    const query = params.toString();
+    return this.request(`/resources/${id}${query ? `?${query}` : ''}`, {
       method: 'PUT',
-      body: JSON.stringify(resource),
+      body: JSON.stringify({ ...resource, actorId }),
     });
   }
 
-  async deleteResource(id: string): Promise<void> {
-    return this.request(`/resources/${id}`, {
+  async deleteResource(id: string, actorId?: string): Promise<void> {
+    const params = new URLSearchParams();
+    if (actorId) {
+      params.set('actorId', actorId);
+    }
+    const query = params.toString();
+    return this.request(`/resources/${id}${query ? `?${query}` : ''}`, {
       method: 'DELETE',
     });
   }

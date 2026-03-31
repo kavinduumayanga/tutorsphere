@@ -92,7 +92,8 @@ export const MOCK_COURSES: Course[] = [
     title: 'Advanced Web Development with React',
     subject: 'ICT',
     description: 'Master modern frontend development with React, TypeScript, and Tailwind CSS.',
-    price: 5000,
+    isFree: true,
+    price: 0,
     thumbnail: 'https://picsum.photos/seed/react/400/250',
     modules: [
       { id: 'm1', title: 'Introduction to React', videoUrl: '#', resources: ['Notes.pdf'] },
@@ -106,7 +107,8 @@ export const MOCK_COURSES: Course[] = [
     title: 'Pure Mathematics for A/L',
     subject: 'Mathematics',
     description: 'Complete guide to A/L Pure Mathematics with past paper discussions.',
-    price: 3500,
+    isFree: true,
+    price: 0,
     thumbnail: 'https://picsum.photos/seed/math/400/250',
     modules: [
       { id: 'm1', title: 'Calculus Basics', videoUrl: '#', resources: ['Calculus.pdf'] }
@@ -116,8 +118,26 @@ export const MOCK_COURSES: Course[] = [
 ];
 
 export const MOCK_RESOURCES: Resource[] = [
-  { id: 'r1', title: 'A/L ICT Past Paper 2023', type: 'Paper', subject: 'ICT', url: '#', isFree: true },
-  { id: 'r2', title: 'Physics Mechanics Notes', type: 'Note', subject: 'Physics', url: '#', isFree: true }
+  {
+    id: 'r1',
+    tutorId: 't1',
+    title: 'A/L ICT Past Paper 2023',
+    type: 'Paper',
+    subject: 'ICT',
+    url: '#',
+    description: 'Solved past paper with marking scheme and model answers.',
+    isFree: true,
+  },
+  {
+    id: 'r2',
+    tutorId: 't3',
+    title: 'Physics Mechanics Notes',
+    type: 'Note',
+    subject: 'Physics',
+    url: '#',
+    description: 'Concise theory notes and worked examples for mechanics.',
+    isFree: true,
+  }
 ];
 
 export const STEM_SUBJECTS = ['Maths', 'Science', 'Engineering', 'Tech', 'ICT'];

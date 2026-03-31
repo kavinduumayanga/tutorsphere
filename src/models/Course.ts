@@ -6,6 +6,7 @@ export interface ICourse extends Document {
   title: string;
   subject: string;
   description: string;
+  isFree: boolean;
   price: number;
   thumbnail: string;
   modules: {
@@ -23,6 +24,7 @@ const CourseSchema: Schema = new Schema({
   title: { type: String, required: true },
   subject: { type: String, required: true },
   description: { type: String, required: true },
+  isFree: { type: Boolean, required: true, default: false },
   price: { type: Number, required: true },
   thumbnail: { type: String, required: true },
   modules: [{

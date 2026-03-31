@@ -45,22 +45,24 @@ import CountUp from 'react-countup';
 import { localService } from './services/localService';
 import { apiService } from './services/apiService';
 
-import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz } from './types';
+import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz, TimeSlot } from './types';
 import { TutorProfilePage } from './components/pages/TutorProfilePage';
 import { GetStartedSection } from "./components/pages/GetStartedSection";
 import { TutorBookingPage } from './components/pages/TutorBookingPage';
 import { MOCK_TUTORS, MOCK_COURSES, MOCK_RESOURCES } from './data/mockData';
 import { RegistrationSelectionPage } from './components/pages/RegistrationSelectionPage';
 import { AboutPage } from './components/pages/AboutPage';
+import { TutorAvailabilityManagePage } from './components/pages/TutorAvailabilityManagePage';
 
-const STEM_SUBJECTS = ['Mathematics', 'Physics', 'Chemistry', 'Biology', 'ICT', 'Computer Science', 'Software Engineering'];
+const STEM_SUBJECTS = ['Maths', 'Science', 'Engineering', 'Tech', 'ICT'];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'about';
+type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'about';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
   tutors: 'Find Tutors',
   questions: 'Q&A',
+  manageAvailability: 'Manage Availability',
   courses: 'Courses',
   resources: 'Resources',
   quizzes: 'Quizzes',
@@ -75,6 +77,8 @@ const NAV_LABELS: Record<Tab, string> = {
   about: 'About Us'
 };
 
+const isInternalTab = (tab: Tab) => tab === 'tutorProfile' || tab === 'tutorBooking';
+
 const getAllowedTabs = (user: AppUser | null): Tab[] => {
   if (!user) {
     return [
@@ -85,21 +89,19 @@ const getAllowedTabs = (user: AppUser | null): Tab[] => {
       'registerSelect',
       'registerStudent',
       'registerTutor',
-      'tutorProfile',
-      'tutorBooking',
       'about'
     ];
   }
 
   if (user.role === 'student') {
-    return ['home', 'tutors', 'questions', 'courses', 'resources', 'dashboard', 'settings', 'tutorProfile', 'tutorBooking', 'about'];
+    return ['home', 'tutors', 'questions', 'courses', 'resources', 'dashboard', 'settings', 'about'];
   }
 
   if (user.role === 'tutor') {
-    return ['home', 'dashboard', 'register', 'courses', 'resources', 'settings', 'tutorProfile', 'tutorBooking', 'about'];
+    return ['home', 'dashboard', 'manageAvailability', 'register', 'courses', 'resources', 'settings', 'about'];
   }
 
-  return ['home', 'tutorProfile', 'tutorBooking', 'about'];
+  return ['home', 'about'];
 };
 
 const canAccessTab = (tab: Tab, user: AppUser | null) => getAllowedTabs(user).includes(tab);
@@ -115,6 +117,8 @@ const getTutorDisplayName = (tutor: Tutor & { name?: string }) => {
   return tutor.name?.trim() || 'Tutor';
 };
 
+const WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
 export default function App() {
   const [selectedTutor, setSelectedTutor] = useState<Tutor | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('home');
@@ -127,7 +131,16 @@ export default function App() {
   const [authData, setAuthData] = useState({ email: '', password: '', firstName: '', lastName: '', confirmPassword: '', role: 'student' as 'student' | 'tutor' });
 
   // Profile Update State
-  const [profileData, setProfileData] = useState({ firstName: '', lastName: '', phone: '' });
+  const [profileData, setProfileData] = useState({ 
+    firstName: '', 
+    lastName: '', 
+    phone: '',
+    education: '',
+    subjects: [] as string[],
+    teachingLevel: '',
+    pricePerHour: 0,
+    bio: ''
+  });
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
 
   // Subject Cycling State
@@ -147,7 +160,8 @@ export default function App() {
       try {
         const session = JSON.parse(storedSession);
         setCurrentUser(session.user);
-        setActiveTab(session.activeTab || 'home');
+        const restoredTab: Tab = session.activeTab || 'home';
+        setActiveTab(isInternalTab(restoredTab) ? 'home' : restoredTab);
       } catch {
         localStorage.removeItem('session');
       }
@@ -162,11 +176,21 @@ export default function App() {
   }, [currentUser, activeTab]);
 
   useEffect(() => {
+    if (activeTab === 'tutorProfile' && !viewingTutorId) {
+      setActiveTab('tutors');
+      return;
+    }
+
+    if (activeTab === 'tutorBooking' && !bookingTutorId) {
+      setActiveTab('tutors');
+      return;
+    }
+
     if (canAccessTab(activeTab, currentUser)) {
       return;
     }
     setActiveTab(currentUser ? 'dashboard' : 'home');
-  }, [activeTab, currentUser]);
+  }, [activeTab, currentUser, viewingTutorId, bookingTutorId]);
 
   useEffect(() => {
     if (activeTab === 'registerSelect' || activeTab === 'registerStudent' || activeTab === 'registerTutor') {
@@ -241,6 +265,13 @@ export default function App() {
 
   const isStudent = currentUser?.role === 'student';
   const isTutor = currentUser?.role === 'tutor';
+  const currentTutor = currentUser?.role === 'tutor'
+    ? tutors.find((t) => t.id === currentUser.id || t.email === currentUser.email)
+    : undefined;
+  const availabilityByDay = WEEK_DAYS.map((day) => ({
+    day,
+    count: currentTutor?.availability?.filter((slot) => slot.day === day).length || 0,
+  }));
   const availableTabs = getAllowedTabs(currentUser);
   const primaryNavTabs: Tab[] = ['home', 'tutors', 'courses', 'resources'];
   const navTabs = currentUser ? availableTabs.filter(tab => primaryNavTabs.includes(tab)) : primaryNavTabs;
@@ -355,13 +386,21 @@ export default function App() {
   // Sync profile data with current user
   useEffect(() => {
     if (currentUser) {
+      const isTutorUser = currentUser.role === 'tutor';
+      const tutorDoc = isTutorUser ? currentTutor : null;
+      
       setProfileData({
         firstName: currentUser.firstName,
         lastName: currentUser.lastName,
-        phone: currentUser.phone || ''
+        phone: currentUser.phone || '',
+        education: tutorDoc?.qualifications || '',
+        subjects: tutorDoc?.subjects || [],
+        teachingLevel: tutorDoc?.teachingLevel || '',
+        pricePerHour: tutorDoc?.pricePerHour || 0,
+        bio: tutorDoc?.bio || ''
       });
     }
-  }, [currentUser]);
+  }, [currentUser, currentTutor]);
 
   // Close user menu when clicking outside
   useEffect(() => {
@@ -689,6 +728,29 @@ export default function App() {
       formData.append('lastName', profileData.lastName.trim());
       if (profileData.phone) formData.append('phone', profileData.phone.trim());
 
+      if (currentUser.role === 'tutor') {
+        const tutorId = currentTutor?.id || currentUser.id;
+        const hasSubjects = profileData.subjects.length > 0;
+        const validTeachingLevel = profileData.teachingLevel === 'School' || profileData.teachingLevel === 'University' || profileData.teachingLevel === 'Both';
+        
+        if (!hasSubjects || !validTeachingLevel || !profileData.education.trim()) {
+          alert('Tutor profiles require Education, Subject(s), and Teaching Level.');
+          setIsUpdatingProfile(false);
+          return;
+        }
+
+        await apiService.updateTutor(tutorId, {
+          qualifications: profileData.education,
+          subjects: profileData.subjects,
+          teachingLevel: profileData.teachingLevel as any,
+          pricePerHour: profileData.pricePerHour,
+          bio: profileData.bio
+        });
+        
+        const tutorsData = await apiService.getTutors();
+        setTutors(tutorsData);
+      }
+
       const updatedUser = await apiService.updateUser(currentUser.id, formData);
       setCurrentUser(updatedUser);
       alert('Profile updated successfully!');
@@ -698,6 +760,23 @@ export default function App() {
     } finally {
       setIsUpdatingProfile(false);
     }
+  };
+
+  const handleSaveTutorAvailability = async (slots: TimeSlot[]) => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      throw new Error('Only tutor accounts can update availability.');
+    }
+
+    const tutorId = currentTutor?.id || currentUser.id;
+    const updatedTutor = await apiService.updateTutor(tutorId, { availability: slots });
+
+    setTutors((prevTutors) => {
+      const hasTutor = prevTutors.some((t) => t.id === updatedTutor.id);
+      if (!hasTutor) {
+        return [updatedTutor, ...prevTutors];
+      }
+      return prevTutors.map((t) => (t.id === updatedTutor.id ? updatedTutor : t));
+    });
   };
 
   return (
@@ -1217,16 +1296,29 @@ export default function App() {
                         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Hourly Rate</span>
                         <p className="text-2xl font-black text-slate-900">LKR {tutor.pricePerHour}</p>
                       </div>
-                      <button 
-                        onClick={() => setSelectedTutor(selectedTutor?.id === tutor.id ? null : tutor)}
-                        className={`px-6 py-3 rounded-2xl font-black text-sm transition-all ${
-                          selectedTutor?.id === tutor.id 
-                          ? 'bg-slate-900 text-white' 
-                          : 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700'
-                        }`}
-                      >
-                        {selectedTutor?.id === tutor.id ? 'Close' : (isStudent || !currentUser ? 'Book Session' : 'View Profile')}
-                      </button>
+                      <div className="flex gap-3">
+                        <button 
+                          onClick={() => {
+                            setViewingTutorId(tutor.id);
+                            setActiveTab('tutorProfile');
+                          }}
+                          className="px-4 py-3 bg-slate-100 text-slate-700 rounded-2xl font-black text-sm hover:bg-slate-200 transition-all"
+                        >
+                          View Profile
+                        </button>
+                        {(isStudent || !currentUser) && (
+                          <button 
+                            onClick={() => setSelectedTutor(selectedTutor?.id === tutor.id ? null : tutor)}
+                            className={`px-6 py-3 rounded-2xl font-black text-sm transition-all ${
+                              selectedTutor?.id === tutor.id 
+                              ? 'bg-slate-900 text-white' 
+                              : 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700'
+                            }`}
+                          >
+                            {selectedTutor?.id === tutor.id ? 'Close' : 'Book Session'}
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <AnimatePresence>
@@ -1734,111 +1826,297 @@ export default function App() {
         )}
 
         {activeTab === 'register' && isTutor && currentUser && (
-          <div className="max-w-2xl mx-auto">
-            <div className="text-center mb-10">
-              <h2 className="text-3xl font-bold">My Profile</h2>
-              <p className="text-slate-600">Manage your account settings and profile information.</p>
+          <div className="max-w-5xl mx-auto">
+            <div className="text-center mb-10 md:mb-14">
+              <div className="inline-flex items-center justify-center p-3 bg-indigo-50 rounded-2xl text-indigo-600 mb-6">
+                <Edit className="w-8 h-8" />
+              </div>
+              <h2 className="text-4xl md:text-5xl font-black text-slate-900 tracking-tight mb-4">Edit Profile</h2>
+              <p className="text-lg text-slate-500 max-w-2xl mx-auto">Manage your professional identity, qualifications, subjects, and availability to attract the right students.</p>
             </div>
 
-            <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-              <div className="flex items-center gap-6 mb-8">
-                <div className="relative">
-                  {currentUser.avatar ? (
-                    <img
-                      src={`${currentUser.avatar}?t=${Date.now()}`}
-                      alt="Avatar"
-                      className="w-20 h-20 rounded-3xl object-cover shadow-xl shadow-indigo-200"
-                      onError={(e) => {
-                        e.currentTarget.style.display = 'none';
-                        (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'flex';
-                      }}
-                    />
-                  ) : null}
-                  <div className="w-20 h-20 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-3xl flex items-center justify-center text-white text-3xl font-black shadow-xl shadow-indigo-200" style={{ display: currentUser.avatar ? 'none' : 'flex' }}>
-                    {(currentUser.firstName + ' ' + currentUser.lastName).charAt(0)}
+            <form onSubmit={handleUpdateProfile} className="space-y-8">
+              
+              {/* Profile Image Section */}
+              <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                <h3 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-3">
+                  <Camera className="w-6 h-6 text-indigo-600" />
+                  Profile Picture
+                </h3>
+                <div className="flex flex-col sm:flex-row items-center gap-8">
+                  <div className="relative group cursor-pointer" onClick={() => setShowImageModal(true)}>
+                    {currentUser.avatar ? (
+                      <img
+                        src={`${currentUser.avatar}?t=${Date.now()}`}
+                        alt="Avatar"
+                        className="w-32 h-32 rounded-full object-cover border-4 border-indigo-50 shadow-xl"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                          (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'flex';
+                        }}
+                      />
+                    ) : null}
+                    <div className="w-32 h-32 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-full flex items-center justify-center text-white text-4xl font-black shadow-xl border-4 border-indigo-50" style={{ display: currentUser.avatar ? 'none' : 'flex' }}>
+                      {(currentUser.firstName + ' ' + currentUser.lastName).charAt(0)}
+                    </div>
+                    <div className="absolute inset-0 bg-black/40 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <Camera className="w-8 h-8 text-white" />
+                    </div>
                   </div>
-                  <button
-                    onClick={() => setShowImageModal(true)}
-                    className="absolute -bottom-1 -right-1 w-6 h-6 bg-indigo-600 text-white p-1.5 rounded-full shadow-lg hover:bg-indigo-700 transition-colors"
-                    title="Edit Profile Picture"
-                  >
-                    <Edit className="w-3 h-3" />
-                  </button>
-                </div>
-                <div>
-                  <h3 className="text-xl font-black text-slate-900">{currentUser.firstName} {currentUser.lastName}</h3>
-                  <p className="text-slate-500 font-medium">{currentUser.email}</p>
-                  <p className="text-xs font-bold text-indigo-600 uppercase tracking-widest mt-1">{currentUser.role}</p>
+                  <div>
+                    <h4 className="font-bold text-slate-900 text-lg">Avatar</h4>
+                    <p className="text-slate-500 text-sm mb-4">Upload a professional headshot to build trust with students. PNG or JPEG, max 5MB.</p>
+                    <button
+                      type="button"
+                      onClick={() => setShowImageModal(true)}
+                      className="px-6 py-2.5 bg-indigo-50 text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition-colors text-sm"
+                    >
+                      Change Picture
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              <form onSubmit={handleUpdateProfile} className="space-y-6">
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
+              {/* Profile Info Section */}
+              <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                <h3 className="text-2xl font-bold text-slate-900 mb-8 flex items-center gap-3">
+                  <User className="w-6 h-6 text-indigo-600" />
+                  Basic Information
+                </h3>
+                
+                <div className="grid md:grid-cols-2 gap-6 mb-6">
+                  <div className="space-y-3">
                     <label className="text-sm font-bold text-slate-700">First Name</label>
                     <input
                       type="text"
                       value={profileData.firstName}
                       onChange={e => setProfileData({...profileData, firstName: e.target.value})}
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
-                      placeholder="Enter your first name"
+                      className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
+                      placeholder="Jane"
                     />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     <label className="text-sm font-bold text-slate-700">Last Name</label>
                     <input
                       type="text"
                       value={profileData.lastName}
                       onChange={e => setProfileData({...profileData, lastName: e.target.value})}
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
-                      placeholder="Enter your last name"
+                      className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
+                      placeholder="Doe"
                     />
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">Phone Number (Optional)</label>
-                  <input
-                    type="tel"
-                    value={profileData.phone}
-                    onChange={e => setProfileData({...profileData, phone: e.target.value})}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
-                    placeholder="+94 77 123 4567"
-                  />
+                <div className="grid md:grid-cols-2 gap-6 mb-6">
+                  <div className="space-y-3">
+                    <label className="text-sm font-bold text-slate-700">Email Address</label>
+                    <div className="relative">
+                      <Mail className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                      <input
+                        type="email"
+                        value={currentUser.email}
+                        disabled
+                        className="w-full pl-12 pr-5 py-4 rounded-2xl border border-slate-200 bg-slate-100 text-slate-500 font-medium cursor-not-allowed"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    <label className="text-sm font-bold text-slate-700">Phone Number (Optional)</label>
+                    <div className="relative">
+                      <Phone className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                      <input
+                        type="tel"
+                        value={profileData.phone}
+                        onChange={e => setProfileData({...profileData, phone: e.target.value})}
+                        className="w-full pl-12 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
+                        placeholder="+1 (555) 000-0000"
+                      />
+                    </div>
+                  </div>
                 </div>
 
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">Email Address</label>
-                  <input
-                    type="email"
-                    value={currentUser.email}
-                    disabled
-                    className="w-full px-4 py-3 rounded-xl border border-slate-100 bg-slate-50 text-slate-500 font-medium cursor-not-allowed"
+                <div className="space-y-3">
+                  <label className="text-sm font-bold text-slate-700">Professional Bio</label>
+                  <textarea
+                    required
+                    value={profileData.bio}
+                    onChange={e => setProfileData({...profileData, bio: e.target.value})}
+                    className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all resize-none min-h-[140px]"
+                    placeholder="Tell students about yourself, your teaching experience, methodology, and what makes your classes unique..."
                   />
-                  <p className="text-xs text-slate-400">Email cannot be changed. Contact support if needed.</p>
+                </div>
+              </div>
+
+              {/* Education & Qualifications Section */}
+              <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                <div className="flex items-center justify-between mb-8">
+                  <h3 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
+                    <Award className="w-6 h-6 text-indigo-600" />
+                    Education & Rates
+                  </h3>
+                </div>
+                
+                <div className="grid md:grid-cols-2 gap-8">
+                  <div className="space-y-3 md:col-span-2">
+                    <label className="text-sm font-bold text-slate-700">Highest Qualifications</label>
+                    <textarea
+                      required
+                      value={profileData.education}
+                      onChange={e => setProfileData({...profileData, education: e.target.value})}
+                      className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all min-h-[100px]"
+                      placeholder="e.g. BSc in Computer Science, University of Colombo&#10;MSc in AI, Stanford University"
+                    />
+                  </div>
+
+                  <div className="space-y-3">
+                    <label className="text-sm font-bold text-slate-700">Hourly Rate (USD)</label>
+                    <div className="relative">
+                      <span className="absolute left-5 top-1/2 -translate-y-1/2 font-bold text-slate-400">$</span>
+                      <input 
+                        type="number" 
+                        min="0"
+                        step="0.01"
+                        required
+                        value={profileData.pricePerHour}
+                        onChange={e => setProfileData({...profileData, pricePerHour: parseFloat(e.target.value) || 0})}
+                        className="w-full pl-10 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all" 
+                        placeholder="25.00"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <label className="text-sm font-bold text-slate-700">Primary Teaching Level</label>
+                    <select
+                      required
+                      value={profileData.teachingLevel}
+                      onChange={e => setProfileData({...profileData, teachingLevel: e.target.value})}
+                      className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all appearance-none"
+                    >
+                      <option value="" disabled>Select your primary audience</option>
+                      <option value="School">School Level (K-12)</option>
+                      <option value="University">University Level</option>
+                      <option value="Both">Both School & University</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Subjects Section */}
+              <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                <h3 className="text-2xl font-bold text-slate-900 mb-3 flex items-center gap-3">
+                  <BookOpen className="w-6 h-6 text-indigo-600" />
+                  Subjects Taught
+                </h3>
+                <p className="text-slate-500 mb-6">Select the STEM/ICT subjects you are qualified to teach.</p>
+                
+                <div className="flex flex-wrap gap-3">
+                  {STEM_SUBJECTS.map(s => {
+                    const isSelected = profileData.subjects.includes(s);
+                    return (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => {
+                          const newSubs = isSelected
+                            ? profileData.subjects.filter(x => x !== s)
+                            : [...profileData.subjects, s];
+                          setProfileData({...profileData, subjects: newSubs});
+                        }}
+                        className={`px-5 py-3 rounded-2xl text-sm font-bold transition-all flex items-center gap-2 border-2 ${
+                          isSelected
+                            ? 'bg-indigo-50 border-indigo-600 text-indigo-700 shadow-sm'
+                            : 'bg-white border-slate-100 text-slate-600 hover:border-indigo-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        {isSelected ? <CheckCircle className="w-4 h-4 text-indigo-600" /> : <div className="w-4 h-4 rounded-full border-2 border-slate-300" />}
+                        {s}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Availability Section */}
+              <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h3 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
+                      <Calendar className="w-6 h-6 text-indigo-600" />
+                      Availability
+                    </h3>
+                    <p className="text-slate-500 mt-2">Manage your regular weekly schedule for tutoring sessions.</p>
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                        setActiveTab('manageAvailability');
+                      } else {
+                        alert('Advanced schedule manager is currently available for School level tutors only.');
+                      }
+                    }}
+                    className="hidden sm:flex items-center gap-2 bg-slate-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold hover:bg-indigo-50 transition-colors"
+                  >
+                    <Edit className="w-4 h-4" /> Manage Slots
+                  </button>
                 </div>
 
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">Role</label>
-                  <input
-                    type="text"
-                    value={currentUser.role}
-                    disabled
-                    className="w-full px-4 py-3 rounded-xl border border-slate-100 bg-slate-50 text-slate-500 font-medium cursor-not-allowed capitalize"
-                  />
-                  <p className="text-xs text-slate-400">Role is assigned during registration.</p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-3">
+                  {availabilityByDay.map(({ day, count }, i) => (
+                    <div key={day} className={`flex flex-col items-center p-4 rounded-2xl border-2 ${count > 0 ? 'border-indigo-100 bg-indigo-50/30' : i < 5 ? 'border-indigo-100 bg-indigo-50/20' : 'border-slate-100 bg-slate-50'}`}>
+                      <span className="text-sm font-bold text-slate-700 mb-2">{day}</span>
+                      {count > 0 ? (
+                        <span className="text-xs font-black text-indigo-600 bg-indigo-100 px-2 py-1 rounded-md">{count} Slot{count > 1 ? 's' : ''}</span>
+                      ) : (
+                        <span className="text-xs font-medium text-slate-400">Off</span>
+                      )}
+                    </div>
+                  ))}
                 </div>
+                <button 
+                  type="button"
+                  onClick={() => {
+                      if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                        setActiveTab('manageAvailability');
+                      } else {
+                        alert('Advanced schedule manager is currently available for School level tutors only.');
+                      }
+                    }}
+                  className="w-full sm:hidden mt-4 flex items-center justify-center gap-2 bg-slate-50 text-indigo-600 px-5 py-3 rounded-xl font-bold hover:bg-indigo-50 transition-colors"
+                >
+                  <Edit className="w-4 h-4" /> Manage Slots
+                </button>
+              </div>
 
+              {/* Submit Actions */}
+              <div className="flex gap-4 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('dashboard')}
+                  className="flex-1 px-8 py-4 rounded-2xl font-bold text-lg text-slate-600 bg-slate-100 hover:bg-slate-200 transition-all"
+                >
+                  Cancel
+                </button>
                 <button
                   type="submit"
                   disabled={isUpdatingProfile}
-                  className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-black text-lg hover:bg-indigo-700 disabled:opacity-50 shadow-2xl shadow-indigo-100 flex items-center justify-center gap-3 transition-all active:scale-[0.98]"
+                  className="flex-[2] bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black text-lg hover:bg-indigo-700 disabled:opacity-50 shadow-xl shadow-indigo-200 flex items-center justify-center gap-3 transition-all active:scale-[0.98]"
                 >
-                  {isUpdatingProfile ? 'Updating...' : 'Update Profile'}
-                  <ArrowRight className="w-5 h-5" />
+                  {isUpdatingProfile ? (
+                    <span className="flex items-center gap-2">
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Saving Changes...
+                    </span>
+                  ) : (
+                    <>
+                      Save Profile Updates
+                      <Check className="w-5 h-5" />
+                    </>
+                  )}
                 </button>
-              </form>
-            </div>
+              </div>
+            </form>
           </div>
         )}
 
@@ -1853,9 +2131,15 @@ export default function App() {
                   <p className="text-xs text-slate-500 mt-1">Update tutor profile details</p>
                 </button>
                 <button onClick={() => setActiveTab('settings')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
-                  <p className="font-black text-slate-900">Subjects & Time Slots</p>
-                  <p className="text-xs text-slate-500 mt-1">Manage subjects and availability</p>
+                  <p className="font-black text-slate-900">Settings</p>
+                  <p className="text-xs text-slate-500 mt-1">Manage subjects and profile settings</p>
                 </button>
+                {(profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') && (
+                  <button onClick={() => setActiveTab('manageAvailability')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
+                    <p className="font-black text-slate-900">Manage Availability</p>
+                    <p className="text-xs text-slate-500 mt-1">Configure your tutoring schedule</p>
+                  </button>
+                )}
                 <button onClick={() => setActiveTab('courses')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
                   <p className="font-black text-slate-900">Course Management</p>
                   <p className="text-xs text-slate-500 mt-1">Upload and manage tutor courses</p>
@@ -2288,121 +2572,315 @@ export default function App() {
         )}
 
         {activeTab === 'settings' && currentUser && (
-          <div className="max-w-2xl mx-auto">
-            <div className="text-center mb-10">
-              <h2 className="text-4xl font-black text-slate-900 tracking-tight">Account Settings</h2>
-              <p className="text-slate-600">Manage your profile information and preferences.</p>
+          <div className="max-w-5xl mx-auto">
+            <div className="text-center mb-10 md:mb-14">
+              <div className="inline-flex items-center justify-center p-3 bg-indigo-50 rounded-2xl text-indigo-600 mb-6">
+                <Edit className="w-8 h-8" />
+              </div>
+              <h2 className="text-4xl md:text-5xl font-black text-slate-900 tracking-tight mb-4">Account Settings</h2>
+              <p className="text-lg text-slate-500 max-w-2xl mx-auto">Manage your profile information, preferences, and account details.</p>
             </div>
 
-            <div className="bg-white p-8 md:p-10 rounded-[3rem] border border-slate-100 shadow-xl space-y-8">
-              <div className="flex flex-col items-center text-center gap-4">
-                <div className="relative">
-                  {currentUser.avatar ? (
-                    <img 
-                      src={`${currentUser.avatar}?t=${Date.now()}`} 
-                      alt="Avatar" 
-                      className="w-24 h-24 rounded-3xl object-cover shadow-xl shadow-indigo-200"
-                      onError={(e) => {
-                        e.currentTarget.style.display = 'none';
-                        (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'flex';
-                      }}
-                    />
-                  ) : null}
-                  <div className="w-24 h-24 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-3xl flex items-center justify-center text-white text-4xl font-black shadow-xl shadow-indigo-200" style={{ display: currentUser.avatar ? 'none' : 'flex' }}>
-                    {(currentUser.firstName + ' ' + currentUser.lastName).charAt(0)}
+            <form onSubmit={handleUpdateProfile} className="space-y-8">
+              
+              {/* Profile Image Section */}
+              <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                <h3 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-3">
+                  <Camera className="w-6 h-6 text-indigo-600" />
+                  Profile Picture
+                </h3>
+                <div className="flex flex-col sm:flex-row items-center gap-8">
+                  <div className="relative group cursor-pointer" onClick={() => setShowImageModal(true)}>
+                    {currentUser.avatar ? (
+                      <img
+                        src={`${currentUser.avatar}?t=${Date.now()}`}
+                        alt="Avatar"
+                        className="w-32 h-32 rounded-full object-cover border-4 border-indigo-50 shadow-xl"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                          (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'flex';
+                        }}
+                      />
+                    ) : null}
+                    <div className="w-32 h-32 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-full flex items-center justify-center text-white text-4xl font-black shadow-xl border-4 border-indigo-50" style={{ display: currentUser.avatar ? 'none' : 'flex' }}>
+                      {(currentUser.firstName + ' ' + currentUser.lastName).charAt(0)}
+                    </div>
+                    <div className="absolute inset-0 bg-black/40 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <Camera className="w-8 h-8 text-white" />
+                    </div>
                   </div>
-                  <button 
-                    onClick={() => setShowImageModal(true)}
-                    className="absolute -bottom-1 -right-1 w-6 h-6 bg-indigo-600 text-white p-1.5 rounded-full shadow-lg hover:bg-indigo-700 transition-colors"
-                    title="Edit Profile Picture"
-                  >
-                    <Edit className="w-3 h-3" />
-                  </button>
-                </div>
-                <div>
-                  <h3 className="text-xl font-black text-slate-900">{currentUser.firstName} {currentUser.lastName}</h3>
-                  <p className="text-slate-500 font-medium">{currentUser.email}</p>
+                  <div>
+                    <h4 className="font-bold text-slate-900 text-lg">Avatar</h4>
+                    <p className="text-slate-500 text-sm mb-4">Upload a professional headshot. PNG or JPEG, max 5MB.</p>
+                    <button
+                      type="button"
+                      onClick={() => setShowImageModal(true)}
+                      className="px-6 py-2.5 bg-indigo-50 text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition-colors text-sm"
+                    >
+                      Change Picture
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              <form onSubmit={handleUpdateProfile} className="space-y-6">
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
+              {/* Profile Info Section */}
+              <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                <h3 className="text-2xl font-bold text-slate-900 mb-8 flex items-center gap-3">
+                  <User className="w-6 h-6 text-indigo-600" />
+                  Basic Information
+                </h3>
+                
+                <div className="grid md:grid-cols-2 gap-6 mb-6">
+                  <div className="space-y-3">
                     <label className="text-sm font-bold text-slate-700">First Name</label>
-                    <input 
-                      type="text" 
+                    <input
+                      type="text"
+                      required
                       value={profileData.firstName}
                       onChange={e => setProfileData({...profileData, firstName: e.target.value})}
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 font-medium" 
-                      placeholder="Enter your first name"
-                      required
+                      className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
+                      placeholder="Jane"
                     />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     <label className="text-sm font-bold text-slate-700">Last Name</label>
-                    <input 
-                      type="text" 
+                    <input
+                      type="text"
+                      required
                       value={profileData.lastName}
                       onChange={e => setProfileData({...profileData, lastName: e.target.value})}
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 font-medium" 
-                      placeholder="Enter your last name"
-                      required
+                      className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
+                      placeholder="Doe"
                     />
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">Phone Number (Optional)</label>
-                  <input 
-                    type="tel" 
-                    value={profileData.phone}
-                    onChange={e => setProfileData({...profileData, phone: e.target.value})}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 font-medium" 
-                    placeholder="+94 77 123 4567"
-                  />
+                <div className="grid md:grid-cols-2 gap-6 mb-6">
+                  <div className="space-y-3">
+                    <label className="text-sm font-bold text-slate-700">Email Address</label>
+                    <div className="relative">
+                      <Mail className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                      <input
+                        type="email"
+                        value={currentUser.email}
+                        disabled
+                        className="w-full pl-12 pr-5 py-4 rounded-2xl border border-slate-200 bg-slate-100 text-slate-500 font-medium cursor-not-allowed"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    <label className="text-sm font-bold text-slate-700">Phone Number (Optional)</label>
+                    <div className="relative">
+                      <Phone className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                      <input
+                        type="tel"
+                        value={profileData.phone}
+                        onChange={e => setProfileData({...profileData, phone: e.target.value})}
+                        className="w-full pl-12 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
+                        placeholder="+1 (555) 000-0000"
+                      />
+                    </div>
+                  </div>
                 </div>
 
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">Email Address</label>
-                  <input 
-                    type="email" 
-                    value={currentUser.email}
-                    disabled
-                    className="w-full px-4 py-3 rounded-xl border border-slate-100 bg-slate-50 text-slate-500 font-medium cursor-not-allowed" 
-                  />
-                  <p className="text-xs text-slate-400">Email cannot be changed. Contact support if needed.</p>
-                </div>
+                {currentUser.role === 'tutor' && (
+                  <div className="space-y-3 mt-6">
+                    <label className="text-sm font-bold text-slate-700">Professional Bio</label>
+                    <textarea
+                      required
+                      value={profileData.bio}
+                      onChange={e => setProfileData({...profileData, bio: e.target.value})}
+                      className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all resize-none min-h-[140px]"
+                      placeholder="Tell students about yourself, your teaching experience, methodology, and what makes your classes unique..."
+                    />
+                  </div>
+                )}
+              </div>
 
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">Role</label>
-                  <input 
-                    type="text" 
-                    value={currentUser.role}
-                    disabled
-                    className="w-full px-4 py-3 rounded-xl border border-slate-100 bg-slate-50 text-slate-500 font-medium cursor-not-allowed capitalize" 
-                  />
-                  <p className="text-xs text-slate-400">Role is assigned during registration.</p>
-                </div>
+              {currentUser.role === 'tutor' && (
+                <>
+                  {/* Education & Qualifications Section */}
+                  <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                    <div className="flex items-center justify-between mb-8">
+                      <h3 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
+                        <Award className="w-6 h-6 text-indigo-600" />
+                        Education & Rates
+                      </h3>
+                    </div>
+                    
+                    <div className="grid md:grid-cols-2 gap-8">
+                      <div className="space-y-3 md:col-span-2">
+                        <label className="text-sm font-bold text-slate-700">Highest Qualifications</label>
+                        <textarea
+                          required
+                          value={profileData.education}
+                          onChange={e => setProfileData({...profileData, education: e.target.value})}
+                          className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all min-h-[100px]"
+                          placeholder="e.g. BSc in Computer Science, University of Colombo&#10;MSc in AI, Stanford University"
+                        />
+                      </div>
 
-                <button 
+                      <div className="space-y-3">
+                        <label className="text-sm font-bold text-slate-700">Hourly Rate (USD)</label>
+                        <div className="relative">
+                          <span className="absolute left-5 top-1/2 -translate-y-1/2 font-bold text-slate-400">$</span>
+                          <input 
+                            type="number" 
+                            min="0"
+                            step="0.01"
+                            required
+                            value={profileData.pricePerHour}
+                            onChange={e => setProfileData({...profileData, pricePerHour: parseFloat(e.target.value) || 0})}
+                            className="w-full pl-10 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all" 
+                            placeholder="25.00"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        <label className="text-sm font-bold text-slate-700">Primary Teaching Level</label>
+                        <select
+                          required
+                          value={profileData.teachingLevel}
+                          onChange={e => setProfileData({...profileData, teachingLevel: e.target.value})}
+                          className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all appearance-none"
+                        >
+                          <option value="" disabled>Select your primary audience</option>
+                          <option value="School">School Level (K-12)</option>
+                          <option value="University">University Level</option>
+                          <option value="Both">Both School & University</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Subjects Section */}
+                  <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                    <h3 className="text-2xl font-bold text-slate-900 mb-3 flex items-center gap-3">
+                      <BookOpen className="w-6 h-6 text-indigo-600" />
+                      Subjects Taught
+                    </h3>
+                    <p className="text-slate-500 mb-6">Select the STEM/ICT subjects you are qualified to teach.</p>
+                    
+                    <div className="flex flex-wrap gap-3">
+                      {STEM_SUBJECTS.map(s => {
+                        const isSelected = profileData.subjects.includes(s);
+                        return (
+                          <button
+                            key={s}
+                            type="button"
+                            onClick={() => {
+                              const newSubs = isSelected
+                                ? profileData.subjects.filter(x => x !== s)
+                                : [...profileData.subjects, s];
+                              setProfileData({...profileData, subjects: newSubs});
+                            }}
+                            className={`px-5 py-3 rounded-2xl text-sm font-bold transition-all flex items-center gap-2 border-2 ${
+                              isSelected
+                                ? 'bg-indigo-50 border-indigo-600 text-indigo-700 shadow-sm'
+                                : 'bg-white border-slate-100 text-slate-600 hover:border-indigo-200 hover:bg-slate-50'
+                            }`}
+                          >
+                            {isSelected ? <CheckCircle className="w-4 h-4 text-indigo-600" /> : <div className="w-4 h-4 rounded-full border-2 border-slate-300" />}
+                            {s}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Availability Section */}
+                  <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                    <div className="flex items-center justify-between mb-6">
+                      <div>
+                        <h3 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
+                          <Calendar className="w-6 h-6 text-indigo-600" />
+                          Availability
+                        </h3>
+                        <p className="text-slate-500 mt-2">Manage your regular weekly schedule for tutoring sessions.</p>
+                      </div>
+                      <button 
+                        type="button"
+                        onClick={() => {
+                      if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                        setActiveTab('manageAvailability');
+                      } else {
+                        alert('Advanced schedule manager is currently available for School level tutors only.');
+                      }
+                    }}
+                        className="hidden sm:flex items-center gap-2 bg-slate-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold hover:bg-indigo-50 transition-colors"
+                      >
+                        <Edit className="w-4 h-4" /> Manage Slots
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-3">
+                      {availabilityByDay.map(({ day, count }, i) => (
+                        <div key={day} className={`flex flex-col items-center p-4 rounded-2xl border-2 ${count > 0 ? 'border-indigo-100 bg-indigo-50/30' : i < 5 ? 'border-indigo-100 bg-indigo-50/20' : 'border-slate-100 bg-slate-50'}`}>
+                          <span className="text-sm font-bold text-slate-700 mb-2">{day}</span>
+                          {count > 0 ? (
+                            <span className="text-xs font-black text-indigo-600 bg-indigo-100 px-2 py-1 rounded-md">{count} Slot{count > 1 ? 's' : ''}</span>
+                          ) : (
+                            <span className="text-xs font-medium text-slate-400">Off</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    <button 
+                      type="button"
+                      onClick={() => {
+                      if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                        setActiveTab('manageAvailability');
+                      } else {
+                        alert('Advanced schedule manager is currently available for School level tutors only.');
+                      }
+                    }}
+                      className="w-full sm:hidden mt-4 flex items-center justify-center gap-2 bg-slate-50 text-indigo-600 px-5 py-3 rounded-xl font-bold hover:bg-indigo-50 transition-colors"
+                    >
+                      <Edit className="w-4 h-4" /> Manage Slots
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* Submit Actions */}
+              <div className="flex gap-4 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('dashboard')}
+                  className="flex-1 px-8 py-4 rounded-2xl font-bold text-lg text-slate-600 bg-slate-100 hover:bg-slate-200 transition-all"
+                >
+                  Back to Dashboard
+                </button>
+                <button
                   type="submit"
                   disabled={isUpdatingProfile}
-                  className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-black text-lg hover:bg-indigo-700 disabled:opacity-50 shadow-2xl shadow-indigo-100 flex items-center justify-center gap-3 transition-all active:scale-[0.98]"
+                  className="flex-[2] bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black text-lg hover:bg-indigo-700 disabled:opacity-50 shadow-xl shadow-indigo-200 flex items-center justify-center gap-3 transition-all active:scale-[0.98]"
                 >
                   {isUpdatingProfile ? (
-                    <>
-                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      Updating Profile...
-                    </>
+                    <span className="flex items-center gap-2">
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Saving...
+                    </span>
                   ) : (
                     <>
-                      Save Changes <Check className="w-5 h-5" />
+                      Save Settings
+                      <Check className="w-5 h-5" />
                     </>
                   )}
                 </button>
-              </form>
-            </div>
+              </div>
+            </form>
           </div>
+        )}
+
+        {/* Manage Availability Page */}
+        {activeTab === 'manageAvailability' && isTutor && currentUser && (
+          <TutorAvailabilityManagePage 
+            tutor={currentTutor}
+            onSaveAvailability={handleSaveTutorAvailability}
+            onBack={() => setActiveTab('dashboard')} 
+          />
         )}
 
         {/* About Page */}

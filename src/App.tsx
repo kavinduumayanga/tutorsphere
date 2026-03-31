@@ -142,6 +142,7 @@ export default function App() {
     bio: ''
   });
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+  const [activeBookingActionId, setActiveBookingActionId] = useState<string | null>(null);
 
   // Subject Cycling State
   const [currentSubjectIndex, setCurrentSubjectIndex] = useState(0);
@@ -183,6 +184,12 @@ export default function App() {
 
     if (activeTab === 'tutorBooking' && !bookingTutorId) {
       setActiveTab('tutors');
+      return;
+    }
+
+    // Internal detail views are controlled by their ID guards above and
+    // intentionally excluded from top-level navigation permissions.
+    if (isInternalTab(activeTab)) {
       return;
     }
 
@@ -329,11 +336,16 @@ export default function App() {
       if (!currentUser) return;
 
       try {
+        const tutorIdentityIds =
+          currentUser.role === 'tutor'
+            ? Array.from(new Set([currentUser.id, currentTutor?.id].filter(Boolean))) as string[]
+            : [];
+
         // Fetch user's bookings (student booking history vs tutor booking management)
         const userBookings = await apiService.getBookings();
         setBookings(
           currentUser.role === 'tutor'
-            ? userBookings.filter(b => b.tutorId === currentUser.id)
+            ? userBookings.filter((b) => tutorIdentityIds.includes(b.tutorId))
             : userBookings.filter(b => b.studentId === currentUser.id)
         );
 
@@ -341,7 +353,7 @@ export default function App() {
         const userReviews = await apiService.getReviews();
         setReviews(
           currentUser.role === 'tutor'
-            ? userReviews.filter(r => r.tutorId === currentUser.id)
+            ? userReviews.filter((r) => tutorIdentityIds.includes(r.tutorId))
             : userReviews.filter(r => r.studentId === currentUser.id)
         );
 
@@ -381,7 +393,7 @@ export default function App() {
     };
 
     fetchUserData();
-  }, [currentUser]);
+  }, [currentUser, currentTutor?.id]);
 
   // Sync profile data with current user
   useEffect(() => {
@@ -779,6 +791,65 @@ export default function App() {
     });
   };
 
+  const updateTutorBooking = async (bookingId: string, updates: Partial<Booking>) => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      alert('Only tutor accounts can update bookings.');
+      return;
+    }
+
+    setActiveBookingActionId(bookingId);
+    try {
+      const updatedBooking = await apiService.updateBooking(bookingId, updates);
+      setBookings((prevBookings) =>
+        prevBookings.map((booking) =>
+          booking.id === bookingId
+            ? { ...booking, ...updatedBooking }
+            : booking
+        )
+      );
+    } catch (error) {
+      console.error('Failed to update booking:', error);
+      alert('Failed to update booking. Please try again.');
+    } finally {
+      setActiveBookingActionId(null);
+    }
+  };
+
+  const handleTutorBookingStatusChange = async (booking: Booking, status: Booking['status']) => {
+    if (booking.status === status) {
+      return;
+    }
+
+    if (status === 'confirmed' && !booking.meetingLink) {
+      const meetingLink = prompt('Add meeting link before confirming this booking:')?.trim();
+      if (!meetingLink) {
+        alert('Meeting link is required to confirm the booking.');
+        return;
+      }
+
+      await updateTutorBooking(booking.id, { status, meetingLink });
+      return;
+    }
+
+    await updateTutorBooking(booking.id, { status });
+  };
+
+  const handleTutorMeetingLinkUpdate = async (booking: Booking) => {
+    const nextMeetingLink = prompt('Enter meeting link:', booking.meetingLink || '')?.trim();
+    if (!nextMeetingLink || nextMeetingLink === booking.meetingLink) {
+      return;
+    }
+
+    await updateTutorBooking(booking.id, { meetingLink: nextMeetingLink });
+  };
+
+  const getBookingStatusPillClassName = (status: Booking['status']) => {
+    if (status === 'completed') return 'text-emerald-700 bg-emerald-50 border-emerald-200';
+    if (status === 'confirmed') return 'text-indigo-700 bg-indigo-50 border-indigo-200';
+    if (status === 'pending') return 'text-amber-700 bg-amber-50 border-amber-200';
+    return 'text-rose-700 bg-rose-50 border-rose-200';
+  };
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] font-sans text-slate-900">
       {/* Navbar */}
@@ -849,6 +920,21 @@ export default function App() {
                         <User className="w-4 h-4" />
                         Dashboard
                       </button>
+                      {isTutor && currentTutor && (
+                        <button 
+                          onClick={() => {
+                            setViewingTutorId(currentTutor.id);
+                            setActiveTab('tutorProfile');
+                            setIsUserMenuOpen(false);
+                          }}
+                          className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                          My Profile
+                        </button>
+                      )}
                       <button 
                         onClick={() => {setActiveTab('settings'); setIsUserMenuOpen(false)}}
                         className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
@@ -2183,17 +2269,77 @@ export default function App() {
                   <p className="text-slate-500">No student bookings yet.</p>
                 ) : (
                   <div className="space-y-3">
-                    {bookings.slice(0, 5).map(booking => (
-                      <div key={booking.id} className="p-4 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-between gap-3">
-                        <div>
-                          <p className="font-bold text-slate-900">{booking.subject}</p>
-                          <p className="text-xs text-slate-500">{booking.date} • {booking.status}</p>
+                    {bookings.slice(0, 8).map((booking) => {
+                      const isLoading = activeBookingActionId === booking.id;
+                      const canConfirm = booking.status === 'pending';
+                      const canComplete = booking.status === 'confirmed';
+                      const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed';
+
+                      return (
+                        <div key={booking.id} className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-bold text-slate-900">{booking.subject}</p>
+                              <p className="text-xs text-slate-500">{booking.date} • Student ID: {booking.studentId}</p>
+                            </div>
+                            <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getBookingStatusPillClassName(booking.status)}`}>
+                              {booking.status}
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2">
+                            {canConfirm && (
+                              <button
+                                type="button"
+                                disabled={isLoading}
+                                onClick={() => handleTutorBookingStatusChange(booking, 'confirmed')}
+                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
+                              >
+                                Confirm
+                              </button>
+                            )}
+                            {canComplete && (
+                              <button
+                                type="button"
+                                disabled={isLoading}
+                                onClick={() => handleTutorBookingStatusChange(booking, 'completed')}
+                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                              >
+                                Mark Completed
+                              </button>
+                            )}
+                            {canCancel && (
+                              <button
+                                type="button"
+                                disabled={isLoading}
+                                onClick={() => handleTutorBookingStatusChange(booking, 'cancelled')}
+                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
+                              >
+                                Cancel
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              disabled={isLoading}
+                              onClick={() => handleTutorMeetingLinkUpdate(booking)}
+                              className="px-3 py-1.5 rounded-lg text-[11px] font-bold border border-slate-200 text-slate-700 bg-white hover:bg-slate-100 disabled:opacity-60"
+                            >
+                              {booking.meetingLink ? 'Edit Link' : 'Add Link'}
+                            </button>
+                            {booking.meetingLink && (
+                              <a
+                                href={booking.meetingLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+                              >
+                                Open Link
+                              </a>
+                            )}
+                          </div>
                         </div>
-                        <a href={booking.meetingLink} target="_blank" rel="noopener noreferrer" className="text-indigo-600 text-xs font-bold hover:underline">
-                          Open Link
-                        </a>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

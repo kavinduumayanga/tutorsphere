@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  ArrowLeft, Star, Clock, BookOpen, GraduationCap, CheckCircle, BadgeCheck, Check,
-  Calendar, Award, User as UserIcon, Users, TrendingUp, Share2, Heart, 
+  Star, Clock, BookOpen, GraduationCap, CheckCircle, BadgeCheck, Check,
+  Calendar, Award, User as UserIcon, Users, TrendingUp,
   MessageSquare, Shield, MapPin, Globe, ChevronRight, PlayCircle, 
   Video, Mail, Phone, Briefcase, Languages, Lightbulb, Target, MessageCircle, Zap
 } from 'lucide-react';
@@ -49,7 +49,6 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
   const [tutor, setTutor] = useState<Tutor | null>(initialTutor || null);
   const [loading, setLoading] = useState(!initialTutor);
   const [activeTab, setActiveTab] = useState<'about' | 'courses' | 'reviews'>('about');
-  const [isFavorite, setIsFavorite] = useState(false);
 
   useEffect(() => {
     if (initialTutor) {
@@ -73,8 +72,6 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
     fetchTutorData();
     return () => { mounted = false; };
   }, [tutorId, initialTutor]);
-
-  const toggleFavorite = () => setIsFavorite(!isFavorite);
 
   if (loading) {
     return (
@@ -112,43 +109,11 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-indigo-100 selection:text-indigo-900">
-      
-      {/* Dynamic Header */}
-      <nav className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200/60 supports-[backdrop-filter]:bg-white/60 transition-all duration-300">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <button 
-            onClick={onBack}
-            className="flex items-center text-slate-600 hover:text-indigo-600 transition-colors group px-3 py-2 rounded-lg hover:bg-slate-100/50"
-          >
-            <ArrowLeft className="w-5 h-5 mr-2 group-hover:-translate-x-1 transition-transform" />
-            <span className="font-medium">Back</span>
-          </button>
-          
-          <div className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600">
-             <a href="#about" onClick={(e) => { e.preventDefault(); setActiveTab('about'); }} className={`hover:text-indigo-600 transition-colors ${activeTab === 'about' ? 'text-indigo-600' : ''}`}>About</a>
-             <a href="#courses" onClick={(e) => { e.preventDefault(); setActiveTab('courses'); }} className={`hover:text-indigo-600 transition-colors ${activeTab === 'courses' ? 'text-indigo-600' : ''}`}>Courses</a>
-             <a href="#reviews" onClick={(e) => { e.preventDefault(); setActiveTab('reviews'); }} className={`hover:text-indigo-600 transition-colors ${activeTab === 'reviews' ? 'text-indigo-600' : ''}`}>Reviews</a>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-all duration-200">
-              <Share2 className="w-5 h-5" />
-            </button>
-            <button 
-              onClick={toggleFavorite}
-              className={`p-2 rounded-full transition-all duration-200 ${isFavorite ? 'text-pink-500 bg-pink-50' : 'text-slate-500 hover:text-pink-500 hover:bg-pink-50'}`}
-            >
-              <Heart className={`w-5 h-5 ${isFavorite ? 'fill-current' : ''}`} />
-            </button>
-          </div>
-        </div>
-      </nav>
-
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           
           {/* LEFT COLUMN - Main Content (8 cols) */}
-          <div className="lg:col-span-8 flex flex-col gap-8">
+          <div className={isStudent ? "lg:col-span-8 flex flex-col gap-8" : "lg:col-span-12 flex flex-col gap-8"}>
             
             {/* Hero Card */}
             <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200/60 overflow-hidden relative group">
@@ -412,6 +377,7 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
           </div>
 
           {/* RIGHT COLUMN - Sticky Sidebar (4 cols) */}
+          {isStudent && (
           <div className="lg:col-span-4 space-y-6 lg:sticky lg:top-24 h-fit">
               
               {/* Booking Card */}
@@ -486,6 +452,7 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
               </div>
 
           </div>
+          )}
 
         </div>
       </main>

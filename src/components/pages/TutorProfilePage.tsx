@@ -336,8 +336,8 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
                               <div className="h-40 bg-slate-100 relative overflow-hidden">
                                 <img src={course.thumbnail} alt={course.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
                                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-60"></div>
-                                <div className="absolute top-3 right-3 bg-white/95 backdrop-blur px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm border border-white/20">
-                                  ${course.price}
+                                <div className={`absolute top-3 right-3 bg-white/95 backdrop-blur px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm border border-white/20 ${course.isFree || course.price <= 0 ? 'text-emerald-600' : 'text-slate-900'}`}>
+                                  {course.isFree || course.price <= 0 ? 'Free' : `LKR ${course.price}`}
                                 </div>
                                 <div className="absolute top-3 left-3 bg-indigo-600/90 backdrop-blur px-3 py-1.5 rounded-lg text-xs font-bold text-white shadow-sm">
                                   {course.subject}

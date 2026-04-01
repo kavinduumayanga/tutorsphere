@@ -13,11 +13,29 @@ import {
   CourseModuleResource,
 } from '../types';
 
-const API_BASE_URL =
-  ((window as any).__TUTORSPHERE_API_BASE_URL__ as string | undefined)?.trim() ||
-  `${window.location.origin}/api`;
 const LOCALHOST_API_BASE_URL = 'http://localhost:3000/api';
 const LOOPBACK_API_BASE_URL = 'http://127.0.0.1:3000/api';
+
+const resolveApiBaseUrl = (): string => {
+  const runtimeOverride = ((window as any).__TUTORSPHERE_API_BASE_URL__ as string | undefined)?.trim();
+  if (runtimeOverride) {
+    return runtimeOverride;
+  }
+
+  const envOverride = String((import.meta as any).env?.VITE_API_BASE_URL || '').trim();
+  if (envOverride) {
+    return envOverride;
+  }
+
+  const origin = String(window.location.origin || '').trim();
+  if (!origin || origin === 'null') {
+    return LOCALHOST_API_BASE_URL;
+  }
+
+  return `${origin}/api`;
+};
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 const getDownloadFileName = (contentDisposition: string | null): string | null => {
   if (!contentDisposition) {
@@ -43,15 +61,16 @@ type UploadedCourseAsset = {
 const getApiBaseCandidates = (): string[] => {
   const candidates = [API_BASE_URL];
   const hostname = window.location.hostname;
+  const isFileProtocol = window.location.protocol === 'file:';
 
-  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+  if (isFileProtocol || hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0') {
     candidates.push(LOCALHOST_API_BASE_URL, LOOPBACK_API_BASE_URL);
   }
 
   return Array.from(new Set(candidates.filter(Boolean)));
 };
 
-const shouldRetryUploadRequest = (error: unknown): boolean => {
+const shouldRetryApiRequest = (error: unknown): boolean => {
   const message = String(error instanceof Error ? error.message : error || '').toLowerCase();
   return (
     message.includes('not found') ||
@@ -224,6 +243,50 @@ class ApiService {
     } as Course;
   }
 
+  private async fetchWithApiFallback(endpoint: string, options?: RequestInit): Promise<Response> {
+    const baseCandidates = getApiBaseCandidates();
+    let lastError: unknown;
+
+    for (let index = 0; index < baseCandidates.length; index += 1) {
+      const baseUrl = baseCandidates[index];
+      const isLastCandidate = index === baseCandidates.length - 1;
+
+      try {
+        const response = await fetch(`${baseUrl}${endpoint}`, options);
+
+        if (!isLastCandidate && (response.status === 404 || response.status === 405)) {
+          continue;
+        }
+
+        return response;
+      } catch (error) {
+        lastError = error;
+        if (isLastCandidate || !shouldRetryApiRequest(error)) {
+          throw error;
+        }
+      }
+    }
+
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+
+    throw new Error('Failed to reach TutorSphere API.');
+  }
+
+  private async createApiError(response: Response, defaultMessage = 'API request failed'): Promise<Error> {
+    let errorMessage = `${defaultMessage}: ${response.statusText || `HTTP ${response.status}`}`;
+    try {
+      const errorData = await response.json();
+      if (errorData?.error) {
+        errorMessage = errorData.error;
+      }
+    } catch {
+      // Keep default message when response body is not JSON
+    }
+    return new Error(errorMessage);
+  }
+
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     const isFormDataBody = options?.body instanceof FormData;
     const requestOptions: RequestInit = {
@@ -236,19 +299,10 @@ class ApiService {
         },
     };
 
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, requestOptions);
+    const response = await this.fetchWithApiFallback(endpoint, requestOptions);
 
     if (!response.ok) {
-      let errorMessage = `API request failed: ${response.statusText}`;
-      try {
-        const errorData = await response.json();
-        if (errorData?.error) {
-          errorMessage = errorData.error;
-        }
-      } catch {
-        // Keep default message when response body is not JSON
-      }
-      throw new Error(errorMessage);
+      throw await this.createApiError(response);
     }
 
     return response.json();
@@ -423,7 +477,7 @@ class ApiService {
           return await uploadResourceWithProgress(`${baseUrl}${endpoint}`, file, onProgress);
         } catch (error) {
           lastError = error;
-          if (!shouldRetryUploadRequest(error)) {
+          if (!shouldRetryApiRequest(error)) {
             throw error;
           }
         }
@@ -493,21 +547,12 @@ class ApiService {
   }
 
   async downloadCourseCertificate(enrollmentId: string, studentId: string, fileBaseName: string): Promise<void> {
-    const response = await fetch(
-      `${API_BASE_URL}/course-enrollments/${enrollmentId}/certificate?studentId=${encodeURIComponent(studentId)}`
+    const response = await this.fetchWithApiFallback(
+      `/course-enrollments/${enrollmentId}/certificate?studentId=${encodeURIComponent(studentId)}`
     );
 
     if (!response.ok) {
-      let errorMessage = `Certificate download failed: ${response.statusText}`;
-      try {
-        const data = await response.json();
-        if (data?.error) {
-          errorMessage = data.error;
-        }
-      } catch {
-        // Keep default message
-      }
-      throw new Error(errorMessage);
+      throw await this.createApiError(response, 'Certificate download failed');
     }
 
     const blob = await response.blob();

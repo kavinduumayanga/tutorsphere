@@ -123,6 +123,7 @@ export interface Resource {
   url: string;
   description?: string;
   isFree: boolean;
+  downloadCount: number;
 }
 
 export interface Review {

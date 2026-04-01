@@ -9,6 +9,7 @@ export interface IResource extends Document {
   url: string;
   description?: string;
   isFree: boolean;
+  downloadCount: number;
 }
 
 const ResourceSchema: Schema = new Schema({
@@ -19,7 +20,8 @@ const ResourceSchema: Schema = new Schema({
   subject: { type: String, required: true },
   url: { type: String, required: true },
   description: { type: String },
-  isFree: { type: Boolean, required: true, default: true }
+  isFree: { type: Boolean, required: true, default: true },
+  downloadCount: { type: Number, required: true, default: 0, min: 0 }
 }, {
   timestamps: true
 });

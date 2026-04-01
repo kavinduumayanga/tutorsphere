@@ -612,6 +612,23 @@ async function normalizeCourseAccessData() {
   }
 }
 
+async function normalizeResourceDownloadCounts() {
+  try {
+    await Resource.updateMany(
+      {
+        $or: [
+          { downloadCount: { $exists: false } },
+          { downloadCount: null },
+          { downloadCount: { $lt: 0 } },
+        ],
+      },
+      { $set: { downloadCount: 0 } }
+    );
+  } catch (error) {
+    console.log('Resource download count normalization skipped or failed:', (error as Error).message);
+  }
+}
+
 async function startServer() {
   // Connect to MongoDB
   await connectDB();
@@ -624,6 +641,9 @@ async function startServer() {
 
   // Keep legacy courses compatible with free/paid access rules.
   await normalizeCourseAccessData();
+
+  // Ensure every resource has a persisted, non-negative download count.
+  await normalizeResourceDownloadCounts();
 
   // Ensure uploads directory exists before handling multipart avatar uploads
   await fs.mkdir(path.join(__dirname, 'uploads'), { recursive: true });
@@ -1186,12 +1206,21 @@ async function startServer() {
         (typeof req.query.actorId === 'string' && req.query.actorId.trim()) ||
         '';
 
+      if (!actorId) {
+        return res.status(401).json({ error: "actorId is required to update a course." });
+      }
+
+      const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
+      if (!actorUser) {
+        return res.status(403).json({ error: "Only tutor accounts can manage courses." });
+      }
+
       const existingCourse = await Course.findOne({ id: req.params.id });
       if (!existingCourse) {
         return res.status(404).json({ error: "Course not found" });
       }
 
-      if (actorId && existingCourse.tutorId !== actorId) {
+      if (existingCourse.tutorId !== actorId) {
         return res.status(403).json({ error: "You can only manage your own courses." });
       }
 
@@ -1249,12 +1278,21 @@ async function startServer() {
         (typeof req.query.actorId === 'string' && req.query.actorId.trim()) ||
         '';
 
+      if (!actorId) {
+        return res.status(401).json({ error: "actorId is required to delete a course." });
+      }
+
+      const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
+      if (!actorUser) {
+        return res.status(403).json({ error: "Only tutor accounts can delete courses." });
+      }
+
       const existingCourse = await Course.findOne({ id: req.params.id });
       if (!existingCourse) {
         return res.status(404).json({ error: "Course not found" });
       }
 
-      if (actorId && existingCourse.tutorId !== actorId) {
+      if (existingCourse.tutorId !== actorId) {
         return res.status(403).json({ error: "You can only delete your own courses." });
       }
 
@@ -1450,7 +1488,11 @@ async function startServer() {
       }
 
       const requestStudentId = typeof req.query.studentId === 'string' ? req.query.studentId.trim() : '';
-      if (requestStudentId && requestStudentId !== enrollment.studentId) {
+      if (!requestStudentId) {
+        return res.status(400).json({ error: "studentId query parameter is required." });
+      }
+
+      if (requestStudentId !== enrollment.studentId) {
         return res.status(403).json({ error: "You can only access your own certificate." });
       }
 
@@ -1562,6 +1604,7 @@ async function startServer() {
         url: normalizedResourceUrl,
         description: normalizedDescription,
         isFree: true,
+        downloadCount: 0,
       });
       await resource.save();
       res.json(resource);
@@ -1578,17 +1621,27 @@ async function startServer() {
         (typeof req.query.actorId === 'string' && req.query.actorId.trim()) ||
         '';
 
+      if (!actorId) {
+        return res.status(401).json({ error: "actorId is required to update a resource." });
+      }
+
+      const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
+      if (!actorUser) {
+        return res.status(403).json({ error: "Only tutor accounts can manage resources." });
+      }
+
       const existingResource = await Resource.findOne({ id: req.params.id });
       if (!existingResource) {
         return res.status(404).json({ error: "Resource not found" });
       }
 
-      if (actorId && existingResource.tutorId !== actorId) {
+      if (existingResource.tutorId !== actorId) {
         return res.status(403).json({ error: "You can only manage your own resources." });
       }
 
       const updatePayload = { ...req.body };
       delete updatePayload.actorId;
+      delete updatePayload.downloadCount;
 
       if (updatePayload.url !== undefined) {
         if (typeof updatePayload.url !== 'string') {
@@ -1653,6 +1706,40 @@ async function startServer() {
     }
   });
 
+  app.post("/api/resources/:id/download", async (req, res) => {
+    try {
+      const resourceKey = String(req.params.id || '').trim();
+      if (!resourceKey) {
+        return res.status(400).json({ error: "Resource id is required" });
+      }
+
+      const canMatchObjectId = /^[a-fA-F0-9]{24}$/.test(resourceKey);
+      const lookup = canMatchObjectId
+        ? { $or: [{ id: resourceKey }, { _id: resourceKey }] }
+        : { id: resourceKey };
+
+      const resource = await Resource.findOneAndUpdate(
+        lookup,
+        { $inc: { downloadCount: 1 } },
+        { new: true }
+      );
+
+      if (resource) {
+        // Backfill legacy entries missing a stable id so future lookups are consistent.
+        if (!resource.id || !String(resource.id).trim()) {
+          resource.id = String(resource._id);
+          await resource.save();
+        }
+        res.json(resource);
+      } else {
+        res.status(404).json({ error: "Resource not found" });
+      }
+    } catch (error) {
+      console.error("Increment resource download error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   app.delete("/api/resources/:id", async (req, res) => {
     try {
       const actorId =
@@ -1660,12 +1747,21 @@ async function startServer() {
         (typeof req.query.actorId === 'string' && req.query.actorId.trim()) ||
         '';
 
+      if (!actorId) {
+        return res.status(401).json({ error: "actorId is required to delete a resource." });
+      }
+
+      const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
+      if (!actorUser) {
+        return res.status(403).json({ error: "Only tutor accounts can delete resources." });
+      }
+
       const existingResource = await Resource.findOne({ id: req.params.id });
       if (!existingResource) {
         return res.status(404).json({ error: "Resource not found" });
       }
 
-      if (actorId && existingResource.tutorId !== actorId) {
+      if (existingResource.tutorId !== actorId) {
         return res.status(403).json({ error: "You can only delete your own resources." });
       }
 

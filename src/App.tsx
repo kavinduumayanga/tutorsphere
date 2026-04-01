@@ -351,7 +351,7 @@ export default function App() {
     email: '',
     education: '',
     subjects: [] as string[],
-    teachingLevel: 'School' as 'School' | 'University' | 'Both',
+    teachingLevel: 'School' as 'School' | 'University' | 'School and University',
     bio: ''
   });
   const [isValidating, setIsValidating] = useState(false);
@@ -1891,7 +1891,10 @@ export default function App() {
       if (currentUser.role === 'tutor') {
         const tutorId = currentTutor?.id || currentUser.id;
         const hasSubjects = profileData.subjects.length > 0;
-        const validTeachingLevel = profileData.teachingLevel === 'School' || profileData.teachingLevel === 'University' || profileData.teachingLevel === 'Both';
+        const validTeachingLevel =
+          profileData.teachingLevel === 'School' ||
+          profileData.teachingLevel === 'University' ||
+          profileData.teachingLevel === 'School and University';
 
         if (!hasSubjects || !validTeachingLevel || !profileData.education.trim()) {
           alert('Tutor profiles require Education, Subject(s), and Teaching Level.');
@@ -2614,7 +2617,7 @@ export default function App() {
                                   />
                                   <div className="flex-1">
                                     <h5 className="text-lg font-black text-slate-900">{getTutorDisplayName(courseTutor)}</h5>
-                                    <p className="text-sm text-indigo-700 font-semibold">{courseTutor.teachingLevel === 'Both' ? 'School & University Tutor' : `${courseTutor.teachingLevel} Tutor`}</p>
+                                    <p className="text-sm text-indigo-700 font-semibold">{`${courseTutor.teachingLevel} Tutor`}</p>
                                     <p className="text-sm text-slate-600 mt-2 line-clamp-2">{courseTutor.bio}</p>
                                     <button
                                       onClick={() => {
@@ -3646,9 +3649,9 @@ export default function App() {
                         className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all appearance-none"
                       >
                         <option value="" disabled>Select your primary audience</option>
-                        <option value="School">School Level (K-12)</option>
+                        <option value="School">School Level</option>
                         <option value="University">University Level</option>
-                        <option value="Both">Both School & University</option>
+                        <option value="School and University">School and University</option>
                       </select>
                     </div>
                   </div>
@@ -3701,7 +3704,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => {
-                        if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                        if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') {
                           setActiveTab('manageAvailability');
                         } else {
                           alert('Advanced schedule manager is currently available for School level tutors only.');
@@ -3728,7 +3731,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                      if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') {
                         setActiveTab('manageAvailability');
                       } else {
                         alert('Advanced schedule manager is currently available for School level tutors only.');
@@ -3804,7 +3807,7 @@ export default function App() {
                     <p className="font-black text-slate-900">Settings</p>
                     <p className="text-xs text-slate-500 mt-1">Manage subjects and profile settings</p>
                   </button>
-                  {(profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') && (
+                  {(profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') && (
                     <button onClick={() => setActiveTab('manageAvailability')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
                       <p className="font-black text-slate-900">Manage Availability</p>
                       <p className="text-xs text-slate-500 mt-1">Configure your tutoring schedule</p>
@@ -4638,9 +4641,9 @@ export default function App() {
                             className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all appearance-none"
                           >
                             <option value="" disabled>Select your primary audience</option>
-                            <option value="School">School Level (K-12)</option>
+                            <option value="School">School Level</option>
                             <option value="University">University Level</option>
-                            <option value="Both">Both School & University</option>
+                            <option value="School and University">School and University</option>
                           </select>
                         </div>
                       </div>
@@ -4693,7 +4696,7 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => {
-                            if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                            if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') {
                               setActiveTab('manageAvailability');
                             } else {
                               alert('Advanced schedule manager is currently available for School level tutors only.');
@@ -4720,7 +4723,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => {
-                          if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                          if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') {
                             setActiveTab('manageAvailability');
                           } else {
                             alert('Advanced schedule manager is currently available for School level tutors only.');

@@ -226,6 +226,17 @@ const formatCertificateDate = (dateValue: Date | string): string => {
   });
 };
 
+const normalizeTeachingLevel = (value: unknown): 'School' | 'University' | 'School and University' => {
+  const normalized = String(value || '').trim();
+  if (normalized === 'Both' || normalized === 'School & University' || normalized === 'School and University') {
+    return 'School and University';
+  }
+  if (normalized === 'University') {
+    return 'University';
+  }
+  return 'School';
+};
+
 type CertificatePdfInput = {
   studentName: string;
   courseTitle: string;
@@ -953,7 +964,11 @@ async function startServer() {
     try {
       const tutorData = req.body;
       const id = tutorData.id || Math.random().toString(36).substr(2, 9);
-      const tutor = new Tutor({ ...tutorData, id });
+      const tutor = new Tutor({
+        ...tutorData,
+        teachingLevel: normalizeTeachingLevel(tutorData.teachingLevel),
+        id,
+      });
       await tutor.save();
       res.json(tutor);
     } catch (error) {
@@ -965,11 +980,19 @@ async function startServer() {
   app.put("/api/tutors/:id", async (req, res) => {
     try {
       let tutor = await Tutor.findOne({ id: req.params.id });
+      const { teachingLevel: requestedTeachingLevel, ...incomingTutorData } = req.body || {};
 
       if (tutor) {
+        const nextTutorPayload = {
+          ...incomingTutorData,
+          ...(requestedTeachingLevel !== undefined
+            ? { teachingLevel: normalizeTeachingLevel(requestedTeachingLevel) }
+            : {}),
+        };
+
         tutor = await Tutor.findOneAndUpdate(
           { id: req.params.id },
-          req.body,
+          nextTutorPayload,
           { new: true }
         );
         res.json(tutor);
@@ -980,20 +1003,20 @@ async function startServer() {
         }
 
         tutor = new Tutor({
+          ...incomingTutorData,
           id: user.id,
-          name: `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}`,
-          email: user.email,
+          name: incomingTutorData.name || `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}`,
+          email: incomingTutorData.email || user.email,
           role: 'tutor',
-          qualifications: req.body.qualifications || 'Not specified',
-          subjects: req.body.subjects || [],
-          teachingLevel: req.body.teachingLevel || 'School',
-          pricePerHour: req.body.pricePerHour || 0,
-          rating: 0,
-          reviewCount: 0,
-          bio: req.body.bio || 'New tutor on TutorSphere',
-          availability: req.body.availability || [],
-          isVerified: false,
-          ...req.body
+          qualifications: incomingTutorData.qualifications || 'Not specified',
+          subjects: incomingTutorData.subjects || [],
+          teachingLevel: normalizeTeachingLevel(requestedTeachingLevel || 'School'),
+          pricePerHour: incomingTutorData.pricePerHour || 0,
+          rating: incomingTutorData.rating ?? 0,
+          reviewCount: incomingTutorData.reviewCount ?? 0,
+          bio: incomingTutorData.bio || 'New tutor on TutorSphere',
+          availability: incomingTutorData.availability || [],
+          isVerified: incomingTutorData.isVerified ?? false,
         });
 
         await tutor.save();

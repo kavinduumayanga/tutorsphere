@@ -7,7 +7,7 @@ export interface ITutor extends Document {
   role: 'student' | 'tutor' | 'admin';
   qualifications: string;
   subjects: string[];
-  teachingLevel: 'School' | 'University' | 'Both';
+  teachingLevel: 'School' | 'University' | 'School and University';
   pricePerHour: number;
   rating: number;
   reviewCount: number;
@@ -30,7 +30,7 @@ const TutorSchema: Schema = new Schema({
   role: { type: String, required: true, enum: ['student', 'tutor', 'admin'], default: 'tutor' },
   qualifications: { type: String, required: true },
   subjects: [{ type: String, required: true }],
-  teachingLevel: { type: String, required: true, enum: ['School', 'University', 'Both'] },
+  teachingLevel: { type: String, required: true, enum: ['School', 'University', 'School and University'] },
   pricePerHour: { type: Number, required: true },
   rating: { type: Number, required: true, min: 0, max: 5 },
   reviewCount: { type: Number, required: true, default: 0 },

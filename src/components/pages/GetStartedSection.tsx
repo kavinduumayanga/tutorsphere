@@ -65,7 +65,10 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
     try {
       if (role === 'tutor') {
         const hasSubjects = formData.subjects.length > 0;
-        const validTeachingLevel = formData.teachingLevel === 'School' || formData.teachingLevel === 'University';
+        const validTeachingLevel =
+          formData.teachingLevel === 'School' ||
+          formData.teachingLevel === 'University' ||
+          formData.teachingLevel === 'School and University';
         
         if (!hasSubjects || !validTeachingLevel || !formData.education.trim()) {
           throw new Error('Please complete all required tutor fields (Education, Subjects, and Teaching Level).');
@@ -281,6 +284,7 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
                          <option value="" disabled>Select a Level</option>
                          <option value="School">School Level</option>
                          <option value="University">University Level</option>
+                         <option value="School and University">School and University</option>
                        </select>
                     </div>
                     <div className="space-y-2">

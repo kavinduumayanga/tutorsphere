@@ -2,6 +2,8 @@ import React, { useState, useMemo, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
   Calendar,
   Clock,
   Globe,
@@ -26,14 +28,6 @@ interface TutorBookingPageProps {
   onConfirmBooking: (slotId: string) => void;
 }
 
-// Generate the next 7 days
-const today = new Date();
-const next7Days = Array.from({ length: 7 }, (_, i) => {
-  const d = new Date(today);
-  d.setDate(today.getDate() + i);
-  return d;
-});
-
 const CONSTANT_SLOTS = [
   "09:00 AM", "09:30 AM", "10:00 AM", "10:30 AM",
   "11:00 AM", "11:30 AM", "02:00 PM", "02:30 PM",
@@ -41,6 +35,66 @@ const CONSTANT_SLOTS = [
 ];
 
 const SESSION_DURATION_MINUTES = 60;
+const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const MONTH_LABEL_FORMATTER = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" });
+
+type CalendarDayCell = {
+  date: Date;
+  isCurrentMonth: boolean;
+};
+
+const startOfDay = (date: Date): Date => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+const startOfMonth = (date: Date): Date => new Date(date.getFullYear(), date.getMonth(), 1);
+
+const addDays = (date: Date, days: number): Date => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return startOfDay(next);
+};
+
+const isSameDay = (a: Date, b: Date): boolean => (
+  a.getFullYear() === b.getFullYear() &&
+  a.getMonth() === b.getMonth() &&
+  a.getDate() === b.getDate()
+);
+
+const buildCalendarDays = (month: Date): CalendarDayCell[] => {
+  const year = month.getFullYear();
+  const monthIndex = month.getMonth();
+  const firstDay = new Date(year, monthIndex, 1);
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+
+  // Convert Sunday-first (0..6) into Monday-first (0..6)
+  const leadingDays = (firstDay.getDay() + 6) % 7;
+  const cells: CalendarDayCell[] = [];
+
+  for (let i = leadingDays; i > 0; i--) {
+    cells.push({
+      date: new Date(year, monthIndex, 1 - i),
+      isCurrentMonth: false,
+    });
+  }
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    cells.push({
+      date: new Date(year, monthIndex, day),
+      isCurrentMonth: true,
+    });
+  }
+
+  while (cells.length % 7 !== 0) {
+    const lastDate = cells[cells.length - 1].date;
+    cells.push({
+      date: addDays(lastDate, 1),
+      isCurrentMonth: false,
+    });
+  }
+
+  return cells;
+};
+
+const BOOKING_MIN_DATE = startOfDay(new Date());
+const BOOKING_MAX_DATE = addDays(BOOKING_MIN_DATE, 59);
 
 /**
  * Parse a 12-hour time string like "09:30 AM" into total minutes since midnight.
@@ -105,7 +159,8 @@ const groupSlotsByPeriod = (slots: string[]) => {
 };
 
 export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBookingPageProps) {
-  const [selectedDate, setSelectedDate] = useState<Date>(next7Days[0]);
+  const [selectedDate, setSelectedDate] = useState<Date>(() => BOOKING_MIN_DATE);
+  const [calendarMonth, setCalendarMonth] = useState<Date>(() => startOfMonth(BOOKING_MIN_DATE));
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
   const [isConfirming, setIsConfirming] = useState(false);
   const [bookingSuccess, setBookingSuccess] = useState(false);
@@ -132,16 +187,38 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
 
   // Deterministic available slots per date
   const availableSlots = CONSTANT_SLOTS.filter((_, i) => (selectedDate.getDate() + i) % 3 !== 0);
-  const grouped = useMemo(() => groupSlotsByPeriod(availableSlots), [selectedDate]);
+  const grouped = useMemo(() => groupSlotsByPeriod(availableSlots), [availableSlots]);
 
   // Conflicting slots — recalculated whenever selection changes
   const conflictingSlots = useMemo(
     () => (selectedSlot ? getConflictingSlots(selectedSlot, availableSlots) : new Set<string>()),
-    [selectedSlot, selectedDate]
+    [selectedSlot, availableSlots]
   );
 
   // Slot count per date for badge
   const getSlotCount = (date: Date) => CONSTANT_SLOTS.filter((_, i) => (date.getDate() + i) % 3 !== 0).length;
+
+  const calendarDays = useMemo(() => buildCalendarDays(calendarMonth), [calendarMonth]);
+  const minMonth = useMemo(() => startOfMonth(BOOKING_MIN_DATE), []);
+  const maxMonth = useMemo(() => startOfMonth(BOOKING_MAX_DATE), []);
+
+  const canGoPrevMonth = calendarMonth.getTime() > minMonth.getTime();
+  const canGoNextMonth = calendarMonth.getTime() < maxMonth.getTime();
+
+  const isDateInBookingRange = useCallback((date: Date) => {
+    const day = startOfDay(date);
+    return day.getTime() >= BOOKING_MIN_DATE.getTime() && day.getTime() <= BOOKING_MAX_DATE.getTime();
+  }, []);
+
+  const handleSelectDate = useCallback((date: Date) => {
+    if (!isDateInBookingRange(date)) {
+      return;
+    }
+
+    setSelectedDate(startOfDay(date));
+    setCalendarMonth(startOfMonth(date));
+    setSelectedSlot(null);
+  }, [isDateInBookingRange]);
 
   const handleSlotClick = useCallback(
     (time: string) => {
@@ -420,47 +497,102 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
                     Which day works best?
                   </h3>
 
-                  <div className="flex gap-3 overflow-x-auto pb-4 custom-scrollbar scroll-snap-x">
-                    {next7Days.map((date, idx) => {
-                      const isSelected = date.toDateString() === selectedDate.toDateString();
-                      const dayName = date.toLocaleDateString("en-US", { weekday: "short" });
-                      const dayNum = date.getDate();
-                      const monthName = date.toLocaleDateString("en-US", { month: "short" });
-                      const slotCount = getSlotCount(date);
+                  <div className="rounded-3xl border border-slate-200 bg-gradient-to-br from-white to-slate-50/80 p-4 sm:p-5 shadow-sm">
+                    <div className="flex items-center justify-between mb-4 gap-3">
+                      <div>
+                        <p className="text-sm font-extrabold text-slate-900">Pick Your Session Date</p>
+                        <p className="text-xs font-medium text-slate-500 mt-0.5">Book up to 60 days in advance</p>
+                      </div>
 
-                      return (
-                        <motion.button
-                          key={idx}
-                          whileHover={{ y: -2 }}
-                          whileTap={{ scale: 0.95 }}
-                          onClick={() => { setSelectedDate(date); setSelectedSlot(null); }}
-                          className={`shrink-0 snap-start w-[90px] py-4 rounded-2xl border-2 transition-all flex flex-col items-center gap-1 relative ${
-                            isSelected
-                              ? "border-indigo-600 bg-indigo-50 text-indigo-700 shadow-md shadow-indigo-100"
-                              : "border-slate-100 bg-white text-slate-600 hover:border-indigo-200 hover:bg-slate-50"
-                          }`}
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => canGoPrevMonth && setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}
+                          disabled={!canGoPrevMonth}
+                          className="w-9 h-9 rounded-xl border border-slate-200 bg-white text-slate-600 hover:text-indigo-600 hover:border-indigo-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
+                          aria-label="Previous month"
                         >
-                          <span className={`text-xs font-bold uppercase tracking-wider ${isSelected ? "text-indigo-500" : "text-slate-400"}`}>
-                            {dayName}
-                          </span>
-                          <span className={`text-2xl font-black ${isSelected ? "text-indigo-700" : "text-slate-900"}`}>
-                            {dayNum}
-                          </span>
-                          <span className={`text-[10px] font-bold uppercase tracking-wider ${isSelected ? "text-indigo-500" : "text-slate-400"}`}>
-                            {monthName}
-                          </span>
-                          <span className={`mt-1 text-[9px] font-black px-2 py-0.5 rounded-full ${
-                            isSelected
-                              ? 'bg-indigo-600 text-white'
-                              : slotCount > 0
-                                ? 'bg-emerald-50 text-emerald-600'
-                                : 'bg-slate-50 text-slate-400'
-                          }`}>
-                            {slotCount} slot{slotCount !== 1 ? 's' : ''}
-                          </span>
-                        </motion.button>
-                      );
-                    })}
+                          <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <div className="min-w-[140px] text-center text-sm font-black text-slate-800 px-2">
+                          {MONTH_LABEL_FORMATTER.format(calendarMonth)}
+                        </div>
+                        <button
+                          onClick={() => canGoNextMonth && setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))}
+                          disabled={!canGoNextMonth}
+                          className="w-9 h-9 rounded-xl border border-slate-200 bg-white text-slate-600 hover:text-indigo-600 hover:border-indigo-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
+                          aria-label="Next month"
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-7 gap-1.5 mb-1.5">
+                      {WEEKDAY_LABELS.map((day) => (
+                        <div key={day} className="text-center text-[11px] font-black uppercase tracking-wider text-slate-400 py-1">
+                          {day}
+                        </div>
+                      ))}
+                    </div>
+
+                    <AnimatePresence mode="wait" initial={false}>
+                      <motion.div
+                        key={calendarMonth.toISOString()}
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -6 }}
+                        transition={{ duration: 0.18 }}
+                        className="grid grid-cols-7 gap-1.5"
+                      >
+                        {calendarDays.map(({ date, isCurrentMonth }) => {
+                          const disabled = !isDateInBookingRange(date);
+                          const isSelected = isSameDay(date, selectedDate);
+                          const isToday = isSameDay(date, BOOKING_MIN_DATE);
+                          const slotCount = disabled ? 0 : getSlotCount(date);
+
+                          return (
+                            <motion.button
+                              key={date.toISOString()}
+                              whileHover={!disabled ? { y: -1.5 } : {}}
+                              whileTap={!disabled ? { scale: 0.96 } : {}}
+                              onClick={() => handleSelectDate(date)}
+                              disabled={disabled}
+                              className={`h-14 sm:h-16 rounded-xl border text-sm font-bold relative transition-all ${
+                                isSelected
+                                  ? "border-indigo-600 bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-200"
+                                  : !isCurrentMonth
+                                    ? "border-transparent bg-slate-50 text-slate-400"
+                                    : "border-slate-200 bg-white text-slate-700 hover:border-indigo-300 hover:shadow-sm"
+                              } ${disabled ? "opacity-35 cursor-not-allowed" : ""}`}
+                            >
+                              <span className="relative z-10">{date.getDate()}</span>
+
+                              {isToday && !isSelected && !disabled && (
+                                <span className="absolute inset-1 rounded-lg border border-indigo-200 pointer-events-none" />
+                              )}
+
+                              {!disabled && slotCount > 0 && (
+                                <span className={`absolute bottom-1.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full ${
+                                  isSelected ? "bg-white" : "bg-emerald-500"
+                                }`} />
+                              )}
+                            </motion.button>
+                          );
+                        })}
+                      </motion.div>
+                    </AnimatePresence>
+
+                    <div className="mt-4 p-3 rounded-2xl bg-indigo-50/70 border border-indigo-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-wider text-indigo-500">Selected Date</p>
+                        <p className="text-sm font-bold text-indigo-900">
+                          {selectedDate.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
+                        </p>
+                      </div>
+                      <span className="inline-flex items-center self-start sm:self-center text-[11px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full bg-white text-indigo-700 border border-indigo-100">
+                        {getSlotCount(selectedDate)} slot{getSlotCount(selectedDate) !== 1 ? "s" : ""} available
+                      </span>
+                    </div>
                   </div>
                 </div>
 

@@ -13,7 +13,10 @@ export interface ICourse extends Document {
     id: string;
     title: string;
     videoUrl: string;
-    resources: string[];
+    resources: {
+      name: string;
+      url: string;
+    }[];
   }[];
   enrolledStudents: string[];
 }
@@ -31,7 +34,8 @@ const CourseSchema: Schema = new Schema({
     id: { type: String, required: true },
     title: { type: String, required: true },
     videoUrl: { type: String, required: true },
-    resources: [{ type: String }]
+    // Keep mixed for backward compatibility with legacy string[] data.
+    resources: [{ type: Schema.Types.Mixed }]
   }],
   enrolledStudents: [{ type: String }]
 }, {

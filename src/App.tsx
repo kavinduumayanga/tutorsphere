@@ -59,6 +59,10 @@ import { RegistrationSelectionPage } from './components/pages/RegistrationSelect
 import { AboutPage } from './components/pages/AboutPage';
 import { TutorAvailabilityManagePage } from './components/pages/TutorAvailabilityManagePage';
 import { CourseBrowsingPage } from './components/pages/CourseBrowsingPage';
+import { TutorCourseManagePage } from './components/pages/TutorCourseManagePage';
+import { TutorResourceManagePage } from './components/pages/TutorResourceManagePage';
+import { StudentResourceLibraryPage } from './components/pages/StudentResourceLibraryPage';
+import { ToastProvider } from './components/common/Toast';
 
 const STEM_SUBJECTS = ['Maths', 'Science', 'Engineering', 'Tech', 'ICT'];
 
@@ -126,17 +130,85 @@ const getTutorDisplayName = (tutor: Tutor & { name?: string }) => {
 
 const WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+const createDraftId = () => Math.random().toString(36).slice(2, 11);
+
+type EditableCourseModuleResource = {
+  id: string;
+  name: string;
+  url: string;
+};
+
+const getResourceNameFromUrl = (value: string, fallback = 'Resource'): string => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+
+  try {
+    if (/^https?:\/\//i.test(trimmed)) {
+      const parsed = new URL(trimmed);
+      const fileName = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || '');
+      if (fileName) {
+        return fileName;
+      }
+    }
+  } catch {
+    // Fallback to path parsing for non-URL values.
+  }
+
+  const fileName = decodeURIComponent(trimmed.split('?')[0].split('#')[0].split('/').filter(Boolean).pop() || '');
+  return fileName || fallback;
+};
+
+const normalizeEditableModuleResources = (resources: unknown): EditableCourseModuleResource[] => {
+  if (!Array.isArray(resources)) {
+    return [];
+  }
+
+  return resources
+    .map((resource: any, index) => {
+      if (typeof resource === 'string') {
+        const value = resource.trim();
+        if (!value) {
+          return null;
+        }
+
+        return {
+          id: createDraftId(),
+          name: getResourceNameFromUrl(value, `Resource ${index + 1}`),
+          url: value,
+        };
+      }
+
+      const url = String(resource?.url ?? resource?.path ?? '').trim();
+      if (!url) {
+        return null;
+      }
+
+      return {
+        id: createDraftId(),
+        name: String(resource?.name ?? '').trim() || getResourceNameFromUrl(url, `Resource ${index + 1}`),
+        url,
+      };
+    })
+    .filter((resource): resource is EditableCourseModuleResource => Boolean(resource));
+};
+
 type EditableCourseModule = {
   id?: string;
   title: string;
   videoUrl: string;
-  resourcesInput: string;
+  resources: EditableCourseModuleResource[];
+  resourceNameInput: string;
+  resourceUrlInput: string;
 };
 
 const createEmptyEditableModule = (): EditableCourseModule => ({
   title: '',
   videoUrl: '',
-  resourcesInput: '',
+  resources: [],
+  resourceNameInput: '',
+  resourceUrlInput: '',
 });
 
 const createInitialCourseForm = () => ({
@@ -288,6 +360,9 @@ export default function App() {
   const [courseForm, setCourseForm] = useState(createInitialCourseForm);
   const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
   const [isSavingCourse, setIsSavingCourse] = useState(false);
+  const [isUploadingCourseThumbnail, setIsUploadingCourseThumbnail] = useState(false);
+  const [uploadingModuleVideoKey, setUploadingModuleVideoKey] = useState<string | null>(null);
+  const [uploadingModuleResourcesKey, setUploadingModuleResourcesKey] = useState<string | null>(null);
   const [resourceForm, setResourceForm] = useState(createInitialResourceForm);
   const [editingResourceId, setEditingResourceId] = useState<string | null>(null);
   const [isSavingResource, setIsSavingResource] = useState(false);
@@ -1095,6 +1170,9 @@ export default function App() {
   const handleResetCourseForm = () => {
     setCourseForm(createInitialCourseForm());
     setEditingCourseId(null);
+    setUploadingModuleVideoKey(null);
+    setUploadingModuleResourcesKey(null);
+    setIsUploadingCourseThumbnail(false);
   };
 
   const handleAddCourseModule = () => {
@@ -1104,9 +1182,96 @@ export default function App() {
     }));
   };
 
+  const getEditableModuleKey = (module: EditableCourseModule, moduleIndex: number): string => {
+    return module.id || `draft-${moduleIndex}`;
+  };
+
+  const getBaseFileName = (fileName: string): string => {
+    return fileName.replace(/\.[^.]+$/, '').trim() || fileName;
+  };
+
+  const handleUploadCourseThumbnail = async (file: File) => {
+    setIsUploadingCourseThumbnail(true);
+
+    try {
+      const uploadedAsset = await apiService.uploadCourseThumbnail(file);
+      setCourseForm((prev) => ({ ...prev, thumbnail: uploadedAsset.path }));
+    } catch (error) {
+      console.error('Failed to upload course thumbnail:', error);
+      const message = error instanceof Error ? error.message : 'Failed to upload course thumbnail.';
+      alert(message);
+    } finally {
+      setIsUploadingCourseThumbnail(false);
+    }
+  };
+
+  const handleUploadModuleVideo = async (moduleIndex: number, file: File) => {
+    const module = courseForm.modules[moduleIndex];
+    if (!module) {
+      return;
+    }
+
+    const moduleKey = getEditableModuleKey(module, moduleIndex);
+    setUploadingModuleVideoKey(moduleKey);
+
+    try {
+      const uploadedAsset = await apiService.uploadCourseModuleVideo(file);
+      setCourseForm((prev) => ({
+        ...prev,
+        modules: prev.modules.map((item, index) =>
+          index === moduleIndex ? { ...item, videoUrl: uploadedAsset.path } : item
+        ),
+      }));
+    } catch (error) {
+      console.error('Failed to upload module video:', error);
+      const message = error instanceof Error ? error.message : 'Failed to upload module video.';
+      alert(message);
+    } finally {
+      setUploadingModuleVideoKey(null);
+    }
+  };
+
+  const handleUploadModuleResources = async (moduleIndex: number, fileList: FileList) => {
+    const module = courseForm.modules[moduleIndex];
+    if (!module || fileList.length === 0) {
+      return;
+    }
+
+    const moduleKey = getEditableModuleKey(module, moduleIndex);
+    setUploadingModuleResourcesKey(moduleKey);
+
+    try {
+      const uploadedResources: EditableCourseModuleResource[] = [];
+
+      for (const file of Array.from(fileList)) {
+        const uploadedAsset = await apiService.uploadCourseModuleResource(file);
+        uploadedResources.push({
+          id: createDraftId(),
+          name: getBaseFileName(uploadedAsset.originalName),
+          url: uploadedAsset.path,
+        });
+      }
+
+      setCourseForm((prev) => ({
+        ...prev,
+        modules: prev.modules.map((item, index) =>
+          index === moduleIndex
+            ? { ...item, resources: [...item.resources, ...uploadedResources] }
+            : item
+        ),
+      }));
+    } catch (error) {
+      console.error('Failed to upload module resources:', error);
+      const message = error instanceof Error ? error.message : 'Failed to upload module resources.';
+      alert(message);
+    } finally {
+      setUploadingModuleResourcesKey(null);
+    }
+  };
+
   const handleUpdateCourseModule = (
     moduleIndex: number,
-    field: keyof EditableCourseModule,
+    field: 'title' | 'videoUrl' | 'resourceNameInput' | 'resourceUrlInput',
     value: string
   ) => {
     setCourseForm((prev) => ({
@@ -1114,6 +1279,76 @@ export default function App() {
       modules: prev.modules.map((module, index) =>
         index === moduleIndex ? { ...module, [field]: value } : module
       ),
+    }));
+  };
+
+  const handleUpdateCourseModuleResource = (
+    moduleIndex: number,
+    resourceIndex: number,
+    field: 'name' | 'url',
+    value: string
+  ) => {
+    setCourseForm((prev) => ({
+      ...prev,
+      modules: prev.modules.map((module, index) => {
+        if (index !== moduleIndex) {
+          return module;
+        }
+
+        return {
+          ...module,
+          resources: module.resources.map((resource, currentResourceIndex) =>
+            currentResourceIndex === resourceIndex ? { ...resource, [field]: value } : resource
+          ),
+        };
+      }),
+    }));
+  };
+
+  const handleRemoveCourseModuleResource = (moduleIndex: number, resourceIndex: number) => {
+    setCourseForm((prev) => ({
+      ...prev,
+      modules: prev.modules.map((module, index) => {
+        if (index !== moduleIndex) {
+          return module;
+        }
+
+        return {
+          ...module,
+          resources: module.resources.filter((_, currentResourceIndex) => currentResourceIndex !== resourceIndex),
+        };
+      }),
+    }));
+  };
+
+  const handleAddUrlModuleResource = (moduleIndex: number) => {
+    const module = courseForm.modules[moduleIndex];
+    if (!module) {
+      return;
+    }
+
+    const resourceUrl = module.resourceUrlInput.trim();
+    if (!resourceUrl) {
+      alert('Please provide a resource URL before adding it.');
+      return;
+    }
+
+    const resourceName = module.resourceNameInput.trim() || getResourceNameFromUrl(resourceUrl, 'Resource');
+
+    setCourseForm((prev) => ({
+      ...prev,
+      modules: prev.modules.map((item, index) => {
+        if (index !== moduleIndex) {
+          return item;
+        }
+
+        return {
+          ...item,
+          resources: [...item.resources, { id: createDraftId(), name: resourceName, url: resourceUrl }],
+          resourceNameInput: '',
+          resourceUrlInput: '',
+        };
+      }),
     }));
   };
 
@@ -1143,7 +1378,9 @@ export default function App() {
         id: module.id,
         title: module.title,
         videoUrl: module.videoUrl,
-        resourcesInput: module.resources.join(', '),
+        resources: normalizeEditableModuleResources(module.resources),
+        resourceNameInput: '',
+        resourceUrlInput: '',
       })),
     });
   };
@@ -1164,13 +1401,25 @@ export default function App() {
 
     const normalizedModules = courseForm.modules
       .map((module) => ({
-        id: module.id || Math.random().toString(36).slice(2, 11),
+        id: module.id || createDraftId(),
         title: module.title.trim(),
         videoUrl: module.videoUrl.trim(),
-        resources: module.resourcesInput
-          .split(',')
-          .map((item) => item.trim())
-          .filter(Boolean),
+        resources: module.resources
+          .map((resource, resourceIndex) => {
+            const resourceUrl = resource.url.trim();
+            if (!resourceUrl) {
+              return null;
+            }
+
+            return {
+              name: resource.name.trim() || getResourceNameFromUrl(resourceUrl, `Resource ${resourceIndex + 1}`),
+              url: resourceUrl,
+            };
+          })
+          .filter(
+            (resource): resource is { name: string; url: string } =>
+              Boolean(resource)
+          ),
       }))
       .filter((module) => module.title && module.videoUrl);
 
@@ -1180,7 +1429,7 @@ export default function App() {
     }
 
     if (normalizedModules.length === 0) {
-      alert('Please add at least one module with a title and video URL.');
+      alert('Please add at least one module with a title and a video URL (or uploaded video).');
       return;
     }
 
@@ -1647,7 +1896,7 @@ export default function App() {
     }
   };
 
-  const isDirectVideoFile = (url: string): boolean => /\.(mp4|webm|ogg)(\?.*)?$/i.test(url.trim());
+  const isDirectVideoFile = (url: string): boolean => /\.(mp4|webm|ogg|mov|m4v)(\?.*)?$/i.test(url.trim());
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] font-sans text-slate-900">
@@ -2157,8 +2406,10 @@ export default function App() {
                                             <LinkIcon className="w-5 h-5" />
                                           </div>
                                           <div className="flex-1 min-w-0">
-                                            <p className="text-xs font-bold text-slate-900">Resource {idx + 1}</p>
-                                            <p className="text-[10px] text-slate-500 truncate">Click to view in Resources</p>
+                                            <p className="text-xs font-bold text-slate-900 truncate">{resource.name || `Resource ${idx + 1}`}</p>
+                                            <p className="text-[10px] text-slate-500 truncate">
+                                              {resource.url.startsWith('/uploads/') ? 'Local file' : 'External resource'} - click to view in Resources
+                                            </p>
                                           </div>
                                         </div>
                                         <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-indigo-600 transition-colors flex-shrink-0" />
@@ -2265,9 +2516,10 @@ export default function App() {
                                   {currentModule.resources.map((resource, idx) => (
                                     <a
                                       key={`${currentModule.id}-res-${idx}`}
-                                      href={resource}
+                                      href={resource.url}
                                       target="_blank"
                                       rel="noopener noreferrer"
+                                      download={resource.url.startsWith('/uploads/') ? resource.name : undefined}
                                       className="p-4 rounded-xl bg-slate-50 border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 transition-all flex items-center justify-between group"
                                     >
                                       <div className="flex items-center gap-3">
@@ -2275,8 +2527,10 @@ export default function App() {
                                           <LinkIcon className="w-5 h-5" />
                                         </div>
                                         <div>
-                                          <p className="font-bold text-slate-900">Resource {idx + 1}</p>
-                                          <p className="text-xs text-slate-500">External resource</p>
+                                          <p className="font-bold text-slate-900">{resource.name || `Resource ${idx + 1}`}</p>
+                                          <p className="text-xs text-slate-500">
+                                            {resource.url.startsWith('/uploads/') ? 'Uploaded local file' : 'External resource URL'}
+                                          </p>
                                         </div>
                                       </div>
                                       <ArrowRight className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 transition-colors" />
@@ -2929,229 +3183,40 @@ export default function App() {
 
         {activeTab === 'courses' && (
           <div className="space-y-12">
-            {isTutor && (
-              <div className="flex flex-col md:flex-row justify-between items-end gap-6">
-                <div className="space-y-2">
-                  <div className="inline-flex items-center gap-2 px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-[10px] font-black uppercase tracking-widest">
-                    <BookMarked className="w-3 h-3 fill-indigo-700" />
-                    <span>Tutor Content Studio</span>
-                  </div>
-                  <h2 className="text-4xl font-black text-slate-900 tracking-tight">
-                    Manage University Video Courses
-                  </h2>
-                  <p className="text-slate-600">
-                    Create, edit, and publish your own video-based courses for university learners.
-                  </p>
-                </div>
-              </div>
-            )}
-
             {isLoadingCourses ? (
               <div className="flex justify-center items-center py-12">
                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
               </div>
             ) : isTutor ? (
-              <div className="grid xl:grid-cols-5 gap-8">
-                <div className="xl:col-span-2 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                  <div className="flex items-center justify-between mb-6">
-                    <h3 className="text-xl font-black text-slate-900">
-                      {editingCourseId ? 'Edit Course' : 'Create New Course'}
-                    </h3>
-                    {editingCourseId && (
-                      <button
-                        type="button"
-                        onClick={handleResetCourseForm}
-                        className="text-xs font-black uppercase tracking-widest text-slate-500 hover:text-slate-800"
-                      >
-                        Clear
-                      </button>
-                    )}
-                  </div>
-
-                  <form onSubmit={handleSaveCourse} className="space-y-4">
-                    <input
-                      type="text"
-                      value={courseForm.title}
-                      onChange={(e) => setCourseForm((prev) => ({ ...prev, title: e.target.value }))}
-                      placeholder="Course title"
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none focus:ring-4 focus:ring-indigo-500/15"
-                      required
-                    />
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <select
-                        value={courseForm.subject}
-                        onChange={(e) => setCourseForm((prev) => ({ ...prev, subject: e.target.value }))}
-                        className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none"
-                      >
-                        {STEM_SUBJECTS.map((subject) => (
-                          <option key={subject} value={subject}>
-                            {subject}
-                          </option>
-                        ))}
-                      </select>
-                      <select
-                        value={courseForm.isFree ? 'free' : 'paid'}
-                        onChange={(e) =>
-                          setCourseForm((prev) => ({
-                            ...prev,
-                            isFree: e.target.value === 'free',
-                            price: e.target.value === 'free' ? 0 : prev.price,
-                          }))
-                        }
-                        className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none"
-                      >
-                        <option value="paid">Paid Course</option>
-                        <option value="free">Free Course</option>
-                      </select>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <input
-                        type="number"
-                        min="0"
-                        value={courseForm.price}
-                        onChange={(e) => setCourseForm((prev) => ({ ...prev, price: Number(e.target.value) || 0 }))}
-                        placeholder={courseForm.isFree ? 'Free course (price locked)' : 'Price'}
-                        disabled={courseForm.isFree}
-                        className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none disabled:cursor-not-allowed disabled:opacity-70"
-                      />
-                      <div className="flex items-center px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 text-xs font-black uppercase tracking-widest text-slate-500">
-                        {courseForm.isFree ? 'Students can enroll instantly' : 'Payment required before enrollment'}
-                      </div>
-                    </div>
-
-                    <input
-                      type="url"
-                      value={courseForm.thumbnail}
-                      onChange={(e) => setCourseForm((prev) => ({ ...prev, thumbnail: e.target.value }))}
-                      placeholder="Thumbnail image URL (optional)"
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none"
-                    />
-
-                    <textarea
-                      value={courseForm.description}
-                      onChange={(e) => setCourseForm((prev) => ({ ...prev, description: e.target.value }))}
-                      placeholder="Course description"
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none min-h-[96px]"
-                      required
-                    />
-
-                    <div className="space-y-3 pt-2 border-t border-slate-100">
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs font-black text-slate-500 uppercase tracking-widest">Video Modules</p>
-                        <button
-                          type="button"
-                          onClick={handleAddCourseModule}
-                          className="text-xs font-black uppercase tracking-widest text-indigo-600 hover:underline"
-                        >
-                          Add Module
-                        </button>
-                      </div>
-
-                      {courseForm.modules.map((module, moduleIndex) => (
-                        <div key={`${module.id || 'new'}-${moduleIndex}`} className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="text-[11px] font-black uppercase tracking-widest text-slate-500">Module {moduleIndex + 1}</p>
-                            {courseForm.modules.length > 1 && (
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveCourseModule(moduleIndex)}
-                                className="text-rose-500 hover:text-rose-700"
-                                aria-label="Remove module"
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
-                            )}
-                          </div>
-                          <input
-                            type="text"
-                            value={module.title}
-                            onChange={(e) => handleUpdateCourseModule(moduleIndex, 'title', e.target.value)}
-                            placeholder="Module title"
-                            className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white outline-none"
-                          />
-                          <input
-                            type="url"
-                            value={module.videoUrl}
-                            onChange={(e) => handleUpdateCourseModule(moduleIndex, 'videoUrl', e.target.value)}
-                            placeholder="Video URL"
-                            className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white outline-none"
-                          />
-                          <input
-                            type="text"
-                            value={module.resourcesInput}
-                            onChange={(e) => handleUpdateCourseModule(moduleIndex, 'resourcesInput', e.target.value)}
-                            placeholder="Module resources (comma-separated)"
-                            className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white outline-none"
-                          />
-                        </div>
-                      ))}
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={isSavingCourse}
-                      className="w-full mt-2 py-3 rounded-xl bg-indigo-600 text-white font-black hover:bg-indigo-700 disabled:opacity-60"
-                    >
-                      {isSavingCourse ? 'Saving...' : editingCourseId ? 'Update Course' : 'Create Course'}
-                    </button>
-                  </form>
-                </div>
-
-                <div className="xl:col-span-3 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xl font-black text-slate-900">My Courses</h3>
-                    <p className="text-xs font-black text-slate-500 uppercase tracking-widest">{myTutorCourses.length} Total</p>
-                  </div>
-
-                  {myTutorCourses.length === 0 ? (
-                    <div className="bg-white p-10 rounded-[2rem] border border-dashed border-slate-200 text-center text-slate-500">
-                      No courses created yet. Start by publishing your first video course.
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {myTutorCourses.map((course) => {
-                        const enrolledCount = enrollmentCountByCourseId.get(course.id) ?? course.enrolledStudents.length;
-                        return (
-                          <div key={course.id} className="bg-white rounded-3xl border border-slate-100 p-6 shadow-sm">
-                            <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-                              <div className="space-y-2">
-                                <p className="text-[10px] font-black uppercase tracking-widest text-indigo-600">{course.subject}</p>
-                                <h4 className="text-xl font-black text-slate-900">{course.title}</h4>
-                                <p className="text-sm text-slate-500 line-clamp-2">{course.description}</p>
-                                <div className="flex flex-wrap gap-4 text-xs text-slate-500 font-bold">
-                                  <span>{course.modules.length} module(s)</span>
-                                  <span>{enrolledCount} enrolled student(s)</span>
-                                  <span className={(course.isFree || course.price <= 0) ? 'text-emerald-600' : 'text-amber-600'}>
-                                    {(course.isFree || course.price <= 0) ? 'Free' : `LKR ${course.price || 0}`}
-                                  </span>
-                                </div>
-                              </div>
-                              <div className="flex gap-2 shrink-0">
-                                <button
-                                  type="button"
-                                  onClick={() => handleEditCourse(course)}
-                                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-50"
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteCourse(course.id)}
-                                  className="px-4 py-2 rounded-xl bg-rose-50 text-rose-600 font-bold text-xs hover:bg-rose-100"
-                                >
-                                  Delete
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
+              <TutorCourseManagePage
+                courses={courses}
+                currentTutor={currentTutor}
+                courseEnrollments={courseEnrollments}
+                enrollmentCountByCourseId={enrollmentCountByCourseId}
+                courseForm={courseForm}
+                setCourseForm={setCourseForm}
+                editingCourseId={editingCourseId}
+                isSavingCourse={isSavingCourse}
+                isLoading={isLoadingCourses}
+                isUploadingCourseThumbnail={isUploadingCourseThumbnail}
+                uploadingModuleVideoKey={uploadingModuleVideoKey}
+                uploadingModuleResourcesKey={uploadingModuleResourcesKey}
+                stemSubjects={STEM_SUBJECTS}
+                onSaveCourse={handleSaveCourse}
+                onDeleteCourse={handleDeleteCourse}
+                onEditCourse={handleEditCourse}
+                onResetCourseForm={handleResetCourseForm}
+                onAddCourseModule={handleAddCourseModule}
+                onRemoveCourseModule={handleRemoveCourseModule}
+                onUpdateCourseModule={handleUpdateCourseModule}
+                onUploadCourseThumbnail={handleUploadCourseThumbnail}
+                onUploadModuleVideo={handleUploadModuleVideo}
+                onUploadModuleResources={handleUploadModuleResources}
+                onUpdateCourseModuleResource={handleUpdateCourseModuleResource}
+                onRemoveCourseModuleResource={handleRemoveCourseModuleResource}
+                onAddUrlModuleResource={handleAddUrlModuleResource}
+                getEditableModuleKey={getEditableModuleKey}
+              />
             ) : (
               <CourseBrowsingPage
                 courses={courses}
@@ -3175,188 +3240,29 @@ export default function App() {
         )}
 
         {activeTab === 'resources' && (
-          <div className="space-y-8">
-            <div>
-              <h2 className="text-3xl font-bold">
-                {isTutor ? 'Manage Free Learning Resources' : 'Free Resource Library'}
-              </h2>
-              <p className="text-slate-600">
-                {isTutor
-                  ? 'Upload and organize free papers, articles, and notes for your university students.'
-                  : 'Access tutor-shared papers, notes, and articles to support your studies.'}
-              </p>
-            </div>
-            {isLoadingResources ? (
-              <div className="flex justify-center items-center py-12">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
-              </div>
-            ) : isTutor ? (
-              <div className="grid lg:grid-cols-5 gap-8">
-                <div className="lg:col-span-2 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                  <div className="flex items-center justify-between mb-6">
-                    <h3 className="text-xl font-black text-slate-900">
-                      {editingResourceId ? 'Edit Resource' : 'Upload Resource'}
-                    </h3>
-                    {editingResourceId && (
-                      <button
-                        type="button"
-                        onClick={handleResetResourceForm}
-                        className="text-xs font-black uppercase tracking-widest text-slate-500 hover:text-slate-800"
-                      >
-                        Clear
-                      </button>
-                    )}
-                  </div>
-
-                  <form onSubmit={handleSaveResource} className="space-y-4">
-                    <input
-                      type="text"
-                      value={resourceForm.title}
-                      onChange={(e) => setResourceForm((prev) => ({ ...prev, title: e.target.value }))}
-                      placeholder="Resource title"
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none"
-                      required
-                    />
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <select
-                        value={resourceForm.subject}
-                        onChange={(e) => setResourceForm((prev) => ({ ...prev, subject: e.target.value }))}
-                        className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none"
-                      >
-                        {STEM_SUBJECTS.map((subject) => (
-                          <option key={subject} value={subject}>
-                            {subject}
-                          </option>
-                        ))}
-                      </select>
-                      <select
-                        value={resourceForm.type}
-                        onChange={(e) =>
-                          setResourceForm((prev) => ({
-                            ...prev,
-                            type: e.target.value as Resource['type'],
-                          }))
-                        }
-                        className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none"
-                      >
-                        <option value="Paper">Paper</option>
-                        <option value="Article">Article</option>
-                        <option value="Note">Note</option>
-                      </select>
-                    </div>
-
-                    <input
-                      type="url"
-                      value={resourceForm.url}
-                      onChange={(e) => setResourceForm((prev) => ({ ...prev, url: e.target.value }))}
-                      placeholder="Resource URL"
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none"
-                      required
-                    />
-
-                    <textarea
-                      value={resourceForm.description}
-                      onChange={(e) => setResourceForm((prev) => ({ ...prev, description: e.target.value }))}
-                      placeholder="Short description (optional)"
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none min-h-[100px]"
-                    />
-
-                    <button
-                      type="submit"
-                      disabled={isSavingResource}
-                      className="w-full py-3 rounded-xl bg-indigo-600 text-white font-black hover:bg-indigo-700 disabled:opacity-60"
-                    >
-                      {isSavingResource ? 'Saving...' : editingResourceId ? 'Update Resource' : 'Upload Resource'}
-                    </button>
-                  </form>
-                </div>
-
-                <div className="lg:col-span-3 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xl font-black text-slate-900">My Free Resources</h3>
-                    <p className="text-xs font-black text-slate-500 uppercase tracking-widest">{myTutorResources.length} Total</p>
-                  </div>
-
-                  {myTutorResources.length === 0 ? (
-                    <div className="bg-white p-10 rounded-[2rem] border border-dashed border-slate-200 text-center text-slate-500">
-                      No resources uploaded yet. Share your first paper, article, or note.
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {myTutorResources.map((resource) => (
-                        <div key={resource.id} className="bg-white p-5 rounded-2xl border border-slate-100 flex items-start justify-between gap-4">
-                          <div className="space-y-1">
-                            <h4 className="font-black text-slate-900">{resource.title}</h4>
-                            <p className="text-xs text-slate-500 uppercase font-bold tracking-widest">
-                              {resource.subject} • {resource.type}
-                            </p>
-                            {resource.description && (
-                              <p className="text-sm text-slate-500">{resource.description}</p>
-                            )}
-                            <a
-                              href={resource.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex text-xs font-bold text-indigo-600 hover:underline mt-1"
-                            >
-                              Open Resource
-                            </a>
-                          </div>
-
-                          <div className="flex gap-2 shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => handleEditResource(resource)}
-                              className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 text-xs font-bold"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteResource(resource.id)}
-                              className="px-3 py-1.5 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 text-xs font-bold"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="grid md:grid-cols-2 gap-4">
-                {discoverableResources.map(res => (
-                <div key={res.id} className="bg-white p-6 rounded-3xl border border-slate-200 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                  <div className="flex items-center gap-4">
-                    <div className="bg-indigo-100 p-3 rounded-2xl">
-                      <BookOpen className="text-indigo-600 w-6 h-6" />
-                    </div>
-                    <div>
-                      <h3 className="font-bold">{res.title}</h3>
-                      <p className="text-xs text-slate-500 uppercase font-bold tracking-wider">{res.subject} • {res.type}</p>
-                      {res.description && <p className="text-xs text-slate-500 mt-1">{res.description}</p>}
-                    </div>
-                  </div>
-                  <button 
-                    onClick={() => {
-                      if (!res.url || res.url === '#') {
-                        alert('Resource link is not available yet.');
-                        return;
-                      }
-                      window.open(res.url, '_blank', 'noopener,noreferrer');
-                    }}
-                    className="text-indigo-600 font-bold flex items-center gap-1 hover:underline"
-                  >
-                    Download <ArrowRight className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
-            </div>
-            )}
-          </div>
+          isTutor ? (
+            <TutorResourceManagePage
+              resources={resources}
+              currentTutorId={currentTutor?.id}
+              resourceForm={resourceForm}
+              setResourceForm={setResourceForm}
+              editingResourceId={editingResourceId}
+              isSavingResource={isSavingResource}
+              isLoading={isLoadingResources}
+              stemSubjects={STEM_SUBJECTS}
+              onSaveResource={handleSaveResource}
+              onDeleteResource={handleDeleteResource}
+              onEditResource={handleEditResource}
+              onResetResourceForm={handleResetResourceForm}
+            />
+          ) : (
+            <StudentResourceLibraryPage
+              resources={resources}
+              isLoggedIn={!!currentUser}
+              isLoading={isLoadingResources}
+              stemSubjects={STEM_SUBJECTS}
+            />
+          )
         )}
 
         {activeTab === 'quizzes' && (!currentUser || isStudent) && (

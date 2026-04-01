@@ -65,7 +65,7 @@ const getEmbeddableVideoUrl = (url: string): string | null => {
   }
 };
 
-const isDirectVideoFile = (url: string): boolean => /\.(mp4|webm|ogg)(\?.*)?$/i.test(url.trim());
+const isDirectVideoFile = (url: string): boolean => /\.(mp4|webm|ogg|mov|m4v)(\?.*)?$/i.test(url.trim());
 
 // --- Types ---
 
@@ -676,8 +676,10 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
                                   <FileText className="w-5 h-5" />
                                 </div>
                                 <div className="flex-1 min-w-0">
-                                  <p className="text-sm font-bold text-slate-900">Resource {idx + 1}</p>
-                                  <p className="text-[11px] text-slate-500 truncate">Click to view in Resources</p>
+                                  <p className="text-sm font-bold text-slate-900 truncate">{resource.name || `Resource ${idx + 1}`}</p>
+                                  <p className="text-[11px] text-slate-500 truncate">
+                                    {resource.url.startsWith('/uploads/') ? 'Local file' : 'External resource'} - click to view in Resources
+                                  </p>
                                 </div>
                               </div>
                               <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-indigo-500 group-hover:translate-x-0.5 transition-all flex-shrink-0" />
@@ -786,9 +788,10 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
                         {currentModule.resources.map((resource, idx) => (
                           <a
                             key={`${currentModule.id}-res-${idx}`}
-                            href={resource}
+                            href={resource.url}
                             target="_blank"
                             rel="noopener noreferrer"
+                            download={resource.url.startsWith('/uploads/') ? resource.name : undefined}
                             className="p-4 rounded-2xl bg-white border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50/40 transition-all duration-200 flex items-center justify-between group shadow-sm hover:shadow-md"
                           >
                             <div className="flex items-center gap-4">
@@ -796,8 +799,8 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
                                 <Download className="w-5 h-5" />
                               </div>
                               <div>
-                                <p className="font-bold text-slate-900 text-sm">Resource {idx + 1}</p>
-                                <p className="text-xs text-slate-400 mt-0.5 truncate max-w-[240px]">{resource}</p>
+                                <p className="font-bold text-slate-900 text-sm">{resource.name || `Resource ${idx + 1}`}</p>
+                                <p className="text-xs text-slate-400 mt-0.5 truncate max-w-[240px]">{resource.url}</p>
                               </div>
                             </div>
                             <div className="flex-shrink-0 p-2 rounded-lg bg-slate-50 group-hover:bg-indigo-100 transition-colors">

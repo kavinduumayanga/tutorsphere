@@ -23,6 +23,10 @@ import { CourseEnrollment } from "./src/models/CourseEnrollment.js";
 // Load environment variables
 dotenv.config();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -34,37 +38,134 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({
-  storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (!['image/png', 'image/jpeg'].includes(file.mimetype)) {
-      return cb(new Error('Only PNG and JPEG files are allowed for profile pictures'));
-    }
-    cb(null, true);
-  },
-});
-
-const handleAvatarUpload = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  upload.single('avatar')(req, res, (error: any) => {
-    if (!error) {
-      return next();
-    }
-
-    if (error instanceof multer.MulterError) {
-      if (error.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: 'Profile picture must be less than 5MB' });
-      }
-      return res.status(400).json({ error: error.message });
-    }
-
-    return res.status(400).json({ error: error.message || 'Avatar upload failed' });
-  });
+type UploadMiddlewareConfig = {
+  fieldName: string;
+  maxFileSizeMB: number;
+  invalidTypeMessage: string;
+  sizeExceededMessage: string;
+  genericErrorMessage: string;
+  isAllowedFile: (file: Express.Multer.File) => boolean;
 };
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const createSingleFileUploadMiddleware = (config: UploadMiddlewareConfig) => {
+  const uploader = multer({
+    storage,
+    limits: { fileSize: config.maxFileSizeMB * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+      if (!config.isAllowedFile(file as Express.Multer.File)) {
+        return cb(new Error(config.invalidTypeMessage));
+      }
+      cb(null, true);
+    },
+  });
+
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    uploader.single(config.fieldName)(req, res, (error: any) => {
+      if (!error) {
+        return next();
+      }
+
+      if (error instanceof multer.MulterError) {
+        if (error.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({ error: config.sizeExceededMessage });
+        }
+        return res.status(400).json({ error: error.message });
+      }
+
+      return res.status(400).json({ error: error.message || config.genericErrorMessage });
+    });
+  };
+};
+
+const isImageUpload = (file: Express.Multer.File): boolean => {
+  return ['image/png', 'image/jpeg', 'image/webp', 'image/jpg'].includes(file.mimetype);
+};
+
+const isVideoUpload = (file: Express.Multer.File): boolean => {
+  if (file.mimetype.startsWith('video/')) {
+    return true;
+  }
+
+  const extension = path.extname(file.originalname).toLowerCase();
+  return ['.mp4', '.webm', '.ogg', '.mov', '.m4v'].includes(extension);
+};
+
+const isResourceUpload = (file: Express.Multer.File): boolean => {
+  const allowedMimeTypes = new Set([
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'text/plain',
+    'text/csv',
+    'application/zip',
+    'application/x-zip-compressed',
+    'application/vnd.rar',
+    'application/x-rar-compressed',
+  ]);
+
+  if (allowedMimeTypes.has(file.mimetype)) {
+    return true;
+  }
+
+  const extension = path.extname(file.originalname).toLowerCase();
+  return [
+    '.pdf',
+    '.doc',
+    '.docx',
+    '.ppt',
+    '.pptx',
+    '.xls',
+    '.xlsx',
+    '.txt',
+    '.csv',
+    '.zip',
+    '.rar',
+  ].includes(extension);
+};
+
+const handleAvatarUpload = createSingleFileUploadMiddleware({
+  fieldName: 'avatar',
+  maxFileSizeMB: 5,
+  invalidTypeMessage: 'Only PNG, JPG, and WEBP files are allowed for profile pictures.',
+  sizeExceededMessage: 'Profile picture must be less than 5MB.',
+  genericErrorMessage: 'Avatar upload failed.',
+  isAllowedFile: isImageUpload,
+});
+
+const handleCourseThumbnailUpload = createSingleFileUploadMiddleware({
+  fieldName: 'thumbnail',
+  maxFileSizeMB: 8,
+  invalidTypeMessage: 'Only PNG, JPG, and WEBP image files are allowed for course thumbnails.',
+  sizeExceededMessage: 'Course thumbnail must be less than 8MB.',
+  genericErrorMessage: 'Course thumbnail upload failed.',
+  isAllowedFile: isImageUpload,
+});
+
+const handleCourseVideoUpload = createSingleFileUploadMiddleware({
+  fieldName: 'video',
+  maxFileSizeMB: 500,
+  invalidTypeMessage: 'Only video files are allowed for module video uploads.',
+  sizeExceededMessage: 'Module video must be less than 500MB.',
+  genericErrorMessage: 'Course video upload failed.',
+  isAllowedFile: isVideoUpload,
+});
+
+const handleCourseResourceUpload = createSingleFileUploadMiddleware({
+  fieldName: 'resource',
+  maxFileSizeMB: 50,
+  invalidTypeMessage: 'Unsupported resource file type. Upload PDF, DOC/DOCX, PPT/PPTX, XLS/XLSX, TXT, CSV, ZIP, or RAR files.',
+  sizeExceededMessage: 'Module resource file must be less than 50MB.',
+  genericErrorMessage: 'Course resource upload failed.',
+  isAllowedFile: isResourceUpload,
+});
+
+const toUploadPublicPath = (filePath: string): string => {
+  return `/uploads/${path.basename(filePath)}`;
+};
 
 const resolveStoredAvatarPath = (storedAvatar?: string): string | null => {
   if (!storedAvatar) {
@@ -235,6 +336,94 @@ const resolveCourseIsFree = (value: unknown, fallbackPrice: number): boolean => 
     return value;
   }
   return fallbackPrice <= 0;
+};
+
+type NormalizedCourseModuleResource = {
+  name: string;
+  url: string;
+};
+
+type NormalizedCourseModule = {
+  id: string;
+  title: string;
+  videoUrl: string;
+  resources: NormalizedCourseModuleResource[];
+};
+
+const isLikelyResourceUrl = (value: string): boolean => {
+  return /^https?:\/\//i.test(value) || value.startsWith('/uploads/') || value.startsWith('./') || value.startsWith('../');
+};
+
+const getResourceNameFromUrl = (value: string, fallback = 'Resource'): string => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+
+  try {
+    if (/^https?:\/\//i.test(trimmed)) {
+      const parsed = new URL(trimmed);
+      const urlFileName = decodeURIComponent(path.basename(parsed.pathname));
+      if (urlFileName) {
+        return urlFileName;
+      }
+    }
+  } catch {
+    // Fall back to non-URL parsing.
+  }
+
+  const localFileName = decodeURIComponent(path.basename(trimmed.split('?')[0].split('#')[0]));
+  return localFileName || fallback;
+};
+
+const normalizeCourseModuleResource = (
+  resource: any,
+  resourceIndex: number
+): NormalizedCourseModuleResource | null => {
+  if (typeof resource === 'string') {
+    const value = resource.trim();
+    if (!value) {
+      return null;
+    }
+
+    return {
+      name: isLikelyResourceUrl(value) ? getResourceNameFromUrl(value, `Resource ${resourceIndex + 1}`) : value,
+      url: value,
+    };
+  }
+
+  const url = String(resource?.url ?? resource?.path ?? '').trim();
+  if (!url) {
+    return null;
+  }
+
+  const name = String(resource?.name ?? '').trim() || getResourceNameFromUrl(url, `Resource ${resourceIndex + 1}`);
+  return { name, url };
+};
+
+const normalizeCourseModules = (modules: any): NormalizedCourseModule[] => {
+  if (!Array.isArray(modules)) {
+    return [];
+  }
+
+  return modules
+    .map((module: any) => ({
+      id: String(module?.id || createEntityId()).trim() || createEntityId(),
+      title: String(module?.title || '').trim(),
+      videoUrl: String(module?.videoUrl || '').trim(),
+      resources: (Array.isArray(module?.resources) ? module.resources : [])
+        .map((resource: any, resourceIndex: number) => normalizeCourseModuleResource(resource, resourceIndex))
+        .filter((resource: NormalizedCourseModuleResource | null): resource is NormalizedCourseModuleResource => Boolean(resource)),
+    }))
+    .filter((module: NormalizedCourseModule) => module.title && module.videoUrl);
+};
+
+const normalizeCourseForResponse = (course: any) => {
+  const plainCourse = typeof course?.toObject === 'function' ? course.toObject() : course;
+  return {
+    ...plainCourse,
+    modules: normalizeCourseModules(plainCourse?.modules),
+  };
 };
 
 const isStoredAvatarFilePath = (avatar?: string): avatar is string => {
@@ -423,6 +612,61 @@ async function startServer() {
 
   app.use(express.json());
   app.use(cors());
+  app.use('/uploads', express.static(UPLOADS_DIR));
+
+  app.post('/api/uploads/course-thumbnail', handleCourseThumbnailUpload, async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No thumbnail file was uploaded.' });
+      }
+
+      res.json({
+        path: toUploadPublicPath(req.file.path),
+        originalName: req.file.originalname,
+        size: req.file.size,
+        mimeType: req.file.mimetype,
+      });
+    } catch (error) {
+      console.error('Course thumbnail upload error:', error);
+      res.status(500).json({ error: 'Failed to upload course thumbnail.' });
+    }
+  });
+
+  app.post('/api/uploads/course-video', handleCourseVideoUpload, async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No video file was uploaded.' });
+      }
+
+      res.json({
+        path: toUploadPublicPath(req.file.path),
+        originalName: req.file.originalname,
+        size: req.file.size,
+        mimeType: req.file.mimetype,
+      });
+    } catch (error) {
+      console.error('Course video upload error:', error);
+      res.status(500).json({ error: 'Failed to upload course video.' });
+    }
+  });
+
+  app.post('/api/uploads/course-resource', handleCourseResourceUpload, async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No resource file was uploaded.' });
+      }
+
+      res.json({
+        path: toUploadPublicPath(req.file.path),
+        originalName: req.file.originalname,
+        size: req.file.size,
+        mimeType: req.file.mimetype,
+      });
+    } catch (error) {
+      console.error('Course resource upload error:', error);
+      res.status(500).json({ error: 'Failed to upload course resource file.' });
+    }
+  });
 
   // Auth APIs
   app.post("/api/auth/signup", async (req, res) => {
@@ -759,7 +1003,7 @@ async function startServer() {
       const tutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
       const query = tutorId ? { tutorId } : {};
       const courses = await Course.find(query);
-      res.json(courses);
+      res.json(courses.map((course) => normalizeCourseForResponse(course)));
     } catch (error) {
       console.error("Get courses error:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -770,7 +1014,7 @@ async function startServer() {
     try {
       const course = await Course.findOne({ id: req.params.id });
       if (course) {
-        res.json(course);
+        res.json(normalizeCourseForResponse(course));
       } else {
         res.status(404).json({ error: "Course not found" });
       }
@@ -793,18 +1037,7 @@ async function startServer() {
         return res.status(400).json({ error: "Invalid tutorId. Tutor account not found." });
       }
 
-      const modules = Array.isArray(courseData.modules)
-        ? courseData.modules
-            .map((module: any) => ({
-              id: module?.id || createEntityId(),
-              title: String(module?.title || '').trim(),
-              videoUrl: String(module?.videoUrl || '').trim(),
-              resources: Array.isArray(module?.resources)
-                ? module.resources.map((resource: any) => String(resource).trim()).filter(Boolean)
-                : [],
-            }))
-            .filter((module: any) => module.title && module.videoUrl)
-        : [];
+      const modules = normalizeCourseModules(courseData.modules);
 
       if (modules.length === 0) {
         return res.status(400).json({ error: "At least one video module is required." });
@@ -828,7 +1061,7 @@ async function startServer() {
         enrolledStudents: Array.isArray(courseData.enrolledStudents) ? courseData.enrolledStudents : [],
       });
       await course.save();
-      res.json(course);
+      res.json(normalizeCourseForResponse(course));
     } catch (error) {
       console.error("Create course error:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -873,16 +1106,7 @@ async function startServer() {
       updatePayload.price = nextIsFree ? 0 : nextPrice;
 
       if (Array.isArray(updatePayload.modules)) {
-        const normalizedModules = updatePayload.modules
-          .map((module: any) => ({
-            id: module?.id || createEntityId(),
-            title: String(module?.title || '').trim(),
-            videoUrl: String(module?.videoUrl || '').trim(),
-            resources: Array.isArray(module?.resources)
-              ? module.resources.map((resource: any) => String(resource).trim()).filter(Boolean)
-              : [],
-          }))
-          .filter((module: any) => module.title && module.videoUrl);
+        const normalizedModules = normalizeCourseModules(updatePayload.modules);
 
         if (normalizedModules.length === 0) {
           return res.status(400).json({ error: "At least one video module is required." });
@@ -897,7 +1121,7 @@ async function startServer() {
         { new: true }
       );
       if (course) {
-        res.json(course);
+        res.json(normalizeCourseForResponse(course));
       } else {
         res.status(404).json({ error: "Course not found" });
       }
@@ -984,7 +1208,7 @@ async function startServer() {
       }
 
       if (course) {
-        res.json(course);
+        res.json(normalizeCourseForResponse(course));
       } else {
         res.status(404).json({ error: "Course not found" });
       }

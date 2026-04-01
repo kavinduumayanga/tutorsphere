@@ -96,10 +96,30 @@ export const MOCK_COURSES: Course[] = [
     price: 0,
     thumbnail: 'https://picsum.photos/seed/react/400/250',
     modules: [
-      { id: 'm1', title: 'Introduction to React', videoUrl: '#', resources: ['Notes.pdf'] },
-      { id: 'm2', title: 'State Management', videoUrl: '#', resources: ['State.pdf'] },
-      { id: 'm3', title: 'Advanced Hooks and Context API', videoUrl: '#', resources: ['Hooks.pdf'] },
-      { id: 'm4', title: 'Testing React Applications', videoUrl: '#', resources: ['Testing.pdf'] }
+      {
+        id: 'm1',
+        title: 'Introduction to React',
+        videoUrl: '#',
+        resources: [{ name: 'Notes.pdf', url: '#' }],
+      },
+      {
+        id: 'm2',
+        title: 'State Management',
+        videoUrl: '#',
+        resources: [{ name: 'State.pdf', url: '#' }],
+      },
+      {
+        id: 'm3',
+        title: 'Advanced Hooks and Context API',
+        videoUrl: '#',
+        resources: [{ name: 'Hooks.pdf', url: '#' }],
+      },
+      {
+        id: 'm4',
+        title: 'Testing React Applications',
+        videoUrl: '#',
+        resources: [{ name: 'Testing.pdf', url: '#' }],
+      },
     ],
     enrolledStudents: ['s1']
   },
@@ -113,7 +133,12 @@ export const MOCK_COURSES: Course[] = [
     price: 0,
     thumbnail: 'https://picsum.photos/seed/math/400/250',
     modules: [
-      { id: 'm1', title: 'Calculus Basics', videoUrl: '#', resources: ['Calculus.pdf'] }
+      {
+        id: 'm1',
+        title: 'Calculus Basics',
+        videoUrl: '#',
+        resources: [{ name: 'Calculus.pdf', url: '#' }],
+      },
     ],
     enrolledStudents: []
   }

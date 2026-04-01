@@ -855,6 +855,7 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
             onClose={() => setPreviewCourse(null)}
             onEnroll={onEnrollCourse}
             onContinue={onOpenCourseLearning}
+            onViewCertificate={onViewCertificate}
           />
         )}
       </AnimatePresence>

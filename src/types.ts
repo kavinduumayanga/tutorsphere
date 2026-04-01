@@ -64,11 +64,16 @@ export interface Course {
   enrolledStudents: string[];
 }
 
+export interface CourseModuleResource {
+  name: string;
+  url: string;
+}
+
 export interface CourseModule {
   id: string;
   title: string;
   videoUrl: string;
-  resources: string[];
+  resources: CourseModuleResource[];
 }
 
 export interface CourseEnrollment {

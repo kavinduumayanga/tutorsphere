@@ -339,6 +339,12 @@ class ApiService {
     });
   }
 
+  async deleteUser(id: string): Promise<{ message: string }> {
+    return this.request(`/auth/user/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
   // Tutor methods
   async getTutors(): Promise<Tutor[]> {
     const tutors = await this.request<any[]>('/tutors');

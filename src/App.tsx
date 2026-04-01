@@ -262,6 +262,7 @@ export default function App() {
     bio: ''
   });
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [activeBookingActionId, setActiveBookingActionId] = useState<string | null>(null);
 
   // Courses browsing state
@@ -1728,6 +1729,73 @@ export default function App() {
     setAuthMode('login');
     setShowAuthModal(true);
     setActiveTab('home');
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!currentUser) {
+      return;
+    }
+
+    const confirmed = confirm('Delete your account permanently? This will remove your profile and related data. This action cannot be undone.');
+    if (!confirmed) {
+      return;
+    }
+
+    const confirmationInput = prompt('Type DELETE to confirm account deletion:');
+    if (confirmationInput !== 'DELETE') {
+      alert('Account deletion cancelled.');
+      return;
+    }
+
+    const deletedUser = currentUser;
+    setIsDeletingAccount(true);
+
+    try {
+      await apiService.deleteUser(deletedUser.id);
+
+      setTutors((prevTutors) => prevTutors.filter((tutor) => tutor.id !== deletedUser.id));
+
+      setCourses((prevCourses) =>
+        deletedUser.role === 'tutor'
+          ? prevCourses.filter((course) => course.tutorId !== deletedUser.id)
+          : prevCourses.map((course) => ({
+            ...course,
+            enrolledStudents: course.enrolledStudents.filter((studentId) => studentId !== deletedUser.id),
+          }))
+      );
+
+      if (deletedUser.role === 'tutor') {
+        setResources((prevResources) => prevResources.filter((resource) => resource.tutorId !== deletedUser.id));
+      }
+
+      setAllReviews((prevReviews) =>
+        prevReviews.filter(
+          (review) => review.tutorId !== deletedUser.id && review.studentId !== deletedUser.id
+        )
+      );
+
+      setBookings([]);
+      setReviews([]);
+      setQuestions([]);
+      setCourseEnrollments([]);
+      setUserCourses([]);
+
+      localStorage.removeItem('session');
+      setCurrentUser(null);
+      setActiveLearningCourseId(null);
+      setIsUserMenuOpen(false);
+      setShowAuthModal(false);
+      setAuthMode('login');
+      setActiveTab('home');
+
+      alert('Your account was deleted successfully.');
+    } catch (error) {
+      console.error('Failed to delete account:', error);
+      const message = error instanceof Error ? error.message : 'Failed to delete account. Please try again.';
+      alert(message);
+    } finally {
+      setIsDeletingAccount(false);
+    }
   };
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3699,6 +3767,25 @@ export default function App() {
                     )}
                   </button>
                 </div>
+
+                {/* Danger Zone */}
+                <div className="bg-rose-50/60 border border-rose-200 rounded-[2rem] p-6 md:p-7">
+                  <h3 className="text-xl font-black text-rose-700 mb-2">Danger Zone</h3>
+                  <p className="text-sm text-rose-700/90 mb-5">
+                    Deleting your account is permanent and cannot be undone.
+                    {currentUser.role === 'tutor'
+                      ? ' Your tutor profile and learning content records will be removed.'
+                      : ' Your bookings and learning records will be removed.'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleDeleteAccount}
+                    disabled={isDeletingAccount || isUpdatingProfile}
+                    className="px-6 py-3 rounded-2xl font-black text-sm uppercase tracking-widest bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60 disabled:cursor-not-allowed transition-all"
+                  >
+                    {isDeletingAccount ? 'Deleting Account...' : 'Delete Account'}
+                  </button>
+                </div>
               </form>
             </div>
           )}
@@ -4672,6 +4759,25 @@ export default function App() {
                         <Check className="w-5 h-5" />
                       </>
                     )}
+                  </button>
+                </div>
+
+                {/* Danger Zone */}
+                <div className="bg-rose-50/60 border border-rose-200 rounded-[2rem] p-6 md:p-7">
+                  <h3 className="text-xl font-black text-rose-700 mb-2">Danger Zone</h3>
+                  <p className="text-sm text-rose-700/90 mb-5">
+                    Deleting your account is permanent and cannot be undone.
+                    {currentUser.role === 'tutor'
+                      ? ' Your tutor profile and learning content records will be removed.'
+                      : ' Your bookings and learning records will be removed.'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleDeleteAccount}
+                    disabled={isDeletingAccount || isUpdatingProfile}
+                    className="px-6 py-3 rounded-2xl font-black text-sm uppercase tracking-widest bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60 disabled:cursor-not-allowed transition-all"
+                  >
+                    {isDeletingAccount ? 'Deleting Account...' : 'Delete Account'}
                   </button>
                 </div>
               </form>

@@ -813,6 +813,65 @@ async function startServer() {
     }
   });
 
+  app.delete("/api/auth/user/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const user = await User.findOne({ id });
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const avatarPath = resolveStoredAvatarPath(user.avatar);
+
+      // Remove role-specific data first to keep dangling references out of the app.
+      if (user.role === 'tutor') {
+        const tutorCourses = await Course.find({ tutorId: id }, { id: 1 });
+        const tutorCourseIds = tutorCourses.map((course) => course.id);
+
+        if (tutorCourseIds.length > 0) {
+          await CourseEnrollment.deleteMany({ courseId: { $in: tutorCourseIds } });
+        }
+
+        await Course.deleteMany({ tutorId: id });
+        await Resource.deleteMany({ tutorId: id });
+        await Booking.deleteMany({ tutorId: id });
+        await Review.deleteMany({ tutorId: id });
+      } else {
+        await Booking.deleteMany({ studentId: id });
+        await Review.deleteMany({ studentId: id });
+        await Question.deleteMany({ studentId: id });
+        await CourseEnrollment.deleteMany({ studentId: id });
+        await Course.updateMany(
+          { enrolledStudents: id },
+          { $pull: { enrolledStudents: id } }
+        );
+        await StudyPlan.deleteMany({ studentId: id });
+        await SkillLevel.deleteMany({ studentId: id });
+      }
+
+      // Remove tutor profile if one exists (safe no-op for students).
+      await Tutor.deleteMany({ id });
+      await User.deleteOne({ id });
+
+      if (avatarPath) {
+        try {
+          await fs.unlink(avatarPath);
+        } catch (deleteError) {
+          const err = deleteError as NodeJS.ErrnoException;
+          if (err.code !== 'ENOENT') {
+            console.warn('Failed to remove avatar during account deletion:', avatarPath, deleteError);
+          }
+        }
+      }
+
+      res.json({ message: "Account deleted successfully" });
+    } catch (error) {
+      console.error("Delete user account error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   app.get("/api/auth/user/:id/avatar", async (req, res) => {
     try {
       const { id } = req.params;

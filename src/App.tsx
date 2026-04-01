@@ -7,19 +7,19 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactCrop, { Crop, PixelCrop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
-import { 
-  BookOpen, 
-  Search, 
-  Calendar, 
-  MessageSquare, 
-  Lock, 
+import {
+  BookOpen,
+  Search,
+  Calendar,
+  MessageSquare,
+  Lock,
   Mail,
   MapPin,
   Phone,
-  User, 
-  GraduationCap, 
-  CheckCircle, 
-  X, 
+  User,
+  GraduationCap,
+  CheckCircle,
+  X,
   Video,
   Star,
   Clock,
@@ -63,6 +63,7 @@ import { TutorCourseManagePage } from './components/pages/TutorCourseManagePage'
 import { TutorResourceManagePage } from './components/pages/TutorResourceManagePage';
 import { StudentResourceLibraryPage } from './components/pages/StudentResourceLibraryPage';
 import { ToastProvider } from './components/common/Toast';
+import { QuizChatbotPage } from './components/pages/QuizChatbotPage';
 
 const STEM_SUBJECTS = ['Maths', 'Science', 'Engineering', 'Tech', 'ICT'];
 
@@ -97,6 +98,7 @@ const getAllowedTabs = (user: AppUser | null): Tab[] => {
       'tutors',
       'courses',
       'resources',
+      'quizzes',
       'registerSelect',
       'registerStudent',
       'registerTutor',
@@ -105,11 +107,11 @@ const getAllowedTabs = (user: AppUser | null): Tab[] => {
   }
 
   if (user.role === 'student') {
-    return ['home', 'tutors', 'questions', 'courses', 'resources', 'dashboard', 'settings', 'about'];
+    return ['home', 'tutors', 'questions', 'courses', 'resources', 'quizzes', 'dashboard', 'settings', 'about'];
   }
 
   if (user.role === 'tutor') {
-    return ['home', 'dashboard', 'manageAvailability', 'register', 'courses', 'resources', 'settings', 'about'];
+    return ['home', 'dashboard', 'manageAvailability', 'register', 'courses', 'resources', 'quizzes', 'settings', 'about'];
   }
 
   return ['home', 'about'];
@@ -241,9 +243,9 @@ export default function App() {
   const [authData, setAuthData] = useState({ email: '', password: '', firstName: '', lastName: '', confirmPassword: '', role: 'student' as 'student' | 'tutor' });
 
   // Profile Update State
-  const [profileData, setProfileData] = useState({ 
-    firstName: '', 
-    lastName: '', 
+  const [profileData, setProfileData] = useState({
+    firstName: '',
+    lastName: '',
     phone: '',
     education: '',
     subjects: [] as string[],
@@ -268,7 +270,7 @@ export default function App() {
   const [completedCrop, setCompletedCrop] = useState<PixelCrop | null>(null);
   const cropImageRef = useRef<HTMLImageElement | null>(null);
 
-  const [certificateModalData, setCertificateModalData] = useState<{enrollment: CourseEnrollment, courseTitle: string} | null>(null);
+  const [certificateModalData, setCertificateModalData] = useState<{ enrollment: CourseEnrollment, courseTitle: string } | null>(null);
 
   // Load user and activeTab from localStorage on app start
   useEffect(() => {
@@ -344,7 +346,7 @@ export default function App() {
     bio: ''
   });
   const [isValidating, setIsValidating] = useState(false);
-  const [validationResult, setValidationResult] = useState<{isValid: boolean, reason: string} | null>(null);
+  const [validationResult, setValidationResult] = useState<{ isValid: boolean, reason: string } | null>(null);
 
   // Question State
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -403,7 +405,7 @@ export default function App() {
 
   // Chatbot State
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState<{role: 'user' | 'bot', text: string, audio?: string}[]>([
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'bot', text: string, audio?: string }[]>([
     { role: 'bot', text: 'Hello! I am your TutorSphere assistant. How can I help you today? You can ask me to find a tutor, suggest a course, or even start a quiz!' }
   ]);
   const [chatInput, setChatInput] = useState('');
@@ -595,7 +597,7 @@ export default function App() {
     count: currentTutor?.availability?.filter((slot) => slot.day === day).length || 0,
   }));
   const availableTabs = getAllowedTabs(currentUser);
-  const primaryNavTabs: Tab[] = ['home', 'tutors', 'courses', 'resources'];
+  const primaryNavTabs: Tab[] = ['home', 'tutors', 'courses', 'resources', 'quizzes'];
   const navTabs = currentUser ? availableTabs.filter(tab => primaryNavTabs.includes(tab)) : primaryNavTabs;
   const canUseChatbot = (!currentUser || isStudent) && activeTab === 'home';
 
@@ -788,7 +790,7 @@ export default function App() {
     if (currentUser) {
       const isTutorUser = currentUser.role === 'tutor';
       const tutorDoc = isTutorUser ? currentTutor : null;
-      
+
       setProfileData({
         firstName: currentUser.firstName,
         lastName: currentUser.lastName,
@@ -917,7 +919,7 @@ export default function App() {
     const userMsg = chatInput;
     setChatMessages(prev => [...prev, { role: 'user', text: userMsg }]);
     setChatInput('');
-    
+
     // Check for quiz trigger in user message
     if (userMsg.toLowerCase().includes('quiz') || userMsg.toLowerCase().includes('test')) {
       const subject = STEM_SUBJECTS.find(s => userMsg.toLowerCase().includes(s.toLowerCase())) || 'Mathematics';
@@ -1013,19 +1015,19 @@ export default function App() {
 
     try {
       await apiService.unenrollFromCourse(courseId, currentUser.id);
-      
+
       setUserCourses(prev => prev.filter(id => id !== courseId));
       setCourseEnrollments(prev => prev.filter(e => e.courseId !== courseId));
-      
+
       if (activeLearningCourseId === courseId) {
         setActiveLearningCourseId(null);
         setActiveVideoModuleId(null);
         setActiveTab('courses');
       }
-      
+
       // Update courses list lightly to reflect immediate unenroll state if needed
-      setCourses(prev => prev.map(c => 
-        c.id === courseId 
+      setCourses(prev => prev.map(c =>
+        c.id === courseId
           ? { ...c, enrolledStudents: c.enrolledStudents.filter(s => s !== currentUser.id) }
           : c
       ));
@@ -1746,7 +1748,7 @@ export default function App() {
         const tutorId = currentTutor?.id || currentUser.id;
         const hasSubjects = profileData.subjects.length > 0;
         const validTeachingLevel = profileData.teachingLevel === 'School' || profileData.teachingLevel === 'University' || profileData.teachingLevel === 'Both';
-        
+
         if (!hasSubjects || !validTeachingLevel || !profileData.education.trim()) {
           alert('Tutor profiles require Education, Subject(s), and Teaching Level.');
           setIsUpdatingProfile(false);
@@ -1760,7 +1762,7 @@ export default function App() {
           pricePerHour: profileData.pricePerHour,
           bio: profileData.bio
         });
-        
+
         const tutorsData = await apiService.getTutors();
         setTutors(tutorsData);
       }
@@ -1937,14 +1939,14 @@ export default function App() {
             <div className="flex items-center gap-3 shrink-0">
               {!currentUser ? (
                 <>
-                  <button 
-                    onClick={() => {setAuthMode('login'); setShowAuthModal(true)}} 
+                  <button
+                    onClick={() => { setAuthMode('login'); setShowAuthModal(true) }}
                     className="w-[100px] border border-indigo-200 text-indigo-600 hover:bg-indigo-50 py-2 rounded-full text-sm font-bold transition-all whitespace-nowrap text-center"
                   >
                     Login
                   </button>
-                  <button 
-                    onClick={() => setActiveTab('registerSelect')} 
+                  <button
+                    onClick={() => setActiveTab('registerSelect')}
                     className="w-[100px] bg-indigo-600 text-white py-2 rounded-full text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 whitespace-nowrap text-center"
                   >
                     Sign Up
@@ -1952,24 +1954,24 @@ export default function App() {
                 </>
               ) : (
                 <div className="relative user-menu">
-                  <button 
+                  <button
                     onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
                     className="flex items-center gap-2 text-sm font-bold text-indigo-700 bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100 hover:bg-indigo-100 transition-colors whitespace-nowrap"
                   >
                     <User className="w-4 h-4" /> {currentUser.firstName} {currentUser.lastName}
                   </button>
-                  
+
                   {isUserMenuOpen && (
                     <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-lg border border-slate-200 py-2 z-50">
-                      <button 
-                        onClick={() => {setActiveTab('dashboard'); setIsUserMenuOpen(false)}}
+                      <button
+                        onClick={() => { setActiveTab('dashboard'); setIsUserMenuOpen(false) }}
                         className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
                       >
                         <User className="w-4 h-4" />
                         Dashboard
                       </button>
                       {isTutor && currentTutor && (
-                        <button 
+                        <button
                           onClick={() => {
                             setViewingTutorId(currentTutor.id);
                             setActiveTab('tutorProfile');
@@ -1983,8 +1985,8 @@ export default function App() {
                           My Profile
                         </button>
                       )}
-                      <button 
-                        onClick={() => {setActiveTab('settings'); setIsUserMenuOpen(false)}}
+                      <button
+                        onClick={() => { setActiveTab('settings'); setIsUserMenuOpen(false) }}
                         className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1993,7 +1995,7 @@ export default function App() {
                         </svg>
                         Settings
                       </button>
-                      <button 
+                      <button
                         onClick={handleSignOut}
                         className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-red-50 hover:text-red-600 flex items-center gap-2"
                       >
@@ -2013,276 +2015,200 @@ export default function App() {
 
       {/* Course Learning Page - Full Width */}
       {activeTab === 'courseLearning' && (() => {
-          // Defensive render - ensure we have required data
-          if (!activeLearningCourseId) {
-            return (
-              <div className="min-h-screen w-full flex items-center justify-center bg-slate-50">
-                <div className="text-center space-y-4 p-8">
-                  <div className="w-12 h-12 rounded-full bg-red-200 mx-auto" />
-                  <h2 className="text-lg font-semibold text-slate-900">No Course Selected</h2>
-                  <p className="text-sm text-slate-600">Please select a course to begin learning.</p>
-                  <button
-                    onClick={() => setActiveTab('courses')}
-                    className="mt-4 px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors text-sm font-medium"
-                  >
-                    Back to Courses
-                  </button>
-                </div>
-              </div>
-            );
-          }
-
-          if (!activeLearningCourse) {
-            return (
-              <div className="min-h-screen w-full flex items-center justify-center bg-slate-50">
-                <div className="text-center space-y-4 p-8">
-                  <div className="w-12 h-12 rounded-full bg-slate-200 animate-pulse mx-auto" />
-                  <h2 className="text-lg font-semibold text-slate-900">Loading Course...</h2>
-                  <p className="text-sm text-slate-600">Please wait while we load your course content.</p>
-                  <button
-                    onClick={() => {
-                      setActiveLearningCourseId(null);
-                      setActiveVideoModuleId(null);
-                      setActiveTab('courses');
-                    }}
-                    className="mt-4 px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors text-sm font-medium"
-                  >
-                    Back to Courses
-                  </button>
-                </div>
-              </div>
-            );
-          }
-
-          // Validate course has required properties
-          if (!activeLearningCourse.modules || activeLearningCourse.modules.length === 0) {
-            return (
-              <div className="min-h-screen w-full flex items-center justify-center bg-slate-50">
-                <div className="text-center space-y-4 p-8">
-                  <div className="w-12 h-12 rounded-full bg-amber-200 mx-auto" />
-                  <h2 className="text-lg font-semibold text-slate-900">No Modules Available</h2>
-                  <p className="text-sm text-slate-600">This course has no learning modules yet.</p>
-                  <button
-                    onClick={() => {
-                      setActiveLearningCourseId(null);
-                      setActiveVideoModuleId(null);
-                      setActiveTab('courses');
-                    }}
-                    className="mt-4 px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors text-sm font-medium"
-                  >
-                    Back to Courses
-                  </button>
-                </div>
-              </div>
-            );
-          }
-
-          const currentModule = activeLearningCourse.modules.find(m => m.id === activeVideoModuleId) || activeLearningCourse.modules[0];
-          const currentModuleIndex = currentModule ? activeLearningCourse.modules.findIndex(m => m.id === currentModule.id) : 0;
-          const embedUrl = currentModule ? getEmbeddableVideoUrl(currentModule.videoUrl) : null;
-          const directVideoFile = currentModule ? isDirectVideoFile(currentModule.videoUrl) : false;
-          const isCurrentModuleCompleted = currentModule ? activeLearningCompletedSet.has(currentModule.id) : false;
-          const hasNextModule = currentModuleIndex < activeLearningCourse.modules.length - 1;
-          const hasPrevModule = currentModuleIndex > 0;
-          const courseTutor = tutors.find(t => t.id === activeLearningCourse.tutorId);
-
+        // Defensive render - ensure we have required data
+        if (!activeLearningCourseId) {
           return (
-            <div className="w-full min-h-screen bg-white flex flex-col">
-              {/* Top Learning Header - Sticky & Clean */}
-              <div className="sticky top-0 z-40 bg-gradient-to-b from-white via-white to-white/90 border-b border-slate-200/50 shadow-sm backdrop-blur-sm flex-shrink-0">
-                <div className="w-full px-4 sm:px-6 lg:px-8">
-                  <div className="py-4 space-y-4">
-                    {/* Header Top Row */}
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="flex items-center gap-3 flex-1 min-w-0">
-                        <button
-                          onClick={() => {
-                            setActiveLearningCourseId(null);
-                            setActiveVideoModuleId(null);
-                            setActiveTab('courses');
-                          }}
-                          className="flex-shrink-0 p-2 rounded-lg hover:bg-slate-100 transition-colors text-slate-600 hover:text-slate-900"
-                          title="Back to Courses"
-                        >
-                          <ArrowRight className="w-5 h-5 rotate-180" />
-                        </button>
-                        <div className="flex-1 min-w-0">
-                          <h2 className="text-lg font-black text-slate-900 truncate">{activeLearningCourse?.title || 'Course'}</h2>
-                          <p className="text-xs text-slate-500 font-semibold">Module {currentModuleIndex + 1} of {activeLearningCourse?.modules?.length || 0}</p>
-                        </div>
-                      </div>
+            <div className="min-h-screen w-full flex items-center justify-center bg-slate-50">
+              <div className="text-center space-y-4 p-8">
+                <div className="w-12 h-12 rounded-full bg-red-200 mx-auto" />
+                <h2 className="text-lg font-semibold text-slate-900">No Course Selected</h2>
+                <p className="text-sm text-slate-600">Please select a course to begin learning.</p>
+                <button
+                  onClick={() => setActiveTab('courses')}
+                  className="mt-4 px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors text-sm font-medium"
+                >
+                  Back to Courses
+                </button>
+              </div>
+            </div>
+          );
+        }
 
-                      {/* Progress Bar Quick View */}
-                      <div className="flex items-center gap-3 flex-shrink-0">
-                        <div className="flex flex-col items-end gap-1">
-                          <div className="flex items-center gap-2">
-                            <div className="w-24 h-2 rounded-full bg-slate-200 overflow-hidden">
-                              <div className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full transition-all duration-500" style={{ width: `${activeLearningProgress}%` }} />
-                            </div>
-                            <span className="text-sm font-bold text-indigo-600 w-8 text-right">{activeLearningProgress || 0}%</span>
+        if (!activeLearningCourse) {
+          return (
+            <div className="min-h-screen w-full flex items-center justify-center bg-slate-50">
+              <div className="text-center space-y-4 p-8">
+                <div className="w-12 h-12 rounded-full bg-slate-200 animate-pulse mx-auto" />
+                <h2 className="text-lg font-semibold text-slate-900">Loading Course...</h2>
+                <p className="text-sm text-slate-600">Please wait while we load your course content.</p>
+                <button
+                  onClick={() => {
+                    setActiveLearningCourseId(null);
+                    setActiveVideoModuleId(null);
+                    setActiveTab('courses');
+                  }}
+                  className="mt-4 px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors text-sm font-medium"
+                >
+                  Back to Courses
+                </button>
+              </div>
+            </div>
+          );
+        }
+
+        // Validate course has required properties
+        if (!activeLearningCourse.modules || activeLearningCourse.modules.length === 0) {
+          return (
+            <div className="min-h-screen w-full flex items-center justify-center bg-slate-50">
+              <div className="text-center space-y-4 p-8">
+                <div className="w-12 h-12 rounded-full bg-amber-200 mx-auto" />
+                <h2 className="text-lg font-semibold text-slate-900">No Modules Available</h2>
+                <p className="text-sm text-slate-600">This course has no learning modules yet.</p>
+                <button
+                  onClick={() => {
+                    setActiveLearningCourseId(null);
+                    setActiveVideoModuleId(null);
+                    setActiveTab('courses');
+                  }}
+                  className="mt-4 px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors text-sm font-medium"
+                >
+                  Back to Courses
+                </button>
+              </div>
+            </div>
+          );
+        }
+
+        const currentModule = activeLearningCourse.modules.find(m => m.id === activeVideoModuleId) || activeLearningCourse.modules[0];
+        const currentModuleIndex = currentModule ? activeLearningCourse.modules.findIndex(m => m.id === currentModule.id) : 0;
+        const embedUrl = currentModule ? getEmbeddableVideoUrl(currentModule.videoUrl) : null;
+        const directVideoFile = currentModule ? isDirectVideoFile(currentModule.videoUrl) : false;
+        const isCurrentModuleCompleted = currentModule ? activeLearningCompletedSet.has(currentModule.id) : false;
+        const hasNextModule = currentModuleIndex < activeLearningCourse.modules.length - 1;
+        const hasPrevModule = currentModuleIndex > 0;
+        const courseTutor = tutors.find(t => t.id === activeLearningCourse.tutorId);
+
+        return (
+          <div className="w-full min-h-screen bg-white flex flex-col">
+            {/* Top Learning Header - Sticky & Clean */}
+            <div className="sticky top-0 z-40 bg-gradient-to-b from-white via-white to-white/90 border-b border-slate-200/50 shadow-sm backdrop-blur-sm flex-shrink-0">
+              <div className="w-full px-4 sm:px-6 lg:px-8">
+                <div className="py-4 space-y-4">
+                  {/* Header Top Row */}
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <button
+                        onClick={() => {
+                          setActiveLearningCourseId(null);
+                          setActiveVideoModuleId(null);
+                          setActiveTab('courses');
+                        }}
+                        className="flex-shrink-0 p-2 rounded-lg hover:bg-slate-100 transition-colors text-slate-600 hover:text-slate-900"
+                        title="Back to Courses"
+                      >
+                        <ArrowRight className="w-5 h-5 rotate-180" />
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <h2 className="text-lg font-black text-slate-900 truncate">{activeLearningCourse?.title || 'Course'}</h2>
+                        <p className="text-xs text-slate-500 font-semibold">Module {currentModuleIndex + 1} of {activeLearningCourse?.modules?.length || 0}</p>
+                      </div>
+                    </div>
+
+                    {/* Progress Bar Quick View */}
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      <div className="flex flex-col items-end gap-1">
+                        <div className="flex items-center gap-2">
+                          <div className="w-24 h-2 rounded-full bg-slate-200 overflow-hidden">
+                            <div className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full transition-all duration-500" style={{ width: `${activeLearningProgress}%` }} />
                           </div>
-                          <span className="text-[10px] text-slate-400 font-semibold">{activeLearningCompletedSet.size}/{activeLearningCourse?.modules?.length || 0}</span>
+                          <span className="text-sm font-bold text-indigo-600 w-8 text-right">{activeLearningProgress || 0}%</span>
                         </div>
+                        <span className="text-[10px] text-slate-400 font-semibold">{activeLearningCompletedSet.size}/{activeLearningCourse?.modules?.length || 0}</span>
                       </div>
+                    </div>
 
-                      {/* Top Right Actions */}
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        {isStudent && (
-                          <button
-                            onClick={() => handleUnenrollCourse(activeLearningCourse.id)}
-                            className="p-2 rounded-lg hover:bg-rose-50 text-rose-600 hover:text-rose-700 transition-colors"
-                            title="Unenroll from course"
-                          >
-                            <X className="w-5 h-5" />
-                          </button>
-                        )}
-                      </div>
+                    {/* Top Right Actions */}
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {isStudent && (
+                        <button
+                          onClick={() => handleUnenrollCourse(activeLearningCourse.id)}
+                          className="p-2 rounded-lg hover:bg-rose-50 text-rose-600 hover:text-rose-700 transition-colors"
+                          title="Unenroll from course"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
               </div>
+            </div>
 
-              {/* Main Learning Content Grid */}
-              <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-4 gap-0 overflow-hidden">
-                
-                {/* Left: Video Player & Main Content (3 columns) */}
-                <div className="lg:col-span-3 bg-white border-r border-slate-200 overflow-y-auto">
-                  {currentModule ? (
-                    <div className="space-y-0">
-                      {/* Video Player Container */}
-                      <div className="relative bg-black aspect-video flex-col flex items-center justify-center group overflow-hidden">
-                        {directVideoFile ? (
-                          <>
-                            <video
-                              src={currentModule.videoUrl}
-                              ref={(video) => {
-                                videoRef.current = video;
-                                if (video) video.playbackRate = Number(playbackSpeed);
-                              }}
-                              className="w-full h-full object-contain cursor-pointer"
+            {/* Main Learning Content Grid */}
+            <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-4 gap-0 overflow-hidden">
+
+              {/* Left: Video Player & Main Content (3 columns) */}
+              <div className="lg:col-span-3 bg-white border-r border-slate-200 overflow-y-auto">
+                {currentModule ? (
+                  <div className="space-y-0">
+                    {/* Video Player Container */}
+                    <div className="relative bg-black aspect-video flex-col flex items-center justify-center group overflow-hidden">
+                      {directVideoFile ? (
+                        <>
+                          <video
+                            src={currentModule.videoUrl}
+                            ref={(video) => {
+                              videoRef.current = video;
+                              if (video) video.playbackRate = Number(playbackSpeed);
+                            }}
+                            className="w-full h-full object-contain cursor-pointer"
+                            onClick={() => {
+                              if (videoRef.current) {
+                                videoIsPlaying ? videoRef.current.pause() : videoRef.current.play();
+                                setVideoIsPlaying(!videoIsPlaying);
+                              }
+                            }}
+                            onPlay={() => setVideoIsPlaying(true)}
+                            onPause={() => setVideoIsPlaying(false)}
+                          />
+                          {!videoIsPlaying && (
+                            <button
                               onClick={() => {
-                                if (videoRef.current) {
-                                  videoIsPlaying ? videoRef.current.pause() : videoRef.current.play();
-                                  setVideoIsPlaying(!videoIsPlaying);
-                                }
+                                videoRef.current?.play();
+                                setVideoIsPlaying(true);
                               }}
-                              onPlay={() => setVideoIsPlaying(true)}
-                              onPause={() => setVideoIsPlaying(false)}
-                            />
-                            {!videoIsPlaying && (
-                              <button
-                                onClick={() => {
-                                  videoRef.current?.play();
-                                  setVideoIsPlaying(true);
-                                }}
-                                className="absolute inset-0 m-auto w-20 h-20 rounded-full bg-indigo-600/80 backdrop-blur flex items-center justify-center hover:bg-indigo-500 hover:scale-110 transition-all text-white border border-white/20 shadow-xl z-20"
-                              >
-                                <Play className="w-8 h-8 fill-current translate-x-1" />
-                              </button>
-                            )}
-                            <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/80 to-transparent flex items-center justify-between opacity-0 group-hover:opacity-100 transition-all duration-300 z-30">
-                              <div className="flex flex-col gap-2 w-full">
-                                <div className="flex items-center gap-4 text-white">
-                                  <button
-                                    onClick={() => {
-                                      const currentIndex = activeLearningCourse.modules.findIndex(m => m.id === currentModule.id);
-                                      if (currentIndex > 0) setActiveVideoModuleId(activeLearningCourse.modules[currentIndex - 1].id);
-                                    }}
-                                    disabled={activeLearningCourse.modules.findIndex(m => m.id === currentModule.id) === 0}
-                                    className="p-1 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-white"
-                                  >
-                                    <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      if (videoRef.current) {
-                                        videoIsPlaying ? videoRef.current.pause() : videoRef.current.play();
-                                        setVideoIsPlaying(!videoIsPlaying);
-                                      }
-                                    }}
-                                    className="w-10 h-10 flex items-center justify-center bg-indigo-600 rounded-full hover:bg-indigo-500 transition-colors"
-                                  >
-                                    {videoIsPlaying ? (
-                                      <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                                    ) : (
-                                      <Play className="w-4 h-4 fill-current translate-x-0.5" />
-                                    )}
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      const currentIndex = activeLearningCourse.modules.findIndex(m => m.id === currentModule.id);
-                                      if (currentIndex < activeLearningCourse.modules.length - 1) setActiveVideoModuleId(activeLearningCourse.modules[currentIndex + 1].id);
-                                    }}
-                                    disabled={activeLearningCourse.modules.findIndex(m => m.id === currentModule.id) === activeLearningCourse.modules.length - 1}
-                                    className="p-1 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-white"
-                                  >
-                                    <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
-                                  </button>
-                                  <div className="flex items-center gap-2 group/vol">
-                                    <button
-                                      onClick={() => {
-                                        setVideoMuted(!videoMuted);
-                                        if (videoRef.current) videoRef.current.muted = !videoMuted;
-                                      }}
-                                      className="p-1 hover:text-indigo-400"
-                                    >
-                                      {videoMuted || videoVolume === 0 ? (
-                                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path fillRule="evenodd" clipRule="evenodd" d="M11 5L6 9H2v6h4l5 4V5zm2 14v-2c2.28 0 4-1.72 4-4s-1.72-4-4-4V7c3.31 0 6 2.69 6 6s-2.69 6-6 6zM13 3v2c4.42 0 8 3.58 8 8s-3.58 8-8 8v2c5.52 0 10-4.48 10-10S18.52 3 13 3z"/></svg>
-                                      ) : (
-                                        <Volume2 className="w-5 h-5" />
-                                      )}
-                                    </button>
-                                    <input
-                                      type="range"
-                                      min="0" max="1" step="0.05"
-                                      value={videoMuted ? 0 : videoVolume}
-                                      onChange={(e) => {
-                                        const val = parseFloat(e.target.value);
-                                        setVideoVolume(val);
-                                        if (val > 0) setVideoMuted(false);
-                                        if (videoRef.current) {
-                                          videoRef.current.volume = val;
-                                          videoRef.current.muted = val === 0;
-                                        }
-                                      }}
-                                      className="w-0 opacity-0 group-hover/vol:w-20 group-hover/vol:opacity-100 transition-all duration-300 cursor-pointer accent-indigo-500"
-                                    />
-                                  </div>
-                                  <div className="flex-1"></div>
-                                  <select
-                                    value={playbackSpeed}
-                                    onChange={(e) => setPlaybackSpeed(e.target.value as any)}
-                                    className="bg-black/60 border border-white/30 text-white text-xs font-semibold rounded px-2 py-1 appearance-none outline-none cursor-pointer backdrop-blur"
-                                  >
-                                    <option value="0.75" className="bg-slate-900 text-white">0.75x</option>
-                                    <option value="1" className="bg-slate-900 text-white">1.0x</option>
-                                    <option value="1.25" className="bg-slate-900 text-white">1.25x</option>
-                                    <option value="1.5" className="bg-slate-900 text-white">1.5x</option>
-                                  </select>
-                                </div>
-                              </div>
-                            </div>
-                          </>
-                        ) : embedUrl ? (
-                          <>
-                            <iframe
-                              src={embedUrl}
-                              title={currentModule.title}
-                              className="w-full h-full pb-14"
-                              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                              allowFullScreen
-                            />
-                            <div className="absolute bottom-0 left-0 right-0 h-14 bg-slate-900 border-t border-white/10 flex items-center px-4 gap-4 text-white z-10 justify-between">
-                              <div className="flex items-center gap-4">
+                              className="absolute inset-0 m-auto w-20 h-20 rounded-full bg-indigo-600/80 backdrop-blur flex items-center justify-center hover:bg-indigo-500 hover:scale-110 transition-all text-white border border-white/20 shadow-xl z-20"
+                            >
+                              <Play className="w-8 h-8 fill-current translate-x-1" />
+                            </button>
+                          )}
+                          <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/80 to-transparent flex items-center justify-between opacity-0 group-hover:opacity-100 transition-all duration-300 z-30">
+                            <div className="flex flex-col gap-2 w-full">
+                              <div className="flex items-center gap-4 text-white">
                                 <button
                                   onClick={() => {
                                     const currentIndex = activeLearningCourse.modules.findIndex(m => m.id === currentModule.id);
                                     if (currentIndex > 0) setActiveVideoModuleId(activeLearningCourse.modules[currentIndex - 1].id);
                                   }}
                                   disabled={activeLearningCourse.modules.findIndex(m => m.id === currentModule.id) === 0}
-                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-semibold transition-colors disabled:opacity-30 disabled:hover:bg-white/10"
+                                  className="p-1 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-white"
                                 >
-                                  <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg> Prev Lesson
+                                  <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z" /></svg>
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    if (videoRef.current) {
+                                      videoIsPlaying ? videoRef.current.pause() : videoRef.current.play();
+                                      setVideoIsPlaying(!videoIsPlaying);
+                                    }
+                                  }}
+                                  className="w-10 h-10 flex items-center justify-center bg-indigo-600 rounded-full hover:bg-indigo-500 transition-colors"
+                                >
+                                  {videoIsPlaying ? (
+                                    <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
+                                  ) : (
+                                    <Play className="w-4 h-4 fill-current translate-x-0.5" />
+                                  )}
                                 </button>
                                 <button
                                   onClick={() => {
@@ -2290,1539 +2216,1452 @@ export default function App() {
                                     if (currentIndex < activeLearningCourse.modules.length - 1) setActiveVideoModuleId(activeLearningCourse.modules[currentIndex + 1].id);
                                   }}
                                   disabled={activeLearningCourse.modules.findIndex(m => m.id === currentModule.id) === activeLearningCourse.modules.length - 1}
-                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-semibold transition-colors disabled:opacity-30 disabled:hover:bg-indigo-600"
+                                  className="p-1 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-white"
                                 >
-                                  Next Lesson <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+                                  <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" /></svg>
                                 </button>
-                              </div>
-                            </div>
-                          </>
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-center px-6">
-                            <div className="space-y-4">
-                              <div className="w-16 h-16 rounded-2xl bg-indigo-50/10 flex items-center justify-center mx-auto text-indigo-300">
-                                <Video className="w-8 h-8" />
-                              </div>
-                              <div>
-                                <p className="text-sm font-bold text-white">External Video Module</p>
-                                <p className="text-sm text-slate-400 mt-1">This module is hosted externally.</p>
-                              </div>
-                              {currentModule.videoUrl && currentModule.videoUrl !== '#' && (
-                                <a
-                                  href={currentModule.videoUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-colors"
+                                <div className="flex items-center gap-2 group/vol">
+                                  <button
+                                    onClick={() => {
+                                      setVideoMuted(!videoMuted);
+                                      if (videoRef.current) videoRef.current.muted = !videoMuted;
+                                    }}
+                                    className="p-1 hover:text-indigo-400"
+                                  >
+                                    {videoMuted || videoVolume === 0 ? (
+                                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path fillRule="evenodd" clipRule="evenodd" d="M11 5L6 9H2v6h4l5 4V5zm2 14v-2c2.28 0 4-1.72 4-4s-1.72-4-4-4V7c3.31 0 6 2.69 6 6s-2.69 6-6 6zM13 3v2c4.42 0 8 3.58 8 8s-3.58 8-8 8v2c5.52 0 10-4.48 10-10S18.52 3 13 3z" /></svg>
+                                    ) : (
+                                      <Volume2 className="w-5 h-5" />
+                                    )}
+                                  </button>
+                                  <input
+                                    type="range"
+                                    min="0" max="1" step="0.05"
+                                    value={videoMuted ? 0 : videoVolume}
+                                    onChange={(e) => {
+                                      const val = parseFloat(e.target.value);
+                                      setVideoVolume(val);
+                                      if (val > 0) setVideoMuted(false);
+                                      if (videoRef.current) {
+                                        videoRef.current.volume = val;
+                                        videoRef.current.muted = val === 0;
+                                      }
+                                    }}
+                                    className="w-0 opacity-0 group-hover/vol:w-20 group-hover/vol:opacity-100 transition-all duration-300 cursor-pointer accent-indigo-500"
+                                  />
+                                </div>
+                                <div className="flex-1"></div>
+                                <select
+                                  value={playbackSpeed}
+                                  onChange={(e) => setPlaybackSpeed(e.target.value as any)}
+                                  className="bg-black/60 border border-white/30 text-white text-xs font-semibold rounded px-2 py-1 appearance-none outline-none cursor-pointer backdrop-blur"
                                 >
-                                  Open Video <ArrowRight className="w-4 h-4" />
-                                </a>
-                              )}
+                                  <option value="0.75" className="bg-slate-900 text-white">0.75x</option>
+                                  <option value="1" className="bg-slate-900 text-white">1.0x</option>
+                                  <option value="1.25" className="bg-slate-900 text-white">1.25x</option>
+                                  <option value="1.5" className="bg-slate-900 text-white">1.5x</option>
+                                </select>
+                              </div>
                             </div>
                           </div>
-                        )}
-                      </div>
-
-                      {/* Module Content Area with Tabs */}
-                      <div className="bg-white">
-                        {/* Sticky Tab Navigation */}
-                        <div className="sticky top-[72px] z-30 bg-white border-b border-slate-200 px-6 sm:px-8">
-                          <div className="flex items-center gap-8 overflow-x-auto">
-                            {(['overview', 'notes', 'resources', 'qa'] as const).map((tab) => (
+                        </>
+                      ) : embedUrl ? (
+                        <>
+                          <iframe
+                            src={embedUrl}
+                            title={currentModule.title}
+                            className="w-full h-full pb-14"
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                            allowFullScreen
+                          />
+                          <div className="absolute bottom-0 left-0 right-0 h-14 bg-slate-900 border-t border-white/10 flex items-center px-4 gap-4 text-white z-10 justify-between">
+                            <div className="flex items-center gap-4">
                               <button
-                                key={tab}
-                                onClick={() => setLearningContentTab(tab)}
-                                className={`py-4 text-sm font-bold uppercase tracking-widest border-b-2 transition-all whitespace-nowrap ${
-                                  learningContentTab === tab
-                                    ? 'border-indigo-600 text-indigo-600'
-                                    : 'border-transparent text-slate-600 hover:text-slate-900'
-                                }`}
+                                onClick={() => {
+                                  const currentIndex = activeLearningCourse.modules.findIndex(m => m.id === currentModule.id);
+                                  if (currentIndex > 0) setActiveVideoModuleId(activeLearningCourse.modules[currentIndex - 1].id);
+                                }}
+                                disabled={activeLearningCourse.modules.findIndex(m => m.id === currentModule.id) === 0}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-semibold transition-colors disabled:opacity-30 disabled:hover:bg-white/10"
                               >
-                                {tab === 'overview' && 'Overview'}
-                                {tab === 'notes' && 'Notes'}
-                                {tab === 'resources' && 'Resources'}
-                                {tab === 'qa' && 'Q&A'}
+                                <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z" /></svg> Prev Lesson
                               </button>
-                            ))}
+                              <button
+                                onClick={() => {
+                                  const currentIndex = activeLearningCourse.modules.findIndex(m => m.id === currentModule.id);
+                                  if (currentIndex < activeLearningCourse.modules.length - 1) setActiveVideoModuleId(activeLearningCourse.modules[currentIndex + 1].id);
+                                }}
+                                disabled={activeLearningCourse.modules.findIndex(m => m.id === currentModule.id) === activeLearningCourse.modules.length - 1}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-semibold transition-colors disabled:opacity-30 disabled:hover:bg-indigo-600"
+                              >
+                                Next Lesson <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" /></svg>
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-center px-6">
+                          <div className="space-y-4">
+                            <div className="w-16 h-16 rounded-2xl bg-indigo-50/10 flex items-center justify-center mx-auto text-indigo-300">
+                              <Video className="w-8 h-8" />
+                            </div>
+                            <div>
+                              <p className="text-sm font-bold text-white">External Video Module</p>
+                              <p className="text-sm text-slate-400 mt-1">This module is hosted externally.</p>
+                            </div>
+                            {currentModule.videoUrl && currentModule.videoUrl !== '#' && (
+                              <a
+                                href={currentModule.videoUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-colors"
+                              >
+                                Open Video <ArrowRight className="w-4 h-4" />
+                              </a>
+                            )}
                           </div>
                         </div>
+                      )}
+                    </div>
 
-                        {/* Tab Content */}
-                        <div className="p-6 sm:p-8">
-                          {/* Overview Tab */}
-                          {learningContentTab === 'overview' && (
-                            <div className="space-y-8">
-                              {/* Module Header */}
-                              <div className="space-y-4">
-                                <div className="flex items-start justify-between">
-                                  <div>
-                                    <span className="text-xs font-bold text-indigo-600 uppercase tracking-widest">Module {currentModuleIndex + 1}</span>
-                                    <h3 className="text-3xl font-black text-slate-900 mt-2">{currentModule.title}</h3>
-                                  </div>
-                                  <button
-                                    onClick={() => {
-                                      const updated = new Set(bookmarkedModules);
-                                      if (updated.has(currentModule.id)) {
-                                        updated.delete(currentModule.id);
-                                      } else {
-                                        updated.add(currentModule.id);
-                                      }
-                                      setBookmarkedModules(updated);
-                                    }}
-                                    className={`flex-shrink-0 p-3 rounded-xl border-2 transition-all ${
-                                      bookmarkedModules.has(currentModule.id)
-                                        ? 'border-amber-400 bg-amber-50 text-amber-500'
-                                        : 'border-slate-200 bg-white text-slate-400 hover:border-amber-200'
-                                    }`}
-                                    title="Bookmark this module"
-                                  >
-                                    <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
-                                      <path d="M5 3v18l7-5 7 5V3H5z" />
-                                    </svg>
-                                  </button>
+                    {/* Module Content Area with Tabs */}
+                    <div className="bg-white">
+                      {/* Sticky Tab Navigation */}
+                      <div className="sticky top-[72px] z-30 bg-white border-b border-slate-200 px-6 sm:px-8">
+                        <div className="flex items-center gap-8 overflow-x-auto">
+                          {(['overview', 'notes', 'resources', 'qa'] as const).map((tab) => (
+                            <button
+                              key={tab}
+                              onClick={() => setLearningContentTab(tab)}
+                              className={`py-4 text-sm font-bold uppercase tracking-widest border-b-2 transition-all whitespace-nowrap ${learningContentTab === tab
+                                  ? 'border-indigo-600 text-indigo-600'
+                                  : 'border-transparent text-slate-600 hover:text-slate-900'
+                                }`}
+                            >
+                              {tab === 'overview' && 'Overview'}
+                              {tab === 'notes' && 'Notes'}
+                              {tab === 'resources' && 'Resources'}
+                              {tab === 'qa' && 'Q&A'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Tab Content */}
+                      <div className="p-6 sm:p-8">
+                        {/* Overview Tab */}
+                        {learningContentTab === 'overview' && (
+                          <div className="space-y-8">
+                            {/* Module Header */}
+                            <div className="space-y-4">
+                              <div className="flex items-start justify-between">
+                                <div>
+                                  <span className="text-xs font-bold text-indigo-600 uppercase tracking-widest">Module {currentModuleIndex + 1}</span>
+                                  <h3 className="text-3xl font-black text-slate-900 mt-2">{currentModule.title}</h3>
                                 </div>
-                              </div>
-
-                              {/* Module Description */}
-                              <div className="prose prose-sm max-w-none">
-                                <p className="text-slate-600 leading-relaxed">{activeLearningCourse.description}</p>
-                              </div>
-
-                              {/* Module Resources Section */}
-                              {currentModule.resources.length > 0 && (
-                                <div className="bg-slate-50 rounded-2xl p-6 border border-slate-200">
-                                  <h4 className="text-sm font-black uppercase tracking-widest text-slate-900 mb-4">Module Resources</h4>
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                    {currentModule.resources.map((resource, idx) => (
-                                      <button
-                                        key={`${currentModule.id}-resource-${idx}`}
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          setLearningContentTab('resources');
-                                        }}
-                                        className="w-full text-left p-3 rounded-xl bg-white border border-slate-200 hover:border-indigo-200 hover:bg-indigo-50 transition-all flex items-center justify-between gap-3 group"
-                                      >
-                                        <div className="flex items-center gap-3">
-                                          <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-600 group-hover:bg-indigo-200 transition-colors flex-shrink-0">
-                                            <LinkIcon className="w-5 h-5" />
-                                          </div>
-                                          <div className="flex-1 min-w-0">
-                                            <p className="text-xs font-bold text-slate-900 truncate">{resource.name || `Resource ${idx + 1}`}</p>
-                                            <p className="text-[10px] text-slate-500 truncate">
-                                              {resource.url.startsWith('/uploads/') ? 'Local file' : 'External resource'} - click to view in Resources
-                                            </p>
-                                          </div>
-                                        </div>
-                                        <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-indigo-600 transition-colors flex-shrink-0" />
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Instructor Section */}
-                              {courseTutor && (
-                                <div className="bg-gradient-to-r from-indigo-50 to-violet-50 rounded-2xl p-6 border border-indigo-100">
-                                  <h4 className="text-xs font-black uppercase tracking-widest text-slate-600 mb-4">About Your Instructor</h4>
-                                  <div className="flex items-start gap-4">
-                                    <img 
-                                      src={courseTutor.avatar || 'https://via.placeholder.com/150'} 
-                                      alt={getTutorDisplayName(courseTutor)} 
-                                      className="w-16 h-16 rounded-full object-cover border-2 border-white shadow-md flex-shrink-0"
-                                    />
-                                    <div className="flex-1">
-                                      <h5 className="text-lg font-black text-slate-900">{getTutorDisplayName(courseTutor)}</h5>
-                                      <p className="text-sm text-indigo-700 font-semibold">{courseTutor.teachingLevel === 'Both' ? 'School & University Tutor' : `${courseTutor.teachingLevel} Tutor`}</p>
-                                      <p className="text-sm text-slate-600 mt-2 line-clamp-2">{courseTutor.bio}</p>
-                                      <button 
-                                        onClick={() => {
-                                          setViewingTutorId(courseTutor.id);
-                                          setActiveTab('tutorProfile');
-                                        }}
-                                        className="mt-3 inline-flex items-center gap-2 px-4 py-2 bg-white border border-indigo-200 rounded-lg text-sm font-bold text-indigo-600 hover:bg-indigo-50 transition-colors"
-                                      >
-                                        View Profile <ArrowRight className="w-4 h-4" />
-                                      </button>
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Module Actions */}
-                              <div className="flex flex-col sm:flex-row gap-3 pt-6 border-t border-slate-200">
                                 <button
                                   onClick={() => {
-                                    handleToggleModuleProgress(activeLearningCourse, currentModule.id, !isCurrentModuleCompleted);
+                                    const updated = new Set(bookmarkedModules);
+                                    if (updated.has(currentModule.id)) {
+                                      updated.delete(currentModule.id);
+                                    } else {
+                                      updated.add(currentModule.id);
+                                    }
+                                    setBookmarkedModules(updated);
                                   }}
-                                  className={`flex-1 inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl border-2 font-bold uppercase tracking-widest transition-all ${
-                                    isCurrentModuleCompleted
-                                      ? 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100'
-                                      : 'bg-indigo-600 border-indigo-600 text-white hover:bg-indigo-700'
-                                  }`}
+                                  className={`flex-shrink-0 p-3 rounded-xl border-2 transition-all ${bookmarkedModules.has(currentModule.id)
+                                      ? 'border-amber-400 bg-amber-50 text-amber-500'
+                                      : 'border-slate-200 bg-white text-slate-400 hover:border-amber-200'
+                                    }`}
+                                  title="Bookmark this module"
                                 >
-                                  <svg className={`w-5 h-5 ${isCurrentModuleCompleted ? '' : 'hidden'}`} fill="currentColor" viewBox="0 0 24 24">
-                                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                                  <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
+                                    <path d="M5 3v18l7-5 7 5V3H5z" />
                                   </svg>
-                                  {isCurrentModuleCompleted ? 'Completed' : 'Mark as Complete'}
                                 </button>
-                                
-                                {hasNextModule && (
-                                  <button
-                                    onClick={() => setActiveVideoModuleId(activeLearningCourse.modules[currentModuleIndex + 1].id)}
-                                    className="flex-1 inline-flex items-center justify-center gap-2 px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-900 rounded-xl border border-slate-300 font-bold uppercase tracking-widest transition-all"
-                                  >
-                                    Next Module <ArrowRight className="w-5 h-5" />
-                                  </button>
-                                )}
                               </div>
                             </div>
-                          )}
 
-                          {/* Notes Tab */}
-                          {learningContentTab === 'notes' && (
-                            <div className="space-y-4">
-                              <div>
-                                <div className="flex items-center justify-between mb-2">
-                                  <label className="text-sm font-bold text-slate-900">Your Notes</label>
-                                  <button
-                                    onClick={() => {
-                                      setNotesSaved({ ...notesSaved, [currentModule.id]: true });
-                                      setTimeout(() => setNotesSaved(prev => ({ ...prev, [currentModule.id]: false })), 2000);
-                                    }}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm shadow-indigo-600/20"
-                                  >
-                                    <Check className="w-3.5 h-3.5" />
-                                    {notesSaved[currentModule.id] ? 'Saved ✓' : 'Save Notes'}
-                                  </button>
-                                </div>
-                                <textarea
-                                  value={studentNotes[currentModule.id] || ''}
-                                  onChange={(e) => setStudentNotes({ ...studentNotes, [currentModule.id]: e.target.value })}
-                                  placeholder="Add your personal notes here..."
-                                  rows={10}
-                                  className="w-full p-4 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none font-mono text-sm resize-none"
-                                />
-                              </div>
-                              <div className="text-xs text-slate-500 text-right">
-                                {studentNotes[currentModule.id]?.length || 0} characters
-                              </div>
+                            {/* Module Description */}
+                            <div className="prose prose-sm max-w-none">
+                              <p className="text-slate-600 leading-relaxed">{activeLearningCourse.description}</p>
                             </div>
-                          )}
 
-                          {/* Resources Tab */}
-                          {learningContentTab === 'resources' && (
-                            <div className="space-y-4">
-                              {currentModule.resources.length > 0 ? (
-                                <div className="grid grid-cols-1 gap-3">
+                            {/* Module Resources Section */}
+                            {currentModule.resources.length > 0 && (
+                              <div className="bg-slate-50 rounded-2xl p-6 border border-slate-200">
+                                <h4 className="text-sm font-black uppercase tracking-widest text-slate-900 mb-4">Module Resources</h4>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                   {currentModule.resources.map((resource, idx) => (
-                                    <a
-                                      key={`${currentModule.id}-res-${idx}`}
-                                      href={resource.url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      download={resource.url.startsWith('/uploads/') ? resource.name : undefined}
-                                      className="p-4 rounded-xl bg-slate-50 border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 transition-all flex items-center justify-between group"
+                                    <button
+                                      key={`${currentModule.id}-resource-${idx}`}
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        setLearningContentTab('resources');
+                                      }}
+                                      className="w-full text-left p-3 rounded-xl bg-white border border-slate-200 hover:border-indigo-200 hover:bg-indigo-50 transition-all flex items-center justify-between gap-3 group"
                                     >
                                       <div className="flex items-center gap-3">
-                                        <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-600">
+                                        <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-600 group-hover:bg-indigo-200 transition-colors flex-shrink-0">
                                           <LinkIcon className="w-5 h-5" />
                                         </div>
-                                        <div>
-                                          <p className="font-bold text-slate-900">{resource.name || `Resource ${idx + 1}`}</p>
-                                          <p className="text-xs text-slate-500">
-                                            {resource.url.startsWith('/uploads/') ? 'Uploaded local file' : 'External resource URL'}
+                                        <div className="flex-1 min-w-0">
+                                          <p className="text-xs font-bold text-slate-900 truncate">{resource.name || `Resource ${idx + 1}`}</p>
+                                          <p className="text-[10px] text-slate-500 truncate">
+                                            {resource.url.startsWith('/uploads/') ? 'Local file' : 'External resource'} - click to view in Resources
                                           </p>
                                         </div>
                                       </div>
-                                      <ArrowRight className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 transition-colors" />
-                                    </a>
+                                      <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-indigo-600 transition-colors flex-shrink-0" />
+                                    </button>
                                   ))}
                                 </div>
-                              ) : (
-                                <div className="text-center py-12">
-                                  <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3 text-slate-400">
-                                    <LinkIcon className="w-6 h-6" />
+                              </div>
+                            )}
+
+                            {/* Instructor Section */}
+                            {courseTutor && (
+                              <div className="bg-gradient-to-r from-indigo-50 to-violet-50 rounded-2xl p-6 border border-indigo-100">
+                                <h4 className="text-xs font-black uppercase tracking-widest text-slate-600 mb-4">About Your Instructor</h4>
+                                <div className="flex items-start gap-4">
+                                  <img
+                                    src={courseTutor.avatar || 'https://via.placeholder.com/150'}
+                                    alt={getTutorDisplayName(courseTutor)}
+                                    className="w-16 h-16 rounded-full object-cover border-2 border-white shadow-md flex-shrink-0"
+                                  />
+                                  <div className="flex-1">
+                                    <h5 className="text-lg font-black text-slate-900">{getTutorDisplayName(courseTutor)}</h5>
+                                    <p className="text-sm text-indigo-700 font-semibold">{courseTutor.teachingLevel === 'Both' ? 'School & University Tutor' : `${courseTutor.teachingLevel} Tutor`}</p>
+                                    <p className="text-sm text-slate-600 mt-2 line-clamp-2">{courseTutor.bio}</p>
+                                    <button
+                                      onClick={() => {
+                                        setViewingTutorId(courseTutor.id);
+                                        setActiveTab('tutorProfile');
+                                      }}
+                                      className="mt-3 inline-flex items-center gap-2 px-4 py-2 bg-white border border-indigo-200 rounded-lg text-sm font-bold text-indigo-600 hover:bg-indigo-50 transition-colors"
+                                    >
+                                      View Profile <ArrowRight className="w-4 h-4" />
+                                    </button>
                                   </div>
-                                  <p className="text-slate-500 font-semibold">No resources available for this module</p>
                                 </div>
+                              </div>
+                            )}
+
+                            {/* Module Actions */}
+                            <div className="flex flex-col sm:flex-row gap-3 pt-6 border-t border-slate-200">
+                              <button
+                                onClick={() => {
+                                  handleToggleModuleProgress(activeLearningCourse, currentModule.id, !isCurrentModuleCompleted);
+                                }}
+                                className={`flex-1 inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl border-2 font-bold uppercase tracking-widest transition-all ${isCurrentModuleCompleted
+                                    ? 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100'
+                                    : 'bg-indigo-600 border-indigo-600 text-white hover:bg-indigo-700'
+                                  }`}
+                              >
+                                <svg className={`w-5 h-5 ${isCurrentModuleCompleted ? '' : 'hidden'}`} fill="currentColor" viewBox="0 0 24 24">
+                                  <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                                </svg>
+                                {isCurrentModuleCompleted ? 'Completed' : 'Mark as Complete'}
+                              </button>
+
+                              {hasNextModule && (
+                                <button
+                                  onClick={() => setActiveVideoModuleId(activeLearningCourse.modules[currentModuleIndex + 1].id)}
+                                  className="flex-1 inline-flex items-center justify-center gap-2 px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-900 rounded-xl border border-slate-300 font-bold uppercase tracking-widest transition-all"
+                                >
+                                  Next Module <ArrowRight className="w-5 h-5" />
+                                </button>
                               )}
                             </div>
-                          )}
+                          </div>
+                        )}
 
-                          {/* Q&A Tab */}
-                          {learningContentTab === 'qa' && (
-                            <div className="space-y-4">
-                              <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">
-                                <p className="text-sm text-indigo-900 font-semibold">Have questions?</p>
-                                <p className="text-sm text-indigo-700 mt-1">Connect with your instructor through the course or check the discussion section.</p>
+                        {/* Notes Tab */}
+                        {learningContentTab === 'notes' && (
+                          <div className="space-y-4">
+                            <div>
+                              <div className="flex items-center justify-between mb-2">
+                                <label className="text-sm font-bold text-slate-900">Your Notes</label>
+                                <button
+                                  onClick={() => {
+                                    setNotesSaved({ ...notesSaved, [currentModule.id]: true });
+                                    setTimeout(() => setNotesSaved(prev => ({ ...prev, [currentModule.id]: false })), 2000);
+                                  }}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm shadow-indigo-600/20"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                  {notesSaved[currentModule.id] ? 'Saved ✓' : 'Save Notes'}
+                                </button>
                               </div>
+                              <textarea
+                                value={studentNotes[currentModule.id] || ''}
+                                onChange={(e) => setStudentNotes({ ...studentNotes, [currentModule.id]: e.target.value })}
+                                placeholder="Add your personal notes here..."
+                                rows={10}
+                                className="w-full p-4 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none font-mono text-sm resize-none"
+                              />
+                            </div>
+                            <div className="text-xs text-slate-500 text-right">
+                              {studentNotes[currentModule.id]?.length || 0} characters
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Resources Tab */}
+                        {learningContentTab === 'resources' && (
+                          <div className="space-y-4">
+                            {currentModule.resources.length > 0 ? (
+                              <div className="grid grid-cols-1 gap-3">
+                                {currentModule.resources.map((resource, idx) => (
+                                  <a
+                                    key={`${currentModule.id}-res-${idx}`}
+                                    href={resource.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    download={resource.url.startsWith('/uploads/') ? resource.name : undefined}
+                                    className="p-4 rounded-xl bg-slate-50 border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 transition-all flex items-center justify-between group"
+                                  >
+                                    <div className="flex items-center gap-3">
+                                      <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-600">
+                                        <LinkIcon className="w-5 h-5" />
+                                      </div>
+                                      <div>
+                                        <p className="font-bold text-slate-900">{resource.name || `Resource ${idx + 1}`}</p>
+                                        <p className="text-xs text-slate-500">
+                                          {resource.url.startsWith('/uploads/') ? 'Uploaded local file' : 'External resource URL'}
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <ArrowRight className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 transition-colors" />
+                                  </a>
+                                ))}
+                              </div>
+                            ) : (
                               <div className="text-center py-12">
                                 <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3 text-slate-400">
-                                  <MessageCircle className="w-6 h-6" />
+                                  <LinkIcon className="w-6 h-6" />
                                 </div>
-                                <p className="text-slate-500 font-semibold">Discussion feature coming soon</p>
-                                <p className="text-xs text-slate-400 mt-1">You'll be able to ask questions and interact with peers here</p>
+                                <p className="text-slate-500 font-semibold">No resources available for this module</p>
                               </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Q&A Tab */}
+                        {learningContentTab === 'qa' && (
+                          <div className="space-y-4">
+                            <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">
+                              <p className="text-sm text-indigo-900 font-semibold">Have questions?</p>
+                              <p className="text-sm text-indigo-700 mt-1">Connect with your instructor through the course or check the discussion section.</p>
                             </div>
-                          )}
-                        </div>
+                            <div className="text-center py-12">
+                              <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3 text-slate-400">
+                                <MessageCircle className="w-6 h-6" />
+                              </div>
+                              <p className="text-slate-500 font-semibold">Discussion feature coming soon</p>
+                              <p className="text-xs text-slate-400 mt-1">You'll be able to ask questions and interact with peers here</p>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
-                  ) : (
-                    <div className="bg-white p-12 text-center">
-                      <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-4 text-slate-400">
-                        <Video className="w-8 h-8" />
-                      </div>
-                      <p className="text-slate-600 font-semibold">No modules available</p>
+                  </div>
+                ) : (
+                  <div className="bg-white p-12 text-center">
+                    <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-4 text-slate-400">
+                      <Video className="w-8 h-8" />
                     </div>
-                  )}
-                </div>
+                    <p className="text-slate-600 font-semibold">No modules available</p>
+                  </div>
+                )}
+              </div>
 
-                {/* Right Sidebar: Course Content & Certificate (1 column) */}
-                <div className="lg:col-span-1 border-l border-slate-200 bg-slate-50 overflow-y-auto">
-                  {/* Course Contents */}
-                  <div className="p-4 sm:p-6 space-y-4 border-b border-slate-200 sticky top-[72px] bg-white/70 backdrop-blur-sm z-20 lg:static lg:bg-slate-50 lg:backdrop-blur-none">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-slate-900">Course Content</h3>
-                    <div className="space-y-2">
-                      {activeLearningCourse.modules.map((module, index) => {
-                        const isActive = currentModule?.id === module.id;
-                        const isCompleted = activeLearningCompletedSet.has(module.id);
-                        const isBookmarked = bookmarkedModules.has(module.id);
+              {/* Right Sidebar: Course Content & Certificate (1 column) */}
+              <div className="lg:col-span-1 border-l border-slate-200 bg-slate-50 overflow-y-auto">
+                {/* Course Contents */}
+                <div className="p-4 sm:p-6 space-y-4 border-b border-slate-200 sticky top-[72px] bg-white/70 backdrop-blur-sm z-20 lg:static lg:bg-slate-50 lg:backdrop-blur-none">
+                  <h3 className="text-sm font-black uppercase tracking-widest text-slate-900">Course Content</h3>
+                  <div className="space-y-2">
+                    {activeLearningCourse.modules.map((module, index) => {
+                      const isActive = currentModule?.id === module.id;
+                      const isCompleted = activeLearningCompletedSet.has(module.id);
+                      const isBookmarked = bookmarkedModules.has(module.id);
 
-                        return (
-                          <button
-                            key={module.id}
-                            onClick={() => setActiveVideoModuleId(module.id)}
-                            className={`w-full text-left p-3 rounded-lg flex items-start gap-3 transition-all border ${
-                              isActive
-                                ? 'bg-indigo-100 border-indigo-300 shadow-sm'
-                                : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-100'
+                      return (
+                        <button
+                          key={module.id}
+                          onClick={() => setActiveVideoModuleId(module.id)}
+                          className={`w-full text-left p-3 rounded-lg flex items-start gap-3 transition-all border ${isActive
+                              ? 'bg-indigo-100 border-indigo-300 shadow-sm'
+                              : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-100'
                             }`}
-                          >
-                            <div className="flex-shrink-0 mt-0.5">
-                              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
-                                isCompleted
-                                  ? 'bg-emerald-500 text-white'
-                                  : isActive
+                        >
+                          <div className="flex-shrink-0 mt-0.5">
+                            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-all ${isCompleted
+                                ? 'bg-emerald-500 text-white'
+                                : isActive
                                   ? 'bg-indigo-600 text-white'
                                   : 'bg-slate-300 text-slate-600'
                               }`}>
-                                {isCompleted ? (
-                                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                                  </svg>
-                                ) : (
-                                  index + 1
-                                )}
-                              </div>
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className={`text-xs font-bold uppercase tracking-widest ${isActive ? 'text-indigo-700' : 'text-slate-500'}`}>
-                                Lesson {index + 1}
-                              </p>
-                              <h4 className={`text-sm font-bold truncate mt-0.5 ${isActive ? 'text-indigo-900' : 'text-slate-700'}`}>
-                                {module.title}
-                              </h4>
-                              {isBookmarked && (
-                                <div className="flex items-center gap-1 mt-1">
-                                  <svg className="w-3 h-3 text-amber-500 fill-current" viewBox="0 0 24 24">
-                                    <path d="M5 3v18l7-5 7 5V3H5z" />
-                                  </svg>
-                                  <span className="text-[10px] text-amber-600 font-semibold">Bookmarked</span>
-                                </div>
+                              {isCompleted ? (
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                </svg>
+                              ) : (
+                                index + 1
                               )}
                             </div>
-                          </button>
-                        );
-                      })}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className={`text-xs font-bold uppercase tracking-widest ${isActive ? 'text-indigo-700' : 'text-slate-500'}`}>
+                              Lesson {index + 1}
+                            </p>
+                            <h4 className={`text-sm font-bold truncate mt-0.5 ${isActive ? 'text-indigo-900' : 'text-slate-700'}`}>
+                              {module.title}
+                            </h4>
+                            {isBookmarked && (
+                              <div className="flex items-center gap-1 mt-1">
+                                <svg className="w-3 h-3 text-amber-500 fill-current" viewBox="0 0 24 24">
+                                  <path d="M5 3v18l7-5 7 5V3H5z" />
+                                </svg>
+                                <span className="text-[10px] text-amber-600 font-semibold">Bookmarked</span>
+                              </div>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Certificate Card */}
+                <div className="p-4 sm:p-6 space-y-3">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center text-amber-600">
+                      <Award className="w-4 h-4" />
                     </div>
+                    <h4 className="font-black text-slate-900">Certificate</h4>
                   </div>
 
-                  {/* Certificate Card */}
-                  <div className="p-4 sm:p-6 space-y-3">
-                    <div className="flex items-center gap-2 mb-3">
-                      <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center text-amber-600">
-                        <Award className="w-4 h-4" />
-                      </div>
-                      <h4 className="font-black text-slate-900">Certificate</h4>
-                    </div>
-
-                    {/* Certificate Status */}
-                    <div className={`p-3 rounded-lg text-center ${isActiveLearningComplete ? 'bg-emerald-50 border border-emerald-200' : 'bg-slate-100 border border-slate-200'}`}>
-                      <p className={`text-xs font-bold uppercase tracking-widest ${isActiveLearningComplete ? 'text-emerald-700' : 'text-slate-600'}`}>
-                        {isActiveLearningComplete ? 'Unlocked' : 'In Progress'}
-                      </p>
-                      <p className={`text-lg font-black mt-1 ${isActiveLearningComplete ? 'text-emerald-900' : 'text-slate-700'}`}>
-                        {activeLearningProgress}%
-                      </p>
-                    </div>
-
-                    {/* Certificate Description */}
-                    <p className="text-xs text-slate-600 leading-relaxed">
-                      Complete all {activeLearningCourse.modules.length} modules to earn your TutorSphere certificate.
+                  {/* Certificate Status */}
+                  <div className={`p-3 rounded-lg text-center ${isActiveLearningComplete ? 'bg-emerald-50 border border-emerald-200' : 'bg-slate-100 border border-slate-200'}`}>
+                    <p className={`text-xs font-bold uppercase tracking-widest ${isActiveLearningComplete ? 'text-emerald-700' : 'text-slate-600'}`}>
+                      {isActiveLearningComplete ? 'Unlocked' : 'In Progress'}
                     </p>
+                    <p className={`text-lg font-black mt-1 ${isActiveLearningComplete ? 'text-emerald-900' : 'text-slate-700'}`}>
+                      {activeLearningProgress}%
+                    </p>
+                  </div>
 
-                    {/* Certificate Preview */}
-                    {isActiveLearningComplete && (
-                      <div className="p-3 bg-white rounded-lg border-2 border-amber-300 space-y-2">
-                        <div className="aspect-video bg-gradient-to-br from-amber-50 to-orange-50 rounded flex items-center justify-center">
-                          <div className="text-center">
-                            <svg className="w-8 h-8 text-amber-600 mx-auto mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
-                            </svg>
-                            <p className="text-[9px] font-bold text-amber-700">Certificate Ready</p>
-                          </div>
+                  {/* Certificate Description */}
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Complete all {activeLearningCourse.modules.length} modules to earn your TutorSphere certificate.
+                  </p>
+
+                  {/* Certificate Preview */}
+                  {isActiveLearningComplete && (
+                    <div className="p-3 bg-white rounded-lg border-2 border-amber-300 space-y-2">
+                      <div className="aspect-video bg-gradient-to-br from-amber-50 to-orange-50 rounded flex items-center justify-center">
+                        <div className="text-center">
+                          <svg className="w-8 h-8 text-amber-600 mx-auto mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
+                          </svg>
+                          <p className="text-[9px] font-bold text-amber-700">Certificate Ready</p>
                         </div>
                       </div>
-                    )}
-
-                    {/* Download Button */}
-                    <div>
-                      {activeLearningEnrollment ? (
-                        <button
-                          onClick={() => handleDownloadCertificate(activeLearningEnrollment, activeLearningCourse.title)}
-                          disabled={!isActiveLearningComplete}
-                          className={`w-full py-3 rounded-lg border-2 font-bold uppercase tracking-widest text-sm transition-all ${
-                            isActiveLearningComplete
-                              ? 'bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700 shadow-lg shadow-emerald-200'
-                              : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
-                          }`}
-                        >
-                          {isActiveLearningComplete ? '⬇ Download' : 'Complete First'}
-                        </button>
-                      ) : (
-                        <p className="text-[10px] text-rose-600 font-bold text-center">Error loading certificate</p>
-                      )}
                     </div>
+                  )}
+
+                  {/* Download Button */}
+                  <div>
+                    {activeLearningEnrollment ? (
+                      <button
+                        onClick={() => handleDownloadCertificate(activeLearningEnrollment, activeLearningCourse.title)}
+                        disabled={!isActiveLearningComplete}
+                        className={`w-full py-3 rounded-lg border-2 font-bold uppercase tracking-widest text-sm transition-all ${isActiveLearningComplete
+                            ? 'bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700 shadow-lg shadow-emerald-200'
+                            : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                          }`}
+                      >
+                        {isActiveLearningComplete ? '⬇ Download' : 'Complete First'}
+                      </button>
+                    ) : (
+                      <p className="text-[10px] text-rose-600 font-bold text-center">Error loading certificate</p>
+                    )}
                   </div>
                 </div>
               </div>
             </div>
-          );
-        })()}
+          </div>
+        );
+      })()}
 
       {/* Main Content - All other tabs */}
       {activeTab !== 'courseLearning' && (
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {activeTab === 'tutorProfile' && viewingTutorId && (
-          <TutorProfilePage 
-            tutorId={viewingTutorId}
-            initialTutor={tutorsWithLiveStats.find(t => t.id === viewingTutorId)}
-            reviews={allReviews}
-            courses={courses.filter(c => c.tutorId === viewingTutorId)}
-            onBack={() => {
-              setViewingTutorId(null);
-              setActiveTab('tutors');
-            }}
-            onBookSession={(id) => {
-              setBookingTutorId(id);
-              setActiveTab('tutorBooking');
-            }}
-            isLoggedIn={!!currentUser}
-            isStudent={isStudent}
-          />
-        )}
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          {activeTab === 'tutorProfile' && viewingTutorId && (
+            <TutorProfilePage
+              tutorId={viewingTutorId}
+              initialTutor={tutorsWithLiveStats.find(t => t.id === viewingTutorId)}
+              reviews={allReviews}
+              courses={courses.filter(c => c.tutorId === viewingTutorId)}
+              onBack={() => {
+                setViewingTutorId(null);
+                setActiveTab('tutors');
+              }}
+              onBookSession={(id) => {
+                setBookingTutorId(id);
+                setActiveTab('tutorBooking');
+              }}
+              isLoggedIn={!!currentUser}
+              isStudent={isStudent}
+            />
+          )}
 
-        {activeTab === 'tutorBooking' && bookingTutorId && (
-          <TutorBookingPage
-            tutor={tutorsWithLiveStats.find(t => t.id === bookingTutorId) || null}
-            onBack={() => {
-              setBookingTutorId(null);
-              if (viewingTutorId === bookingTutorId) {
-                setActiveTab('tutorProfile');
-              } else {
-                setViewingTutorId(bookingTutorId);
-                setActiveTab('tutorProfile');
-              }
-            }}
-            onConfirmBooking={(slotId) => {
-              const tutor = tutors.find(t => t.id === bookingTutorId);
-              if (tutor) {
-                handleBookSession(tutor, slotId);
-              }
-            }}
-          />
-        )}
+          {activeTab === 'tutorBooking' && bookingTutorId && (
+            <TutorBookingPage
+              tutor={tutorsWithLiveStats.find(t => t.id === bookingTutorId) || null}
+              onBack={() => {
+                setBookingTutorId(null);
+                if (viewingTutorId === bookingTutorId) {
+                  setActiveTab('tutorProfile');
+                } else {
+                  setViewingTutorId(bookingTutorId);
+                  setActiveTab('tutorProfile');
+                }
+              }}
+              onConfirmBooking={(slotId) => {
+                const tutor = tutors.find(t => t.id === bookingTutorId);
+                if (tutor) {
+                  handleBookSession(tutor, slotId);
+                }
+              }}
+            />
+          )}
 
-        {activeTab === 'home' && (
-          <div className="space-y-24">
-            {/* Hero Section */}
-            <section className="grid lg:grid-cols-2 gap-12 items-center min-h-[70vh] py-12">
-              <motion.div 
-                initial={{ opacity: 0, x: -30 }}
-                animate={{ opacity: 1, x: 0 }}
-                className="space-y-8"
-              >
-                <div className="inline-flex items-center gap-2 bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100">
-                  <span className="w-2 h-2 bg-indigo-600 rounded-full animate-pulse" />
-                  <span className="text-xs font-bold text-indigo-700 uppercase tracking-widest">The Future of STEM Learning</span>
-                </div>
-                <h1 className="text-6xl md:text-7xl font-extrabold text-slate-900 leading-[1.1] tracking-tight">
-                  Master STEM & ICT with <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-600">Expert Tutors</span>
-                </h1>
-                <p className="text-xl text-slate-600 leading-relaxed max-w-lg">
-                  Connect with top-tier educators in STEM and ICT. Personalized learning paths powered by AI.
-                </p>
-                <div className="flex flex-wrap gap-4">
-                  <button 
-                    onClick={() => setActiveTab('tutors')}
-                    className="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-bold hover:bg-indigo-700 shadow-xl shadow-indigo-200 transition-all flex items-center gap-2 group"
-                  >
-                    Find Your Tutor <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-                  </button>
-                  <button 
-                    onClick={() => setActiveTab('registerSelect')}
-                    className="bg-white text-indigo-600 border border-indigo-200 px-8 py-4 rounded-2xl font-bold hover:bg-indigo-50 transition-all"
-                  >
-                    Join as Tutor
-                  </button>
-                </div>
-                <div className="flex items-center gap-6 pt-4">
-                  <div className="flex -space-x-3">
-                    {tutors.slice(0, 4).map(t => (
-                      <img key={t.id} src={t.avatar} className="w-10 h-10 rounded-full border-2 border-white shadow-sm object-contain object-center bg-white" referrerPolicy="no-referrer" />
-                    ))}
-                  </div>
-                  <p className="text-sm text-slate-500 font-medium">Joined by <span className="text-slate-900 font-bold">2,000+</span> students this month</p>
-                </div>
-              </motion.div>
-              
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="relative"
-              >
-                <div className="absolute -inset-4 bg-gradient-to-tr from-indigo-500/20 to-violet-500/20 blur-3xl rounded-full" />
-                <div className="relative bg-white p-4 rounded-[2.5rem] shadow-2xl border border-slate-100 overflow-hidden">
-                  <img 
-                    src="https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&q=80&w=1200&h=900" 
-                    alt="Learning" 
-                    className="rounded-[2rem] w-full object-cover aspect-[4/3]"
-                    referrerPolicy="no-referrer"
-                  />
-                  <div className="absolute bottom-12 left-12 right-12 bg-white/80 backdrop-blur-md p-6 rounded-3xl border border-white/50 shadow-xl">
-                    <div className="flex items-center gap-4">
-                      <div className="bg-indigo-600 p-3 rounded-2xl">
-                        <GraduationCap className="text-white w-6 h-6" />
-                      </div>
-                      <div>
-                        <p className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-1">Live Session</p>
-                        <div className="relative h-6 overflow-hidden min-w-[200px]">
-                          <AnimatePresence mode="popLayout">
-                            <motion.h4
-                              key={currentSubjectIndex}
-                              initial={{ y: 20, opacity: 0 }}
-                              animate={{ y: 0, opacity: 1 }}
-                              exit={{ y: -20, opacity: 0 }}
-                              transition={{ duration: 0.5, ease: "easeOut" }}
-                              className="font-bold text-slate-900 absolute left-0"
-                            >
-                              {DISPLAY_SUBJECTS[currentSubjectIndex]}
-                            </motion.h4>
-                          </AnimatePresence>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                
-                {/* Floating Stats */}
-                <motion.div 
-                  animate={{ y: [0, -10, 0] }}
-                  transition={{ duration: 4, repeat: Infinity }}
-                  className="absolute -top-6 -right-6 bg-white p-6 rounded-3xl shadow-xl border border-slate-100"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="bg-emerald-100 p-2 rounded-xl">
-                      <CheckCircle className="text-emerald-600 w-5 h-5" />
-                    </div>
-                    <div>
-                      <p className="text-2xl font-bold text-slate-900">98%</p>
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Success Rate</p>
-                    </div>
-                  </div>
-                </motion.div>
-              </motion.div>
-            </section>
-
-            {/* Stats Section - Overlapping Hero */}
-            <motion.div
-              initial={{ opacity: 0, y: 50 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.3 }}
-              className="relative -mt-16 z-10 max-w-5xl mx-auto px-6"
-            >
-              <div className="bg-white rounded-2xl shadow-2xl shadow-slate-200/50 border border-slate-100 p-6 md:p-8">
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
-                  {/* Active Tutors */}
-                  <div className="text-center space-y-1">
-                    <div className="text-3xl md:text-4xl font-extrabold text-violet-600">
-                      <CountUp end={tutors.length} duration={2.5} />
-                    </div>
-                    <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
-                      Active Tutors
-                    </div>
-                  </div>
-
-                  {/* Students */}
-                  <div className="text-center space-y-1">
-                    <div className="text-3xl md:text-4xl font-extrabold text-violet-600">
-                      <CountUp end={2000} duration={2.5} suffix="+" />
-                    </div>
-                    <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
-                      Students
-                    </div>
-                  </div>
-
-                  {/* STEM/ICT Subjects */}
-                  <div className="text-center space-y-1">
-                    <div className="text-3xl md:text-4xl font-extrabold text-violet-600">
-                      <CountUp end={15} duration={2.5} suffix="+" />
-                    </div>
-                    <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
-                      STEM/ICT Subjects
-                    </div>
-                  </div>
-
-                  {/* Average Rating */}
-                  <div className="text-center space-y-1">
-                    <div className="text-3xl md:text-4xl font-extrabold text-violet-600">
-                      <CountUp end={4.9} duration={2.5} decimals={1} />
-                    </div>
-                    <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
-                      Average Rating
-                    </div>
-                  </div>
-                </div>
-
-                {/* Subtle dividers */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mt-4">
-                  <div className="h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent"></div>
-                  <div className="h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent"></div>
-                  <div className="h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent"></div>
-                  <div className="h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent"></div>
-                </div>
-              </div>
-            </motion.div>
-
-            {/* Features Section */}
-            <section className="grid lg:grid-cols-2 gap-12 items-center">
-              <div className="space-y-6 lg:pr-12">
-                <div className="inline-flex items-center gap-2 bg-purple-50 px-4 py-2 rounded-full border border-purple-100">
-                  <span className="text-xs font-bold text-purple-700 uppercase tracking-widest">Platform Features</span>
-                </div>
-                <h2 className="text-4xl md:text-5xl font-extrabold text-slate-900 leading-tight">
-                  Everything you need to <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-indigo-600">succeed</span>
-                </h2>
-                <p className="text-lg text-slate-600 leading-relaxed">
-                  Discover a comprehensive suite of powerful tools and features designed to enhance your learning experience, connect you with the best educators, and accelerate your academic progress.
-                </p>
-                <button onClick={() => setActiveTab('tutors')} className="mt-4 bg-purple-50 text-purple-700 font-bold px-6 py-3 rounded-xl hover:bg-purple-100 transition-colors inline-flex items-center gap-2">
-                  Explore Tutors <ArrowRight className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="relative h-[500px] overflow-hidden rounded-[2rem] p-2 bg-slate-50/50">
-                <div className="absolute top-0 inset-x-0 h-16 bg-gradient-to-b from-white to-transparent z-10 pointer-events-none" />
-                <div className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-white to-transparent z-10 pointer-events-none" />
-                
+          {activeTab === 'home' && (
+            <div className="space-y-24">
+              {/* Hero Section */}
+              <section className="grid lg:grid-cols-2 gap-12 items-center min-h-[70vh] py-12">
                 <motion.div
-                  animate={{ y: ['0%', '-50%'] }}
-                  transition={{ duration: 15, repeat: Infinity, ease: 'linear' }}
-                  className="flex flex-col gap-6"
+                  initial={{ opacity: 0, x: -30 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="space-y-8"
                 >
-                  {[
-                    { icon: <User className="text-purple-600 w-6 h-6" />, title: 'Find Expert Tutors', desc: 'Connect with verified professionals who match your unique learning style.' },
-                    { icon: <Calendar className="text-purple-600 w-6 h-6" />, title: 'Easy Booking', desc: 'Seamlessly schedule time slots that fit perfectly into your busy calendar.' },
-                    { icon: <Star className="text-purple-600 w-6 h-6" />, title: 'Ratings & Reviews', desc: 'Make informed decisions with transparent feedback from our community.' },
-                    { icon: <GraduationCap className="text-purple-600 w-6 h-6" />, title: 'Structured Courses', desc: 'Follow structured curricula designed for optimal comprehension and retention.' },
-                    { icon: <CheckCircle className="text-purple-600 w-6 h-6" />, title: 'Earn Certificates', desc: 'Showcase your achievements with verifiable digital completion certificates.' },
-                    { icon: <Bot className="text-purple-600 w-6 h-6" />, title: 'AI Assistant', desc: 'Get instant answers and personalized support powered by advanced AI.' },
-                    { icon: <User className="text-purple-600 w-6 h-6" />, title: 'Find Expert Tutors', desc: 'Connect with verified professionals who match your unique learning style.' },
-                    { icon: <Calendar className="text-purple-600 w-6 h-6" />, title: 'Easy Booking', desc: 'Seamlessly schedule time slots that fit perfectly into your busy calendar.' },
-                    { icon: <Star className="text-purple-600 w-6 h-6" />, title: 'Ratings & Reviews', desc: 'Make informed decisions with transparent feedback from our community.' },
-                    { icon: <GraduationCap className="text-purple-600 w-6 h-6" />, title: 'Structured Courses', desc: 'Follow structured curricula designed for optimal comprehension and retention.' },
-                    { icon: <CheckCircle className="text-purple-600 w-6 h-6" />, title: 'Earn Certificates', desc: 'Showcase your achievements with verifiable digital completion certificates.' },
-                    { icon: <Bot className="text-purple-600 w-6 h-6" />, title: 'AI Assistant', desc: 'Get instant answers and personalized support powered by advanced AI.' }
-                  ].map((f, i) => (
-                    <div key={i} className="bg-white p-6 rounded-3xl border border-purple-100 shadow-[0_8px_30px_rgb(0,0,0,0.04)] shadow-purple-500/10 flex items-start gap-5 min-h-[140px] flex-shrink-0">
-                      <div className="bg-purple-50 p-4 rounded-2xl flex-shrink-0">
-                        {f.icon}
+                  <div className="inline-flex items-center gap-2 bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100">
+                    <span className="w-2 h-2 bg-indigo-600 rounded-full animate-pulse" />
+                    <span className="text-xs font-bold text-indigo-700 uppercase tracking-widest">The Future of STEM Learning</span>
+                  </div>
+                  <h1 className="text-6xl md:text-7xl font-extrabold text-slate-900 leading-[1.1] tracking-tight">
+                    Master STEM & ICT with <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-600">Expert Tutors</span>
+                  </h1>
+                  <p className="text-xl text-slate-600 leading-relaxed max-w-lg">
+                    Connect with top-tier educators in STEM and ICT. Personalized learning paths powered by AI.
+                  </p>
+                  <div className="flex flex-wrap gap-4">
+                    <button
+                      onClick={() => setActiveTab('tutors')}
+                      className="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-bold hover:bg-indigo-700 shadow-xl shadow-indigo-200 transition-all flex items-center gap-2 group"
+                    >
+                      Find Your Tutor <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('registerSelect')}
+                      className="bg-white text-indigo-600 border border-indigo-200 px-8 py-4 rounded-2xl font-bold hover:bg-indigo-50 transition-all"
+                    >
+                      Join as Tutor
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-6 pt-4">
+                    <div className="flex -space-x-3">
+                      {tutors.slice(0, 4).map(t => (
+                        <img key={t.id} src={t.avatar} className="w-10 h-10 rounded-full border-2 border-white shadow-sm object-contain object-center bg-white" referrerPolicy="no-referrer" />
+                      ))}
+                    </div>
+                    <p className="text-sm text-slate-500 font-medium">Joined by <span className="text-slate-900 font-bold">2,000+</span> students this month</p>
+                  </div>
+                </motion.div>
+
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="relative"
+                >
+                  <div className="absolute -inset-4 bg-gradient-to-tr from-indigo-500/20 to-violet-500/20 blur-3xl rounded-full" />
+                  <div className="relative bg-white p-4 rounded-[2.5rem] shadow-2xl border border-slate-100 overflow-hidden">
+                    <img
+                      src="https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&q=80&w=1200&h=900"
+                      alt="Learning"
+                      className="rounded-[2rem] w-full object-cover aspect-[4/3]"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute bottom-12 left-12 right-12 bg-white/80 backdrop-blur-md p-6 rounded-3xl border border-white/50 shadow-xl">
+                      <div className="flex items-center gap-4">
+                        <div className="bg-indigo-600 p-3 rounded-2xl">
+                          <GraduationCap className="text-white w-6 h-6" />
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-1">Live Session</p>
+                          <div className="relative h-6 overflow-hidden min-w-[200px]">
+                            <AnimatePresence mode="popLayout">
+                              <motion.h4
+                                key={currentSubjectIndex}
+                                initial={{ y: 20, opacity: 0 }}
+                                animate={{ y: 0, opacity: 1 }}
+                                exit={{ y: -20, opacity: 0 }}
+                                transition={{ duration: 0.5, ease: "easeOut" }}
+                                className="font-bold text-slate-900 absolute left-0"
+                              >
+                                {DISPLAY_SUBJECTS[currentSubjectIndex]}
+                              </motion.h4>
+                            </AnimatePresence>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Floating Stats */}
+                  <motion.div
+                    animate={{ y: [0, -10, 0] }}
+                    transition={{ duration: 4, repeat: Infinity }}
+                    className="absolute -top-6 -right-6 bg-white p-6 rounded-3xl shadow-xl border border-slate-100"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="bg-emerald-100 p-2 rounded-xl">
+                        <CheckCircle className="text-emerald-600 w-5 h-5" />
                       </div>
                       <div>
-                        <h3 className="text-xl font-bold mb-2 text-slate-900">{f.title}</h3>
-                        <p className="text-slate-600 leading-relaxed">{f.desc}</p>
-                      </div>
-                    </div>
-                  ))}
-                </motion.div>
-              </div>
-            </section>
-            {/* Featured Tutors Section */}
-            <section className="space-y-12">
-              <div className="text-center space-y-4">
-                <div className="inline-flex items-center gap-2 bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100 mb-2">
-                  <span className="text-xs font-bold text-indigo-700 uppercase tracking-widest">Expert Instructors</span>
-                </div>
-                <h2 className="text-4xl md:text-5xl font-extrabold text-slate-900 leading-tight">Meet Our Top Rated Tutors</h2>
-                <p className="text-lg text-slate-600 max-w-2xl mx-auto">Learn from the best minds in the country. Our tutors are verified experts with proven track records in guiding students to success.</p>
-              </div>
-              <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
-                {[...tutorsWithLiveStats].sort((a, b) => b.rating - a.rating).slice(0, 4).map(tutor => (
-                  <motion.div 
-                    whileHover={{ y: -8 }}
-                    key={tutor.id}
-                    className="relative bg-white rounded-[1.5rem] border border-slate-100 overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.04)] hover:shadow-[0_20px_40px_rgba(79,70,229,0.1)] transition-all duration-300 group cursor-pointer flex flex-col"
-                    onClick={() => {
-                      setViewingTutorId(tutor.id);
-                      setActiveTab('tutorProfile');
-                    }}
-                  >
-                    <div className="relative h-56 overflow-hidden">
-                      <div className="absolute inset-0 bg-gradient-to-t from-slate-900/65 via-slate-900/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-10" />
-                      <img src={tutor.avatar} alt={getTutorDisplayName(tutor)} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" referrerPolicy="no-referrer" />
-                      
-                      {/* Subject Badge */}
-                      <div className="absolute top-4 right-4 z-20">
-                        <span className="bg-white/95 backdrop-blur-md text-indigo-700 text-xs font-bold px-3 py-1.5 rounded-xl shadow-lg border border-indigo-100">
-                          {tutor.subjects[0]}
-                        </span>
-                      </div>
-                    </div>
-                    
-                    <div className="p-6 flex-1 flex flex-col bg-white">
-                      <div className="mb-4 space-y-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <h3 className="font-bold text-lg text-slate-900 block w-full leading-tight whitespace-normal break-words">
-                            {getTutorDisplayName(tutor)}
-                          </h3>
-                          {tutor.isVerified && (
-                            <CheckCircle className="w-5 h-5 text-emerald-500 shrink-0" fill="currentColor" opacity="0.2" />
-                          )}
-                        </div>
-                        <p className="text-sm font-bold text-indigo-600 truncate block w-full">
-                          {tutor.qualifications}
-                        </p>
-                      </div>
-
-                      <div className="flex items-center gap-1.5 mb-4">
-                        <Star className="w-5 h-5 text-amber-500 fill-amber-500" />
-                        <span className="font-bold text-slate-800">{tutor.rating.toFixed(1)}</span>
-                        <span className="text-sm font-medium text-slate-500">({tutor.reviewCount} reviews)</span>
-                      </div>
-                      
-                      <p className="text-sm text-slate-600 line-clamp-2 mb-6 flex-1 leading-relaxed">
-                        {tutor.bio}
-                      </p>
-                      
-                      <div className="mt-auto pt-4 border-t border-slate-100 flex items-center justify-center">
-                        <div className="text-indigo-600 font-bold text-sm flex items-center gap-1 group-hover:text-indigo-700 transition-colors">
-                          View Profile <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-                        </div>
+                        <p className="text-2xl font-bold text-slate-900">98%</p>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Success Rate</p>
                       </div>
                     </div>
                   </motion.div>
-                ))}
-              </div>
-              <div className="text-center pt-6">
-                <button 
-                  onClick={() => setActiveTab('tutors')}
-                  className="inline-flex items-center justify-center gap-2 bg-white text-indigo-600 border-2 border-indigo-100 font-bold px-8 py-4 rounded-2xl hover:bg-indigo-50 hover:border-indigo-200 hover:gap-3 transition-all shadow-sm group"
-                >
-                  View All Educators <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-                </button>
-              </div>
-            </section>
-          </div>
-        )}
-
-        {activeTab === 'tutors' && (
-          <div className="space-y-12">
-            <div className="flex flex-col md:flex-row justify-between items-end gap-6">
-              <div className="space-y-2">
-                <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-black uppercase tracking-widest">
-                  <Star className="w-3 h-3 fill-emerald-700" />
-                  <span>Top Rated Experts</span>
-                </div>
-                <h2 className="text-4xl font-black text-slate-900 tracking-tight">Find Your Perfect Tutor</h2>
-                <p className="text-slate-600">Browse verified experts in STEM and ICT subjects ready to guide you.</p>
-              </div>
-              <div className="flex gap-3 w-full md:w-auto">
-                <div className="relative flex-1 md:w-80">
-                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                  <input 
-                    type="text" 
-                    placeholder="Search by subject or name..." 
-                    className="w-full pl-12 pr-4 py-4 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all font-medium" 
-                  />
-                </div>
-                <button 
-                  onClick={() => alert('Searching for tutors...')}
-                  className="bg-indigo-600 text-white p-4 rounded-2xl shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
-                >
-                  <Search className="w-6 h-6" />
-                </button>
-              </div>
-            </div>
-
-            {isLoadingTutors ? (
-              <div className="flex justify-center items-center py-12">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
-              </div>
-            ) : (
-              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-                {tutorsWithLiveStats.map(tutor => (
-                <motion.div 
-                  layout
-                  whileHover={{ y: -10 }}
-                  key={tutor.id}
-                  className="bg-white rounded-[2.5rem] border border-slate-100 overflow-hidden shadow-sm hover:shadow-2xl transition-all group relative"
-                >
-                  <div className="absolute top-0 left-0 w-full h-24 bg-gradient-to-r from-indigo-600 to-violet-600 opacity-10" />
-                  <div className="p-8 relative z-10">
-                    <div className="flex items-start gap-5">
-                      <div className="relative">
-                        <img 
-                          src={tutor.avatar} 
-                          alt={getTutorDisplayName(tutor)} 
-                          className="w-20 h-20 rounded-2xl object-cover border-4 border-white shadow-xl" 
-                          referrerPolicy="no-referrer" 
-                        />
-                        {tutor.isVerified && (
-                          <div className="absolute -bottom-1 -right-1 bg-indigo-600 p-1 rounded-lg border-2 border-white">
-                            <CheckCircle className="w-3 h-3 text-white" />
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex-1 pt-1">
-                        <h3 className="font-black text-xl text-slate-900 leading-tight mb-1">{getTutorDisplayName(tutor)}</h3>
-                        <p className="text-xs font-bold text-indigo-600 uppercase tracking-widest">{tutor.qualifications}</p>
-                        <div className="flex items-center gap-1.5 mt-2">
-                          <div className="flex items-center gap-1 bg-amber-50 px-2 py-0.5 rounded-lg">
-                            <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
-                            <span className="text-xs font-black text-amber-700">{tutor.rating}</span>
-                          </div>
-                          <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">({tutor.reviewCount} reviews)</span>
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div className="mt-6 flex flex-wrap gap-2">
-                      {tutor.subjects.map(s => (
-                        <span key={s} className="px-3 py-1.5 bg-slate-50 text-slate-600 text-[10px] font-black uppercase tracking-widest rounded-xl border border-slate-100">
-                          {s}
-                        </span>
-                      ))}
-                    </div>
-
-                    <p className="mt-5 text-sm text-slate-500 leading-relaxed line-clamp-2 font-medium italic">"{tutor.bio}"</p>
-
-                    <div className="mt-8 pt-6 border-t border-slate-50 flex items-center justify-between">
-                      <div>
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Hourly Rate</span>
-                        <p className="text-2xl font-black text-slate-900">LKR {tutor.pricePerHour}</p>
-                      </div>
-                      <div className="flex gap-3">
-                        <button 
-                          onClick={() => {
-                            setViewingTutorId(tutor.id);
-                            setActiveTab('tutorProfile');
-                          }}
-                          className="px-4 py-3 bg-slate-100 text-slate-700 rounded-2xl font-black text-sm hover:bg-slate-200 transition-all"
-                        >
-                          View Profile
-                        </button>
-                        {(isStudent || !currentUser) && (
-                          <button 
-                            onClick={() => setSelectedTutor(selectedTutor?.id === tutor.id ? null : tutor)}
-                            className={`px-6 py-3 rounded-2xl font-black text-sm transition-all ${
-                              selectedTutor?.id === tutor.id 
-                              ? 'bg-slate-900 text-white' 
-                              : 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700'
-                            }`}
-                          >
-                            {selectedTutor?.id === tutor.id ? 'Close' : 'Book Session'}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <AnimatePresence>
-                      {selectedTutor?.id === tutor.id && (isStudent || !currentUser) && (
-                        <motion.div 
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: 'auto' }}
-                          exit={{ opacity: 0, height: 0 }}
-                          className="mt-6 pt-6 border-t border-slate-50 space-y-4 overflow-hidden"
-                        >
-                          <div className="flex justify-between items-center">
-                            <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">Available Slots</h4>
-                            <Calendar className="w-4 h-4 text-slate-400" />
-                          </div>
-                          <div className="grid grid-cols-2 gap-3">
-                            {tutor.availability.map(slot => (
-                              <button 
-                                key={slot.id}
-                                onClick={() => handleBookSession(tutor, slot.id)}
-                                className="p-3 rounded-2xl border-2 border-slate-50 hover:border-indigo-200 hover:bg-indigo-50 transition-all text-left group"
-                              >
-                                <p className="font-black text-xs text-slate-700 group-hover:text-indigo-700">{slot.day}</p>
-                                <p className="text-[10px] font-bold text-slate-400 mt-0.5">{slot.startTime} - {slot.endTime}</p>
-                              </button>
-                            ))}
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
                 </motion.div>
-              ))}
-            </div>
-            )}
-          </div>
-        )}
+              </section>
 
-        {activeTab === 'courses' && (
-          <div className="space-y-12">
-            {isLoadingCourses ? (
-              <div className="flex justify-center items-center py-12">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
-              </div>
-            ) : isTutor ? (
-              <TutorCourseManagePage
-                courses={courses}
-                currentTutor={currentTutor}
-                courseEnrollments={courseEnrollments}
-                enrollmentCountByCourseId={enrollmentCountByCourseId}
-                courseForm={courseForm}
-                setCourseForm={setCourseForm}
-                editingCourseId={editingCourseId}
-                isSavingCourse={isSavingCourse}
-                isLoading={isLoadingCourses}
-                isUploadingCourseThumbnail={isUploadingCourseThumbnail}
-                uploadingModuleVideoKey={uploadingModuleVideoKey}
-                uploadingModuleResourcesKey={uploadingModuleResourcesKey}
-                stemSubjects={STEM_SUBJECTS}
-                onSaveCourse={handleSaveCourse}
-                onDeleteCourse={handleDeleteCourse}
-                onEditCourse={handleEditCourse}
-                onResetCourseForm={handleResetCourseForm}
-                onAddCourseModule={handleAddCourseModule}
-                onRemoveCourseModule={handleRemoveCourseModule}
-                onUpdateCourseModule={handleUpdateCourseModule}
-                onUploadCourseThumbnail={handleUploadCourseThumbnail}
-                onUploadModuleVideo={handleUploadModuleVideo}
-                onUploadModuleResources={handleUploadModuleResources}
-                onUpdateCourseModuleResource={handleUpdateCourseModuleResource}
-                onRemoveCourseModuleResource={handleRemoveCourseModuleResource}
-                onAddUrlModuleResource={handleAddUrlModuleResource}
-                getEditableModuleKey={getEditableModuleKey}
-              />
-            ) : (
-              <CourseBrowsingPage
-                courses={courses}
-                tutors={tutors}
-                isStudent={isStudent}
-                isLoggedIn={!!currentUser}
-                isLoading={isLoadingCourses}
-                studentEnrollmentByCourseId={studentEnrollmentByCourseId}
-                enrollmentCountByCourseId={enrollmentCountByCourseId}
-                courseSearchQuery={courseSearchQuery}
-                courseCategoryFilter={courseCategoryFilter}
-                onSetCourseSearchQuery={setCourseSearchQuery}
-                onSetCourseCategoryFilter={setCourseCategoryFilter}
-                onEnrollCourse={handleEnrollCourse}
-                onOpenCourseLearning={handleOpenCourseLearning}
-                onViewCertificate={handleShowCertificateModal}
-                stemSubjects={STEM_SUBJECTS}
-              />
-            )}
-          </div>
-        )}
-
-        {activeTab === 'resources' && (
-          isTutor ? (
-            <TutorResourceManagePage
-              resources={resources}
-              currentTutorId={currentTutor?.id}
-              resourceForm={resourceForm}
-              setResourceForm={setResourceForm}
-              editingResourceId={editingResourceId}
-              isSavingResource={isSavingResource}
-              isLoading={isLoadingResources}
-              stemSubjects={STEM_SUBJECTS}
-              onSaveResource={handleSaveResource}
-              onDeleteResource={handleDeleteResource}
-              onEditResource={handleEditResource}
-              onResetResourceForm={handleResetResourceForm}
-            />
-          ) : (
-            <StudentResourceLibraryPage
-              resources={resources}
-              isLoggedIn={!!currentUser}
-              isLoading={isLoadingResources}
-              stemSubjects={STEM_SUBJECTS}
-            />
-          )
-        )}
-
-        {activeTab === 'quizzes' && (!currentUser || isStudent) && (
-          <div className="max-w-4xl mx-auto space-y-10">
-            <div className="text-center space-y-4">
-              <div className="inline-flex items-center gap-2 px-4 py-2 bg-amber-100 text-amber-700 rounded-full text-sm font-bold">
-                <Trophy className="w-4 h-4" />
-                <span>Skill Evaluation</span>
-              </div>
-              <h2 className="text-4xl font-black text-slate-900 tracking-tight">Challenge Your Knowledge</h2>
-              <p className="text-slate-600 max-w-xl mx-auto">Select a subject to start a personalized assessment and earn your skill badges.</p>
-            </div>
-
-            {isQuizLoading ? (
-              <div className="flex flex-col items-center justify-center py-24 space-y-6 bg-white rounded-[3rem] border border-slate-100 shadow-xl shadow-indigo-50">
-                <div className="relative">
-                  <div className="w-20 h-20 border-4 border-indigo-100 rounded-full" />
-                  <div className="absolute top-0 left-0 w-20 h-20 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-                  <Brain className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 text-indigo-600" />
-                </div>
-                <div className="text-center">
-                  <p className="text-xl font-bold text-slate-900">Curating Questions...</p>
-                  <p className="text-slate-500">Our AI is analyzing your skill matrix to challenge you.</p>
-                </div>
-              </div>
-            ) : !activeQuiz ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                {[
-                  { name: 'Mathematics', icon: Calculator, color: 'bg-blue-500', light: 'bg-blue-50', text: 'text-blue-600' },
-                  { name: 'Physics', icon: Atom, color: 'bg-purple-500', light: 'bg-purple-50', text: 'text-purple-600' },
-                  { name: 'Chemistry', icon: Dna, color: 'bg-emerald-500', light: 'bg-emerald-50', text: 'text-emerald-600' },
-                  { name: 'Biology', icon: Brain, color: 'bg-rose-500', light: 'bg-rose-50', text: 'text-rose-600' },
-                  { name: 'ICT', icon: Binary, color: 'bg-indigo-500', light: 'bg-indigo-50', text: 'text-indigo-600' },
-                  { name: 'Combined Maths', icon: Lightbulb, color: 'bg-amber-500', light: 'bg-amber-50', text: 'text-amber-600' }
-                ].map((s, idx) => (
-                  <motion.button 
-                    whileHover={{ y: -8, scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    key={idx}
-                    onClick={() => { setSelectedAnswers({}); handleStartQuiz(s.name); }}
-                    className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-2xl transition-all text-left group relative overflow-hidden"
-                  >
-                    <div className={`absolute top-0 right-0 w-32 h-32 ${s.light} rounded-full -mr-16 -mt-16 transition-transform group-hover:scale-150`} />
-                    <div className={`${s.color} w-14 h-14 rounded-2xl flex items-center justify-center mb-6 shadow-lg shadow-${s.color.split('-')[1]}-200 relative z-10`}>
-                      <s.icon className="text-white w-7 h-7" />
-                    </div>
-                    <div className="relative z-10">
-                      <h3 className="text-xl font-black text-slate-900 mb-2">{s.name}</h3>
-                      <p className="text-slate-500 text-sm leading-relaxed mb-4">Master the fundamentals of {s.name.toLowerCase()} with AI-generated challenges.</p>
-                      <div className={`flex items-center gap-2 font-bold text-sm ${s.text}`}>
-                        Start Quiz <ArrowRight className="w-4 h-4" />
-                      </div>
-                    </div>
-                  </motion.button>
-                ))}
-              </div>
-            ) : (
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="bg-white rounded-[3rem] border border-slate-100 shadow-2xl overflow-hidden"
+              {/* Stats Section - Overlapping Hero */}
+              <motion.div
+                initial={{ opacity: 0, y: 50 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 }}
+                className="relative -mt-16 z-10 max-w-5xl mx-auto px-6"
               >
-                {/* Quiz Header */}
-                <div className="bg-slate-900 p-8 md:p-10 text-white relative overflow-hidden">
-                  <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/20 rounded-full blur-3xl -mr-32 -mt-32" />
-                  <div className="relative z-10 flex justify-between items-start">
-                    <div>
-                      <div className="flex items-center gap-2 mb-4">
-                        <span className="px-3 py-1 bg-white/10 backdrop-blur-md rounded-full text-xs font-bold uppercase tracking-widest text-indigo-300 border border-white/10">
-                          {activeQuiz.subject} Assessment
-                        </span>
+                <div className="bg-white rounded-2xl shadow-2xl shadow-slate-200/50 border border-slate-100 p-6 md:p-8">
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+                    {/* Active Tutors */}
+                    <div className="text-center space-y-1">
+                      <div className="text-3xl md:text-4xl font-extrabold text-violet-600">
+                        <CountUp end={tutors.length} duration={2.5} />
                       </div>
-                      <h3 className="text-3xl font-black mb-2">Knowledge Check</h3>
-                      <p className="text-slate-400 font-medium">Question {Object.keys(selectedAnswers).length} of {activeQuiz.questions.length} completed</p>
+                      <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+                        Active Tutors
+                      </div>
                     </div>
-                    <button 
-                      onClick={() => setActiveQuiz(null)} 
-                      className="p-3 bg-white/5 hover:bg-white/10 rounded-2xl transition-colors border border-white/10"
-                    >
-                      <X className="w-6 h-6" />
-                    </button>
+
+                    {/* Students */}
+                    <div className="text-center space-y-1">
+                      <div className="text-3xl md:text-4xl font-extrabold text-violet-600">
+                        <CountUp end={2000} duration={2.5} suffix="+" />
+                      </div>
+                      <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+                        Students
+                      </div>
+                    </div>
+
+                    {/* STEM/ICT Subjects */}
+                    <div className="text-center space-y-1">
+                      <div className="text-3xl md:text-4xl font-extrabold text-violet-600">
+                        <CountUp end={15} duration={2.5} suffix="+" />
+                      </div>
+                      <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+                        STEM/ICT Subjects
+                      </div>
+                    </div>
+
+                    {/* Average Rating */}
+                    <div className="text-center space-y-1">
+                      <div className="text-3xl md:text-4xl font-extrabold text-violet-600">
+                        <CountUp end={4.9} duration={2.5} decimals={1} />
+                      </div>
+                      <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+                        Average Rating
+                      </div>
+                    </div>
                   </div>
-                  
-                  {/* Progress Bar */}
-                  <div className="mt-8 h-2 bg-white/5 rounded-full overflow-hidden">
-                    <motion.div 
-                      className="h-full bg-indigo-500"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${(Object.keys(selectedAnswers).length / activeQuiz.questions.length) * 100}%` }}
-                    />
+
+                  {/* Subtle dividers */}
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mt-4">
+                    <div className="h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent"></div>
+                    <div className="h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent"></div>
+                    <div className="h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent"></div>
+                    <div className="h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent"></div>
                   </div>
                 </div>
-                
-                <div className="p-8 md:p-12 space-y-12">
-                  {activeQuiz.questions.map((q, idx) => (
-                    <div key={idx} className="space-y-6">
-                      <div className="flex items-start gap-5">
-                        <div className="bg-indigo-50 text-indigo-600 w-10 h-10 rounded-2xl flex items-center justify-center font-black text-lg shrink-0">
-                          {idx + 1}
+              </motion.div>
+
+              {/* Features Section */}
+              <section className="grid lg:grid-cols-2 gap-12 items-center">
+                <div className="space-y-6 lg:pr-12">
+                  <div className="inline-flex items-center gap-2 bg-purple-50 px-4 py-2 rounded-full border border-purple-100">
+                    <span className="text-xs font-bold text-purple-700 uppercase tracking-widest">Platform Features</span>
+                  </div>
+                  <h2 className="text-4xl md:text-5xl font-extrabold text-slate-900 leading-tight">
+                    Everything you need to <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-indigo-600">succeed</span>
+                  </h2>
+                  <p className="text-lg text-slate-600 leading-relaxed">
+                    Discover a comprehensive suite of powerful tools and features designed to enhance your learning experience, connect you with the best educators, and accelerate your academic progress.
+                  </p>
+                  <button onClick={() => setActiveTab('tutors')} className="mt-4 bg-purple-50 text-purple-700 font-bold px-6 py-3 rounded-xl hover:bg-purple-100 transition-colors inline-flex items-center gap-2">
+                    Explore Tutors <ArrowRight className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="relative h-[500px] overflow-hidden rounded-[2rem] p-2 bg-slate-50/50">
+                  <div className="absolute top-0 inset-x-0 h-16 bg-gradient-to-b from-white to-transparent z-10 pointer-events-none" />
+                  <div className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-white to-transparent z-10 pointer-events-none" />
+
+                  <motion.div
+                    animate={{ y: ['0%', '-50%'] }}
+                    transition={{ duration: 15, repeat: Infinity, ease: 'linear' }}
+                    className="flex flex-col gap-6"
+                  >
+                    {[
+                      { icon: <User className="text-purple-600 w-6 h-6" />, title: 'Find Expert Tutors', desc: 'Connect with verified professionals who match your unique learning style.' },
+                      { icon: <Calendar className="text-purple-600 w-6 h-6" />, title: 'Easy Booking', desc: 'Seamlessly schedule time slots that fit perfectly into your busy calendar.' },
+                      { icon: <Star className="text-purple-600 w-6 h-6" />, title: 'Ratings & Reviews', desc: 'Make informed decisions with transparent feedback from our community.' },
+                      { icon: <GraduationCap className="text-purple-600 w-6 h-6" />, title: 'Structured Courses', desc: 'Follow structured curricula designed for optimal comprehension and retention.' },
+                      { icon: <CheckCircle className="text-purple-600 w-6 h-6" />, title: 'Earn Certificates', desc: 'Showcase your achievements with verifiable digital completion certificates.' },
+                      { icon: <Bot className="text-purple-600 w-6 h-6" />, title: 'AI Assistant', desc: 'Get instant answers and personalized support powered by advanced AI.' },
+                      { icon: <User className="text-purple-600 w-6 h-6" />, title: 'Find Expert Tutors', desc: 'Connect with verified professionals who match your unique learning style.' },
+                      { icon: <Calendar className="text-purple-600 w-6 h-6" />, title: 'Easy Booking', desc: 'Seamlessly schedule time slots that fit perfectly into your busy calendar.' },
+                      { icon: <Star className="text-purple-600 w-6 h-6" />, title: 'Ratings & Reviews', desc: 'Make informed decisions with transparent feedback from our community.' },
+                      { icon: <GraduationCap className="text-purple-600 w-6 h-6" />, title: 'Structured Courses', desc: 'Follow structured curricula designed for optimal comprehension and retention.' },
+                      { icon: <CheckCircle className="text-purple-600 w-6 h-6" />, title: 'Earn Certificates', desc: 'Showcase your achievements with verifiable digital completion certificates.' },
+                      { icon: <Bot className="text-purple-600 w-6 h-6" />, title: 'AI Assistant', desc: 'Get instant answers and personalized support powered by advanced AI.' }
+                    ].map((f, i) => (
+                      <div key={i} className="bg-white p-6 rounded-3xl border border-purple-100 shadow-[0_8px_30px_rgb(0,0,0,0.04)] shadow-purple-500/10 flex items-start gap-5 min-h-[140px] flex-shrink-0">
+                        <div className="bg-purple-50 p-4 rounded-2xl flex-shrink-0">
+                          {f.icon}
                         </div>
-                        <p className="font-bold text-xl text-slate-800 leading-snug pt-1">{q.question}</p>
+                        <div>
+                          <h3 className="text-xl font-bold mb-2 text-slate-900">{f.title}</h3>
+                          <p className="text-slate-600 leading-relaxed">{f.desc}</p>
+                        </div>
                       </div>
-                      <div className="grid sm:grid-cols-2 gap-4 pl-0 md:pl-14">
-                        {q.options.map((opt, oIdx) => {
-                          const isSelected = selectedAnswers[idx] === opt;
-                          return (
-                            <button 
-                              key={oIdx} 
-                              onClick={() => setSelectedAnswers({...selectedAnswers, [idx]: opt})}
-                              className={`w-full text-left p-5 rounded-[1.5rem] border-2 transition-all font-bold relative group ${
-                                isSelected 
-                                ? 'border-indigo-600 bg-indigo-50 text-indigo-700 shadow-lg shadow-indigo-100' 
-                                : 'border-slate-100 hover:border-indigo-200 hover:bg-slate-50 text-slate-600'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between">
-                                <span>{opt}</span>
-                                {isSelected && <CheckCircle className="w-5 h-5 text-indigo-600" />}
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                  
-                  <div className="pt-8 border-t border-slate-100">
-                    <button 
-                      disabled={Object.keys(selectedAnswers).length < activeQuiz.questions.length}
+                    ))}
+                  </motion.div>
+                </div>
+              </section>
+              {/* Featured Tutors Section */}
+              <section className="space-y-12">
+                <div className="text-center space-y-4">
+                  <div className="inline-flex items-center gap-2 bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100 mb-2">
+                    <span className="text-xs font-bold text-indigo-700 uppercase tracking-widest">Expert Instructors</span>
+                  </div>
+                  <h2 className="text-4xl md:text-5xl font-extrabold text-slate-900 leading-tight">Meet Our Top Rated Tutors</h2>
+                  <p className="text-lg text-slate-600 max-w-2xl mx-auto">Learn from the best minds in the country. Our tutors are verified experts with proven track records in guiding students to success.</p>
+                </div>
+                <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
+                  {[...tutorsWithLiveStats].sort((a, b) => b.rating - a.rating).slice(0, 4).map(tutor => (
+                    <motion.div
+                      whileHover={{ y: -8 }}
+                      key={tutor.id}
+                      className="relative bg-white rounded-[1.5rem] border border-slate-100 overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.04)] hover:shadow-[0_20px_40px_rgba(79,70,229,0.1)] transition-all duration-300 group cursor-pointer flex flex-col"
                       onClick={() => {
-                        const score = Math.floor(Math.random() * 40) + 60; // Mock score
-                        setQuizScore(score);
-                        setActiveQuiz(null);
+                        setViewingTutorId(tutor.id);
+                        setActiveTab('tutorProfile');
                       }}
-                      className="w-full bg-indigo-600 text-white py-5 rounded-2xl font-black text-lg hover:bg-indigo-700 shadow-2xl shadow-indigo-200 transition-all disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-3"
                     >
-                      Complete Assessment <Check className="w-6 h-6" />
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
-            )}
+                      <div className="relative h-56 overflow-hidden">
+                        <div className="absolute inset-0 bg-gradient-to-t from-slate-900/65 via-slate-900/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-10" />
+                        <img src={tutor.avatar} alt={getTutorDisplayName(tutor)} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" referrerPolicy="no-referrer" />
 
-            {quizScore !== null && !activeQuiz && (
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="bg-white p-12 rounded-[3rem] border border-slate-100 shadow-2xl text-center space-y-8 relative overflow-hidden"
-              >
-                <div className="absolute top-0 left-0 w-full h-2 bg-indigo-600" />
-                <div className="w-24 h-24 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-6">
-                  <Trophy className="w-12 h-12 text-amber-600" />
-                </div>
-                <div>
-                  <h3 className="text-4xl font-black text-slate-900 mb-2">Assessment Complete!</h3>
-                  <p className="text-slate-500 font-medium">Great job! You've successfully completed the evaluation.</p>
-                </div>
-                
-                <div className="flex justify-center items-center gap-8">
-                  <div className="text-center">
-                    <div className="text-5xl font-black text-indigo-600 mb-1">{quizScore}%</div>
-                    <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">Your Score</div>
-                  </div>
-                  <div className="w-px h-12 bg-slate-100" />
-                  <div className="text-center">
-                    <div className="text-5xl font-black text-emerald-500 mb-1">A+</div>
-                    <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">Grade</div>
-                  </div>
-                </div>
-
-                <div className="pt-4 flex flex-col sm:flex-row gap-4 justify-center">
-                  <button 
-                    onClick={() => setQuizScore(null)}
-                    className="px-8 py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
-                  >
-                    Back to Quizzes
-                  </button>
-                  <button 
-                    onClick={() => { setQuizScore(null); setActiveTab('dashboard'); }}
-                    className="px-8 py-4 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition-all"
-                  >
-                    View Skill Matrix
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </div>
-        )}
-
-        {activeTab === 'questions' && (!currentUser || isStudent) && (
-          <div className="max-w-4xl mx-auto space-y-10">
-            <div className="text-center space-y-4">
-              <div className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-100 text-indigo-700 rounded-full text-sm font-bold">
-                <Bot className="w-4 h-4" />
-                <span>AI Support</span>
-              </div>
-              <h2 className="text-4xl font-black text-slate-900 tracking-tight">Instant Knowledge Base</h2>
-              <p className="text-slate-600 max-w-xl mx-auto">Ask any complex STEM or ICT question and get detailed, verified answers from our AI engine.</p>
-            </div>
-
-            <div className="bg-white p-8 md:p-10 rounded-[3rem] border border-slate-100 shadow-xl space-y-8 relative overflow-hidden">
-              <div className="absolute top-0 left-0 w-2 h-full bg-indigo-600" />
-              <div className="flex flex-col md:flex-row gap-6">
-                <div className="flex-1 space-y-6">
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Select Subject</label>
-                    <div className="flex flex-wrap gap-2">
-                      {STEM_SUBJECTS.map(s => (
-                        <button 
-                          key={s}
-                          onClick={() => setNewQuestion({...newQuestion, subject: s})}
-                          className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${
-                            newQuestion.subject === s 
-                            ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' 
-                            : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
-                          }`}
-                        >
-                          {s}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Your Question</label>
-                    <textarea 
-                      placeholder="e.g., Explain the concept of Quantum Entanglement in simple terms..."
-                      value={newQuestion.text}
-                      onChange={(e) => setNewQuestion({...newQuestion, text: e.target.value})}
-                      className="w-full h-40 p-6 rounded-[2rem] border border-slate-100 bg-slate-50/50 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none resize-none font-medium text-slate-700 transition-all"
-                    />
-                  </div>
-                </div>
-              </div>
-              
-              <button 
-                onClick={handleAskQuestion}
-                disabled={isAsking || !newQuestion.text}
-                className="w-full bg-indigo-600 text-white py-5 rounded-2xl font-black text-lg hover:bg-indigo-700 disabled:opacity-50 shadow-2xl shadow-indigo-100 flex items-center justify-center gap-3 transition-all active:scale-[0.98]"
-              >
-                {isAsking ? (
-                  <>
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    Analyzing Question...
-                  </>
-                ) : (
-                  <>
-                    Ask AI Assistant <Send className="w-5 h-5" />
-                  </>
-                )}
-              </button>
-            </div>
-
-            <div className="space-y-8">
-              <h3 className="text-2xl font-black text-slate-900 ml-2">Recent Inquiries</h3>
-              {questions.length === 0 ? (
-                <div className="text-center py-12 bg-slate-50 rounded-[2.5rem] border border-dashed border-slate-200">
-                  <MessageSquare className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-                  <p className="text-slate-400 font-medium">No questions asked yet. Be the first!</p>
-                </div>
-              ) : (
-                <div className="grid gap-8">
-                  {questions.map(q => (
-                    <motion.div 
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      key={q.id} 
-                      className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm overflow-hidden group hover:shadow-xl transition-all"
-                    >
-                      <div className="p-8 border-b border-slate-50 bg-slate-50/30">
-                        <div className="flex justify-between items-center mb-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-bold">
-                              {q.subject.charAt(0)}
-                            </div>
-                            <div>
-                              <span className="text-xs font-black text-indigo-600 uppercase tracking-widest">{q.subject}</span>
-                              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{new Date(q.timestamp).toLocaleDateString()}</p>
-                            </div>
-                          </div>
-                          <div className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest">
-                            Answered
-                          </div>
+                        {/* Subject Badge */}
+                        <div className="absolute top-4 right-4 z-20">
+                          <span className="bg-white/95 backdrop-blur-md text-indigo-700 text-xs font-bold px-3 py-1.5 rounded-xl shadow-lg border border-indigo-100">
+                            {tutor.subjects[0]}
+                          </span>
                         </div>
-                        <p className="text-xl font-bold text-slate-800 leading-tight">{q.text}</p>
                       </div>
-                      <div className="p-8 bg-white">
-                        <div className="flex gap-5">
-                          <div className="bg-indigo-50 p-3 rounded-2xl h-fit shrink-0">
-                            <Bot className="text-indigo-600 w-6 h-6" />
+
+                      <div className="p-6 flex-1 flex flex-col bg-white">
+                        <div className="mb-4 space-y-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <h3 className="font-bold text-lg text-slate-900 block w-full leading-tight whitespace-normal break-words">
+                              {getTutorDisplayName(tutor)}
+                            </h3>
+                            {tutor.isVerified && (
+                              <CheckCircle className="w-5 h-5 text-emerald-500 shrink-0" fill="currentColor" opacity="0.2" />
+                            )}
                           </div>
-                          <div className="markdown-body prose prose-slate max-w-none">
-                            <Markdown>{q.answer}</Markdown>
+                          <p className="text-sm font-bold text-indigo-600 truncate block w-full">
+                            {tutor.qualifications}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 mb-4">
+                          <Star className="w-5 h-5 text-amber-500 fill-amber-500" />
+                          <span className="font-bold text-slate-800">{tutor.rating.toFixed(1)}</span>
+                          <span className="text-sm font-medium text-slate-500">({tutor.reviewCount} reviews)</span>
+                        </div>
+
+                        <p className="text-sm text-slate-600 line-clamp-2 mb-6 flex-1 leading-relaxed">
+                          {tutor.bio}
+                        </p>
+
+                        <div className="mt-auto pt-4 border-t border-slate-100 flex items-center justify-center">
+                          <div className="text-indigo-600 font-bold text-sm flex items-center gap-1 group-hover:text-indigo-700 transition-colors">
+                            View Profile <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                           </div>
                         </div>
                       </div>
                     </motion.div>
                   ))}
                 </div>
+                <div className="text-center pt-6">
+                  <button
+                    onClick={() => setActiveTab('tutors')}
+                    className="inline-flex items-center justify-center gap-2 bg-white text-indigo-600 border-2 border-indigo-100 font-bold px-8 py-4 rounded-2xl hover:bg-indigo-50 hover:border-indigo-200 hover:gap-3 transition-all shadow-sm group"
+                  >
+                    View All Educators <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                  </button>
+                </div>
+              </section>
+            </div>
+          )}
+
+          {activeTab === 'tutors' && (
+            <div className="space-y-12">
+              <div className="flex flex-col md:flex-row justify-between items-end gap-6">
+                <div className="space-y-2">
+                  <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-black uppercase tracking-widest">
+                    <Star className="w-3 h-3 fill-emerald-700" />
+                    <span>Top Rated Experts</span>
+                  </div>
+                  <h2 className="text-4xl font-black text-slate-900 tracking-tight">Find Your Perfect Tutor</h2>
+                  <p className="text-slate-600">Browse verified experts in STEM and ICT subjects ready to guide you.</p>
+                </div>
+                <div className="flex gap-3 w-full md:w-auto">
+                  <div className="relative flex-1 md:w-80">
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Search by subject or name..."
+                      className="w-full pl-12 pr-4 py-4 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all font-medium"
+                    />
+                  </div>
+                  <button
+                    onClick={() => alert('Searching for tutors...')}
+                    className="bg-indigo-600 text-white p-4 rounded-2xl shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
+                  >
+                    <Search className="w-6 h-6" />
+                  </button>
+                </div>
+              </div>
+
+              {isLoadingTutors ? (
+                <div className="flex justify-center items-center py-12">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+                </div>
+              ) : (
+                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+                  {tutorsWithLiveStats.map(tutor => (
+                    <motion.div
+                      layout
+                      whileHover={{ y: -10 }}
+                      key={tutor.id}
+                      className="bg-white rounded-[2.5rem] border border-slate-100 overflow-hidden shadow-sm hover:shadow-2xl transition-all group relative"
+                    >
+                      <div className="absolute top-0 left-0 w-full h-24 bg-gradient-to-r from-indigo-600 to-violet-600 opacity-10" />
+                      <div className="p-8 relative z-10">
+                        <div className="flex items-start gap-5">
+                          <div className="relative">
+                            <img
+                              src={tutor.avatar}
+                              alt={getTutorDisplayName(tutor)}
+                              className="w-20 h-20 rounded-2xl object-cover border-4 border-white shadow-xl"
+                              referrerPolicy="no-referrer"
+                            />
+                            {tutor.isVerified && (
+                              <div className="absolute -bottom-1 -right-1 bg-indigo-600 p-1 rounded-lg border-2 border-white">
+                                <CheckCircle className="w-3 h-3 text-white" />
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex-1 pt-1">
+                            <h3 className="font-black text-xl text-slate-900 leading-tight mb-1">{getTutorDisplayName(tutor)}</h3>
+                            <p className="text-xs font-bold text-indigo-600 uppercase tracking-widest">{tutor.qualifications}</p>
+                            <div className="flex items-center gap-1.5 mt-2">
+                              <div className="flex items-center gap-1 bg-amber-50 px-2 py-0.5 rounded-lg">
+                                <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                                <span className="text-xs font-black text-amber-700">{tutor.rating}</span>
+                              </div>
+                              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">({tutor.reviewCount} reviews)</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-6 flex flex-wrap gap-2">
+                          {tutor.subjects.map(s => (
+                            <span key={s} className="px-3 py-1.5 bg-slate-50 text-slate-600 text-[10px] font-black uppercase tracking-widest rounded-xl border border-slate-100">
+                              {s}
+                            </span>
+                          ))}
+                        </div>
+
+                        <p className="mt-5 text-sm text-slate-500 leading-relaxed line-clamp-2 font-medium italic">"{tutor.bio}"</p>
+
+                        <div className="mt-8 pt-6 border-t border-slate-50 flex items-center justify-between">
+                          <div>
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Hourly Rate</span>
+                            <p className="text-2xl font-black text-slate-900">LKR {tutor.pricePerHour}</p>
+                          </div>
+                          <div className="flex gap-3">
+                            <button
+                              onClick={() => {
+                                setViewingTutorId(tutor.id);
+                                setActiveTab('tutorProfile');
+                              }}
+                              className="px-4 py-3 bg-slate-100 text-slate-700 rounded-2xl font-black text-sm hover:bg-slate-200 transition-all"
+                            >
+                              View Profile
+                            </button>
+                            {(isStudent || !currentUser) && (
+                              <button
+                                onClick={() => setSelectedTutor(selectedTutor?.id === tutor.id ? null : tutor)}
+                                className={`px-6 py-3 rounded-2xl font-black text-sm transition-all ${selectedTutor?.id === tutor.id
+                                    ? 'bg-slate-900 text-white'
+                                    : 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700'
+                                  }`}
+                              >
+                                {selectedTutor?.id === tutor.id ? 'Close' : 'Book Session'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <AnimatePresence>
+                          {selectedTutor?.id === tutor.id && (isStudent || !currentUser) && (
+                            <motion.div
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="mt-6 pt-6 border-t border-slate-50 space-y-4 overflow-hidden"
+                            >
+                              <div className="flex justify-between items-center">
+                                <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">Available Slots</h4>
+                                <Calendar className="w-4 h-4 text-slate-400" />
+                              </div>
+                              <div className="grid grid-cols-2 gap-3">
+                                {tutor.availability.map(slot => (
+                                  <button
+                                    key={slot.id}
+                                    onClick={() => handleBookSession(tutor, slot.id)}
+                                    className="p-3 rounded-2xl border-2 border-slate-50 hover:border-indigo-200 hover:bg-indigo-50 transition-all text-left group"
+                                  >
+                                    <p className="font-black text-xs text-slate-700 group-hover:text-indigo-700">{slot.day}</p>
+                                    <p className="text-[10px] font-bold text-slate-400 mt-0.5">{slot.startTime} - {slot.endTime}</p>
+                                  </button>
+                                ))}
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
               )}
             </div>
-          </div>
-        )}
+          )}
 
-        {activeTab === 'registerSelect' && !currentUser && (
-          <RegistrationSelectionPage
-            onSelectRole={(role) => setActiveTab(role === 'student' ? 'registerStudent' : 'registerTutor')}
-          />
-        )}
-
-        {activeTab === 'registerStudent' && !currentUser && (
-          <GetStartedSection 
-            initialRole="student"
-            showRoleSelector={false}
-            onBack={() => setActiveTab('registerSelect')}
-            onAccountCreated={(user) => {
-              setCurrentUser(user);
-              setActiveTab('dashboard');
-              localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
-            }} 
-            STEM_SUBJECTS={STEM_SUBJECTS}
-          />
-        )}
-
-        {activeTab === 'registerTutor' && !currentUser && (
-          <GetStartedSection 
-            initialRole="tutor"
-            showRoleSelector={false}
-            onBack={() => setActiveTab('registerSelect')}
-            onAccountCreated={(user) => {
-              setCurrentUser(user);
-              setActiveTab('dashboard');
-              localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
-            }} 
-            STEM_SUBJECTS={STEM_SUBJECTS}
-          />
-        )}
-
-        {activeTab === 'register' && isTutor && currentUser && (
-          <div className="max-w-5xl mx-auto">
-            <div className="text-center mb-10 md:mb-14">
-              <div className="inline-flex items-center justify-center p-3 bg-indigo-50 rounded-2xl text-indigo-600 mb-6">
-                <Edit className="w-8 h-8" />
-              </div>
-              <h2 className="text-4xl md:text-5xl font-black text-slate-900 tracking-tight mb-4">Edit Profile</h2>
-              <p className="text-lg text-slate-500 max-w-2xl mx-auto">Manage your professional identity, qualifications, subjects, and availability to attract the right students.</p>
+          {activeTab === 'courses' && (
+            <div className="space-y-12">
+              {isLoadingCourses ? (
+                <div className="flex justify-center items-center py-12">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+                </div>
+              ) : isTutor ? (
+                <TutorCourseManagePage
+                  courses={courses}
+                  currentTutor={currentTutor}
+                  courseEnrollments={courseEnrollments}
+                  enrollmentCountByCourseId={enrollmentCountByCourseId}
+                  courseForm={courseForm}
+                  setCourseForm={setCourseForm}
+                  editingCourseId={editingCourseId}
+                  isSavingCourse={isSavingCourse}
+                  isLoading={isLoadingCourses}
+                  isUploadingCourseThumbnail={isUploadingCourseThumbnail}
+                  uploadingModuleVideoKey={uploadingModuleVideoKey}
+                  uploadingModuleResourcesKey={uploadingModuleResourcesKey}
+                  stemSubjects={STEM_SUBJECTS}
+                  onSaveCourse={handleSaveCourse}
+                  onDeleteCourse={handleDeleteCourse}
+                  onEditCourse={handleEditCourse}
+                  onResetCourseForm={handleResetCourseForm}
+                  onAddCourseModule={handleAddCourseModule}
+                  onRemoveCourseModule={handleRemoveCourseModule}
+                  onUpdateCourseModule={handleUpdateCourseModule}
+                  onUploadCourseThumbnail={handleUploadCourseThumbnail}
+                  onUploadModuleVideo={handleUploadModuleVideo}
+                  onUploadModuleResources={handleUploadModuleResources}
+                  onUpdateCourseModuleResource={handleUpdateCourseModuleResource}
+                  onRemoveCourseModuleResource={handleRemoveCourseModuleResource}
+                  onAddUrlModuleResource={handleAddUrlModuleResource}
+                  getEditableModuleKey={getEditableModuleKey}
+                />
+              ) : (
+                <CourseBrowsingPage
+                  courses={courses}
+                  tutors={tutors}
+                  isStudent={isStudent}
+                  isLoggedIn={!!currentUser}
+                  isLoading={isLoadingCourses}
+                  studentEnrollmentByCourseId={studentEnrollmentByCourseId}
+                  enrollmentCountByCourseId={enrollmentCountByCourseId}
+                  courseSearchQuery={courseSearchQuery}
+                  courseCategoryFilter={courseCategoryFilter}
+                  onSetCourseSearchQuery={setCourseSearchQuery}
+                  onSetCourseCategoryFilter={setCourseCategoryFilter}
+                  onEnrollCourse={handleEnrollCourse}
+                  onOpenCourseLearning={handleOpenCourseLearning}
+                  onViewCertificate={handleShowCertificateModal}
+                  stemSubjects={STEM_SUBJECTS}
+                />
+              )}
             </div>
+          )}
 
-            <form onSubmit={handleUpdateProfile} className="space-y-8">
-              
-              {/* Profile Image Section */}
-              <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
-                <h3 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-3">
-                  <Camera className="w-6 h-6 text-indigo-600" />
-                  Profile Picture
-                </h3>
-                <div className="flex flex-col sm:flex-row items-center gap-8">
-                  <div className="relative group cursor-pointer" onClick={() => setShowImageModal(true)}>
-                    {currentUserAvatarUrl ? (
-                      <img
-                        src={currentUserAvatarUrl}
-                        alt="Avatar"
-                        className="w-32 h-32 rounded-full object-cover border-4 border-indigo-50 shadow-xl"
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                          (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'flex';
-                        }}
-                      />
-                    ) : null}
-                    <div className="w-32 h-32 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-full flex items-center justify-center text-white text-4xl font-black shadow-xl border-4 border-indigo-50" style={{ display: currentUserAvatarUrl ? 'none' : 'flex' }}>
-                      {(currentUser.firstName + ' ' + currentUser.lastName).charAt(0)}
-                    </div>
-                    <div className="absolute inset-0 bg-black/40 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                      <Camera className="w-8 h-8 text-white" />
-                    </div>
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-slate-900 text-lg">Avatar</h4>
-                    <p className="text-slate-500 text-sm mb-4">Upload a professional headshot to build trust with students. PNG or JPEG, max 5MB.</p>
-                    <button
-                      type="button"
-                      onClick={() => setShowImageModal(true)}
-                      className="px-6 py-2.5 bg-indigo-50 text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition-colors text-sm"
-                    >
-                      Change Picture
-                    </button>
-                  </div>
+          {activeTab === 'resources' && (
+            isTutor ? (
+              <TutorResourceManagePage
+                resources={resources}
+                currentTutorId={currentTutor?.id}
+                resourceForm={resourceForm}
+                setResourceForm={setResourceForm}
+                editingResourceId={editingResourceId}
+                isSavingResource={isSavingResource}
+                isLoading={isLoadingResources}
+                stemSubjects={STEM_SUBJECTS}
+                onSaveResource={handleSaveResource}
+                onDeleteResource={handleDeleteResource}
+                onEditResource={handleEditResource}
+                onResetResourceForm={handleResetResourceForm}
+              />
+            ) : (
+              <StudentResourceLibraryPage
+                resources={resources}
+                isLoggedIn={!!currentUser}
+                isLoading={isLoadingResources}
+                stemSubjects={STEM_SUBJECTS}
+              />
+            )
+          )}
+
+          {activeTab === 'quizzes' && (
+            <div className="flex-1 w-full bg-slate-50">
+              <QuizChatbotPage currentUser={currentUser} />
+            </div>
+          )}
+
+          {activeTab === 'questions' && (!currentUser || isStudent) && (
+            <div className="max-w-4xl mx-auto space-y-10">
+              <div className="text-center space-y-4">
+                <div className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-100 text-indigo-700 rounded-full text-sm font-bold">
+                  <Bot className="w-4 h-4" />
+                  <span>AI Support</span>
                 </div>
+                <h2 className="text-4xl font-black text-slate-900 tracking-tight">Instant Knowledge Base</h2>
+                <p className="text-slate-600 max-w-xl mx-auto">Ask any complex STEM or ICT question and get detailed, verified answers from our AI engine.</p>
               </div>
 
-              {/* Profile Info Section */}
-              <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
-                <h3 className="text-2xl font-bold text-slate-900 mb-8 flex items-center gap-3">
-                  <User className="w-6 h-6 text-indigo-600" />
-                  Basic Information
-                </h3>
-                
-                <div className="grid md:grid-cols-2 gap-6 mb-6">
-                  <div className="space-y-3">
-                    <label className="text-sm font-bold text-slate-700">First Name</label>
-                    <input
-                      type="text"
-                      value={profileData.firstName}
-                      onChange={e => setProfileData({...profileData, firstName: e.target.value})}
-                      className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
-                      placeholder="Jane"
-                    />
-                  </div>
-                  <div className="space-y-3">
-                    <label className="text-sm font-bold text-slate-700">Last Name</label>
-                    <input
-                      type="text"
-                      value={profileData.lastName}
-                      onChange={e => setProfileData({...profileData, lastName: e.target.value})}
-                      className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
-                      placeholder="Doe"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid md:grid-cols-2 gap-6 mb-6">
-                  <div className="space-y-3">
-                    <label className="text-sm font-bold text-slate-700">Email Address</label>
-                    <div className="relative">
-                      <Mail className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                      <input
-                        type="email"
-                        value={currentUser.email}
-                        disabled
-                        className="w-full pl-12 pr-5 py-4 rounded-2xl border border-slate-200 bg-slate-100 text-slate-500 font-medium cursor-not-allowed"
-                      />
+              <div className="bg-white p-8 md:p-10 rounded-[3rem] border border-slate-100 shadow-xl space-y-8 relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-2 h-full bg-indigo-600" />
+                <div className="flex flex-col md:flex-row gap-6">
+                  <div className="flex-1 space-y-6">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Select Subject</label>
+                      <div className="flex flex-wrap gap-2">
+                        {STEM_SUBJECTS.map(s => (
+                          <button
+                            key={s}
+                            onClick={() => setNewQuestion({ ...newQuestion, subject: s })}
+                            className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${newQuestion.subject === s
+                                ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100'
+                                : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
+                              }`}
+                          >
+                            {s}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                  <div className="space-y-3">
-                    <label className="text-sm font-bold text-slate-700">Phone Number (Optional)</label>
-                    <div className="relative">
-                      <Phone className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                      <input
-                        type="tel"
-                        value={profileData.phone}
-                        onChange={e => setProfileData({...profileData, phone: e.target.value})}
-                        className="w-full pl-12 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
-                        placeholder="+1 (555) 000-0000"
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Your Question</label>
+                      <textarea
+                        placeholder="e.g., Explain the concept of Quantum Entanglement in simple terms..."
+                        value={newQuestion.text}
+                        onChange={(e) => setNewQuestion({ ...newQuestion, text: e.target.value })}
+                        className="w-full h-40 p-6 rounded-[2rem] border border-slate-100 bg-slate-50/50 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none resize-none font-medium text-slate-700 transition-all"
                       />
                     </div>
                   </div>
                 </div>
 
-                <div className="space-y-3">
-                  <label className="text-sm font-bold text-slate-700">Professional Bio</label>
-                  <textarea
-                    required
-                    value={profileData.bio}
-                    onChange={e => setProfileData({...profileData, bio: e.target.value})}
-                    className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all resize-none min-h-[140px]"
-                    placeholder="Tell students about yourself, your teaching experience, methodology, and what makes your classes unique..."
-                  />
-                </div>
+                <button
+                  onClick={handleAskQuestion}
+                  disabled={isAsking || !newQuestion.text}
+                  className="w-full bg-indigo-600 text-white py-5 rounded-2xl font-black text-lg hover:bg-indigo-700 disabled:opacity-50 shadow-2xl shadow-indigo-100 flex items-center justify-center gap-3 transition-all active:scale-[0.98]"
+                >
+                  {isAsking ? (
+                    <>
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Analyzing Question...
+                    </>
+                  ) : (
+                    <>
+                      Ask AI Assistant <Send className="w-5 h-5" />
+                    </>
+                  )}
+                </button>
               </div>
 
-              {/* Education & Qualifications Section */}
-              <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
-                <div className="flex items-center justify-between mb-8">
-                  <h3 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
-                    <Award className="w-6 h-6 text-indigo-600" />
-                    Education & Rates
+              <div className="space-y-8">
+                <h3 className="text-2xl font-black text-slate-900 ml-2">Recent Inquiries</h3>
+                {questions.length === 0 ? (
+                  <div className="text-center py-12 bg-slate-50 rounded-[2.5rem] border border-dashed border-slate-200">
+                    <MessageSquare className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+                    <p className="text-slate-400 font-medium">No questions asked yet. Be the first!</p>
+                  </div>
+                ) : (
+                  <div className="grid gap-8">
+                    {questions.map(q => (
+                      <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        key={q.id}
+                        className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm overflow-hidden group hover:shadow-xl transition-all"
+                      >
+                        <div className="p-8 border-b border-slate-50 bg-slate-50/30">
+                          <div className="flex justify-between items-center mb-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-bold">
+                                {q.subject.charAt(0)}
+                              </div>
+                              <div>
+                                <span className="text-xs font-black text-indigo-600 uppercase tracking-widest">{q.subject}</span>
+                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{new Date(q.timestamp).toLocaleDateString()}</p>
+                              </div>
+                            </div>
+                            <div className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest">
+                              Answered
+                            </div>
+                          </div>
+                          <p className="text-xl font-bold text-slate-800 leading-tight">{q.text}</p>
+                        </div>
+                        <div className="p-8 bg-white">
+                          <div className="flex gap-5">
+                            <div className="bg-indigo-50 p-3 rounded-2xl h-fit shrink-0">
+                              <Bot className="text-indigo-600 w-6 h-6" />
+                            </div>
+                            <div className="markdown-body prose prose-slate max-w-none">
+                              <Markdown>{q.answer}</Markdown>
+                            </div>
+                          </div>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'registerSelect' && !currentUser && (
+            <RegistrationSelectionPage
+              onSelectRole={(role) => setActiveTab(role === 'student' ? 'registerStudent' : 'registerTutor')}
+            />
+          )}
+
+          {activeTab === 'registerStudent' && !currentUser && (
+            <GetStartedSection
+              initialRole="student"
+              showRoleSelector={false}
+              onBack={() => setActiveTab('registerSelect')}
+              onAccountCreated={(user) => {
+                setCurrentUser(user);
+                setActiveTab('dashboard');
+                localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
+              }}
+              STEM_SUBJECTS={STEM_SUBJECTS}
+            />
+          )}
+
+          {activeTab === 'registerTutor' && !currentUser && (
+            <GetStartedSection
+              initialRole="tutor"
+              showRoleSelector={false}
+              onBack={() => setActiveTab('registerSelect')}
+              onAccountCreated={(user) => {
+                setCurrentUser(user);
+                setActiveTab('dashboard');
+                localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
+              }}
+              STEM_SUBJECTS={STEM_SUBJECTS}
+            />
+          )}
+
+          {activeTab === 'register' && isTutor && currentUser && (
+            <div className="max-w-5xl mx-auto">
+              <div className="text-center mb-10 md:mb-14">
+                <div className="inline-flex items-center justify-center p-3 bg-indigo-50 rounded-2xl text-indigo-600 mb-6">
+                  <Edit className="w-8 h-8" />
+                </div>
+                <h2 className="text-4xl md:text-5xl font-black text-slate-900 tracking-tight mb-4">Edit Profile</h2>
+                <p className="text-lg text-slate-500 max-w-2xl mx-auto">Manage your professional identity, qualifications, subjects, and availability to attract the right students.</p>
+              </div>
+
+              <form onSubmit={handleUpdateProfile} className="space-y-8">
+
+                {/* Profile Image Section */}
+                <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                  <h3 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-3">
+                    <Camera className="w-6 h-6 text-indigo-600" />
+                    Profile Picture
                   </h3>
+                  <div className="flex flex-col sm:flex-row items-center gap-8">
+                    <div className="relative group cursor-pointer" onClick={() => setShowImageModal(true)}>
+                      {currentUserAvatarUrl ? (
+                        <img
+                          src={currentUserAvatarUrl}
+                          alt="Avatar"
+                          className="w-32 h-32 rounded-full object-cover border-4 border-indigo-50 shadow-xl"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                            (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'flex';
+                          }}
+                        />
+                      ) : null}
+                      <div className="w-32 h-32 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-full flex items-center justify-center text-white text-4xl font-black shadow-xl border-4 border-indigo-50" style={{ display: currentUserAvatarUrl ? 'none' : 'flex' }}>
+                        {(currentUser.firstName + ' ' + currentUser.lastName).charAt(0)}
+                      </div>
+                      <div className="absolute inset-0 bg-black/40 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                        <Camera className="w-8 h-8 text-white" />
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-slate-900 text-lg">Avatar</h4>
+                      <p className="text-slate-500 text-sm mb-4">Upload a professional headshot to build trust with students. PNG or JPEG, max 5MB.</p>
+                      <button
+                        type="button"
+                        onClick={() => setShowImageModal(true)}
+                        className="px-6 py-2.5 bg-indigo-50 text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition-colors text-sm"
+                      >
+                        Change Picture
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                
-                <div className="grid md:grid-cols-2 gap-8">
-                  <div className="space-y-3 md:col-span-2">
-                    <label className="text-sm font-bold text-slate-700">Highest Qualifications</label>
+
+                {/* Profile Info Section */}
+                <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                  <h3 className="text-2xl font-bold text-slate-900 mb-8 flex items-center gap-3">
+                    <User className="w-6 h-6 text-indigo-600" />
+                    Basic Information
+                  </h3>
+
+                  <div className="grid md:grid-cols-2 gap-6 mb-6">
+                    <div className="space-y-3">
+                      <label className="text-sm font-bold text-slate-700">First Name</label>
+                      <input
+                        type="text"
+                        value={profileData.firstName}
+                        onChange={e => setProfileData({ ...profileData, firstName: e.target.value })}
+                        className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
+                        placeholder="Jane"
+                      />
+                    </div>
+                    <div className="space-y-3">
+                      <label className="text-sm font-bold text-slate-700">Last Name</label>
+                      <input
+                        type="text"
+                        value={profileData.lastName}
+                        onChange={e => setProfileData({ ...profileData, lastName: e.target.value })}
+                        className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
+                        placeholder="Doe"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid md:grid-cols-2 gap-6 mb-6">
+                    <div className="space-y-3">
+                      <label className="text-sm font-bold text-slate-700">Email Address</label>
+                      <div className="relative">
+                        <Mail className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                        <input
+                          type="email"
+                          value={currentUser.email}
+                          disabled
+                          className="w-full pl-12 pr-5 py-4 rounded-2xl border border-slate-200 bg-slate-100 text-slate-500 font-medium cursor-not-allowed"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-3">
+                      <label className="text-sm font-bold text-slate-700">Phone Number (Optional)</label>
+                      <div className="relative">
+                        <Phone className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                        <input
+                          type="tel"
+                          value={profileData.phone}
+                          onChange={e => setProfileData({ ...profileData, phone: e.target.value })}
+                          className="w-full pl-12 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
+                          placeholder="+1 (555) 000-0000"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <label className="text-sm font-bold text-slate-700">Professional Bio</label>
                     <textarea
                       required
-                      value={profileData.education}
-                      onChange={e => setProfileData({...profileData, education: e.target.value})}
-                      className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all min-h-[100px]"
-                      placeholder="e.g. BSc in Computer Science, University of Colombo&#10;MSc in AI, Stanford University"
+                      value={profileData.bio}
+                      onChange={e => setProfileData({ ...profileData, bio: e.target.value })}
+                      className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all resize-none min-h-[140px]"
+                      placeholder="Tell students about yourself, your teaching experience, methodology, and what makes your classes unique..."
                     />
                   </div>
+                </div>
 
-                  <div className="space-y-3">
-                    <label className="text-sm font-bold text-slate-700">Hourly Rate (USD)</label>
-                    <div className="relative">
-                      <span className="absolute left-5 top-1/2 -translate-y-1/2 font-bold text-slate-400">$</span>
-                      <input 
-                        type="number" 
-                        min="0"
-                        step="0.01"
+                {/* Education & Qualifications Section */}
+                <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                  <div className="flex items-center justify-between mb-8">
+                    <h3 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
+                      <Award className="w-6 h-6 text-indigo-600" />
+                      Education & Rates
+                    </h3>
+                  </div>
+
+                  <div className="grid md:grid-cols-2 gap-8">
+                    <div className="space-y-3 md:col-span-2">
+                      <label className="text-sm font-bold text-slate-700">Highest Qualifications</label>
+                      <textarea
                         required
-                        value={profileData.pricePerHour}
-                        onChange={e => setProfileData({...profileData, pricePerHour: parseFloat(e.target.value) || 0})}
-                        className="w-full pl-10 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all" 
-                        placeholder="25.00"
+                        value={profileData.education}
+                        onChange={e => setProfileData({ ...profileData, education: e.target.value })}
+                        className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all min-h-[100px]"
+                        placeholder="e.g. BSc in Computer Science, University of Colombo&#10;MSc in AI, Stanford University"
                       />
                     </div>
-                  </div>
 
-                  <div className="space-y-3">
-                    <label className="text-sm font-bold text-slate-700">Primary Teaching Level</label>
-                    <select
-                      required
-                      value={profileData.teachingLevel}
-                      onChange={e => setProfileData({...profileData, teachingLevel: e.target.value})}
-                      className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all appearance-none"
-                    >
-                      <option value="" disabled>Select your primary audience</option>
-                      <option value="School">School Level (K-12)</option>
-                      <option value="University">University Level</option>
-                      <option value="Both">Both School & University</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
+                    <div className="space-y-3">
+                      <label className="text-sm font-bold text-slate-700">Hourly Rate (USD)</label>
+                      <div className="relative">
+                        <span className="absolute left-5 top-1/2 -translate-y-1/2 font-bold text-slate-400">$</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          required
+                          value={profileData.pricePerHour}
+                          onChange={e => setProfileData({ ...profileData, pricePerHour: parseFloat(e.target.value) || 0 })}
+                          className="w-full pl-10 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
+                          placeholder="25.00"
+                        />
+                      </div>
+                    </div>
 
-              {/* Subjects Section */}
-              <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
-                <h3 className="text-2xl font-bold text-slate-900 mb-3 flex items-center gap-3">
-                  <BookOpen className="w-6 h-6 text-indigo-600" />
-                  Subjects Taught
-                </h3>
-                <p className="text-slate-500 mb-6">Select the STEM/ICT subjects you are qualified to teach.</p>
-                
-                <div className="flex flex-wrap gap-3">
-                  {STEM_SUBJECTS.map(s => {
-                    const isSelected = profileData.subjects.includes(s);
-                    return (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => {
-                          const newSubs = isSelected
-                            ? profileData.subjects.filter(x => x !== s)
-                            : [...profileData.subjects, s];
-                          setProfileData({...profileData, subjects: newSubs});
-                        }}
-                        className={`px-5 py-3 rounded-2xl text-sm font-bold transition-all flex items-center gap-2 border-2 ${
-                          isSelected
-                            ? 'bg-indigo-50 border-indigo-600 text-indigo-700 shadow-sm'
-                            : 'bg-white border-slate-100 text-slate-600 hover:border-indigo-200 hover:bg-slate-50'
-                        }`}
+                    <div className="space-y-3">
+                      <label className="text-sm font-bold text-slate-700">Primary Teaching Level</label>
+                      <select
+                        required
+                        value={profileData.teachingLevel}
+                        onChange={e => setProfileData({ ...profileData, teachingLevel: e.target.value })}
+                        className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all appearance-none"
                       >
-                        {isSelected ? <CheckCircle className="w-4 h-4 text-indigo-600" /> : <div className="w-4 h-4 rounded-full border-2 border-slate-300" />}
-                        {s}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Availability Section */}
-              <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
-                <div className="flex items-center justify-between mb-6">
-                  <div>
-                    <h3 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
-                      <Calendar className="w-6 h-6 text-indigo-600" />
-                      Availability
-                    </h3>
-                    <p className="text-slate-500 mt-2">Manage your regular weekly schedule for tutoring sessions.</p>
+                        <option value="" disabled>Select your primary audience</option>
+                        <option value="School">School Level (K-12)</option>
+                        <option value="University">University Level</option>
+                        <option value="Both">Both School & University</option>
+                      </select>
+                    </div>
                   </div>
-                  <button 
+                </div>
+
+                {/* Subjects Section */}
+                <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                  <h3 className="text-2xl font-bold text-slate-900 mb-3 flex items-center gap-3">
+                    <BookOpen className="w-6 h-6 text-indigo-600" />
+                    Subjects Taught
+                  </h3>
+                  <p className="text-slate-500 mb-6">Select the STEM/ICT subjects you are qualified to teach.</p>
+
+                  <div className="flex flex-wrap gap-3">
+                    {STEM_SUBJECTS.map(s => {
+                      const isSelected = profileData.subjects.includes(s);
+                      return (
+                        <button
+                          key={s}
+                          type="button"
+                          onClick={() => {
+                            const newSubs = isSelected
+                              ? profileData.subjects.filter(x => x !== s)
+                              : [...profileData.subjects, s];
+                            setProfileData({ ...profileData, subjects: newSubs });
+                          }}
+                          className={`px-5 py-3 rounded-2xl text-sm font-bold transition-all flex items-center gap-2 border-2 ${isSelected
+                              ? 'bg-indigo-50 border-indigo-600 text-indigo-700 shadow-sm'
+                              : 'bg-white border-slate-100 text-slate-600 hover:border-indigo-200 hover:bg-slate-50'
+                            }`}
+                        >
+                          {isSelected ? <CheckCircle className="w-4 h-4 text-indigo-600" /> : <div className="w-4 h-4 rounded-full border-2 border-slate-300" />}
+                          {s}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Availability Section */}
+                <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                  <div className="flex items-center justify-between mb-6">
+                    <div>
+                      <h3 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
+                        <Calendar className="w-6 h-6 text-indigo-600" />
+                        Availability
+                      </h3>
+                      <p className="text-slate-500 mt-2">Manage your regular weekly schedule for tutoring sessions.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                          setActiveTab('manageAvailability');
+                        } else {
+                          alert('Advanced schedule manager is currently available for School level tutors only.');
+                        }
+                      }}
+                      className="hidden sm:flex items-center gap-2 bg-slate-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold hover:bg-indigo-50 transition-colors"
+                    >
+                      <Edit className="w-4 h-4" /> Manage Slots
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-3">
+                    {availabilityByDay.map(({ day, count }, i) => (
+                      <div key={day} className={`flex flex-col items-center p-4 rounded-2xl border-2 ${count > 0 ? 'border-indigo-100 bg-indigo-50/30' : i < 5 ? 'border-indigo-100 bg-indigo-50/20' : 'border-slate-100 bg-slate-50'}`}>
+                        <span className="text-sm font-bold text-slate-700 mb-2">{day}</span>
+                        {count > 0 ? (
+                          <span className="text-xs font-black text-indigo-600 bg-indigo-100 px-2 py-1 rounded-md">{count} Slot{count > 1 ? 's' : ''}</span>
+                        ) : (
+                          <span className="text-xs font-medium text-slate-400">Off</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <button
                     type="button"
                     onClick={() => {
                       if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
@@ -3831,1063 +3670,1031 @@ export default function App() {
                         alert('Advanced schedule manager is currently available for School level tutors only.');
                       }
                     }}
-                    className="hidden sm:flex items-center gap-2 bg-slate-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold hover:bg-indigo-50 transition-colors"
+                    className="w-full sm:hidden mt-4 flex items-center justify-center gap-2 bg-slate-50 text-indigo-600 px-5 py-3 rounded-xl font-bold hover:bg-indigo-50 transition-colors"
                   >
                     <Edit className="w-4 h-4" /> Manage Slots
                   </button>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-3">
-                  {availabilityByDay.map(({ day, count }, i) => (
-                    <div key={day} className={`flex flex-col items-center p-4 rounded-2xl border-2 ${count > 0 ? 'border-indigo-100 bg-indigo-50/30' : i < 5 ? 'border-indigo-100 bg-indigo-50/20' : 'border-slate-100 bg-slate-50'}`}>
-                      <span className="text-sm font-bold text-slate-700 mb-2">{day}</span>
-                      {count > 0 ? (
-                        <span className="text-xs font-black text-indigo-600 bg-indigo-100 px-2 py-1 rounded-md">{count} Slot{count > 1 ? 's' : ''}</span>
-                      ) : (
-                        <span className="text-xs font-medium text-slate-400">Off</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-                <button 
-                  type="button"
-                  onClick={() => {
-                      if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
-                        setActiveTab('manageAvailability');
-                      } else {
-                        alert('Advanced schedule manager is currently available for School level tutors only.');
-                      }
-                    }}
-                  className="w-full sm:hidden mt-4 flex items-center justify-center gap-2 bg-slate-50 text-indigo-600 px-5 py-3 rounded-xl font-bold hover:bg-indigo-50 transition-colors"
-                >
-                  <Edit className="w-4 h-4" /> Manage Slots
-                </button>
-              </div>
-
-              {/* Submit Actions */}
-              <div className="flex gap-4 pt-4">
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('dashboard')}
-                  className="flex-1 px-8 py-4 rounded-2xl font-bold text-lg text-slate-600 bg-slate-100 hover:bg-slate-200 transition-all"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isUpdatingProfile}
-                  className="flex-[2] bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black text-lg hover:bg-indigo-700 disabled:opacity-50 shadow-xl shadow-indigo-200 flex items-center justify-center gap-3 transition-all active:scale-[0.98]"
-                >
-                  {isUpdatingProfile ? (
-                    <span className="flex items-center gap-2">
-                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Saving Changes...
-                    </span>
-                  ) : (
-                    <>
-                      Save Profile Updates
-                      <Check className="w-5 h-5" />
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-
-        {activeTab === 'dashboard' && currentUser && isTutor && (
-          <div className="space-y-8">
-            <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-              <h2 className="text-3xl font-black text-slate-900 tracking-tight">Tutor Workspace</h2>
-              <p className="text-slate-500 mt-2">Manage your profile, subjects, schedule, bookings, feedback, and learning content.</p>
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-6">
-                <button onClick={() => setActiveTab('register')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
-                  <p className="font-black text-slate-900">Profile & Qualifications</p>
-                  <p className="text-xs text-slate-500 mt-1">Update tutor profile details</p>
-                </button>
-                <button onClick={() => setActiveTab('settings')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
-                  <p className="font-black text-slate-900">Settings</p>
-                  <p className="text-xs text-slate-500 mt-1">Manage subjects and profile settings</p>
-                </button>
-                {(profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') && (
-                  <button onClick={() => setActiveTab('manageAvailability')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
-                    <p className="font-black text-slate-900">Manage Availability</p>
-                    <p className="text-xs text-slate-500 mt-1">Configure your tutoring schedule</p>
+                {/* Submit Actions */}
+                <div className="flex gap-4 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('dashboard')}
+                    className="flex-1 px-8 py-4 rounded-2xl font-bold text-lg text-slate-600 bg-slate-100 hover:bg-slate-200 transition-all"
+                  >
+                    Cancel
                   </button>
-                )}
-                <button onClick={() => setActiveTab('courses')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
-                  <p className="font-black text-slate-900">Course Management</p>
-                  <p className="text-xs text-slate-500 mt-1">Upload and manage tutor courses</p>
-                </button>
-                <button onClick={() => setActiveTab('resources')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
-                  <p className="font-black text-slate-900">Resource Management</p>
-                  <p className="text-xs text-slate-500 mt-1">Upload and manage free resources</p>
-                </button>
-                <button
-                  onClick={async () => {
-                    const feedback = await localService.getSessionFeedback('Tutoring Performance', 'Advanced');
-                    alert(`Performance Summary:\n\n${feedback}`);
-                  }}
-                  className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all"
-                >
-                  <p className="font-black text-slate-900">Feedback & Performance</p>
-                  <p className="text-xs text-slate-500 mt-1">View learner sentiment and AI insights</p>
-                </button>
-                <button
-                  onClick={() => {
-                    const latestLink = bookings[0]?.meetingLink;
-                    if (!latestLink) {
-                      alert('No session link available yet.');
-                      return;
-                    }
-                    navigator.clipboard.writeText(latestLink);
-                    alert('Latest session link copied to clipboard.');
-                  }}
-                  className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all"
-                >
-                  <p className="font-black text-slate-900">Session Link Sharing</p>
-                  <p className="text-xs text-slate-500 mt-1">Copy and share current meeting links</p>
-                </button>
-              </div>
+                  <button
+                    type="submit"
+                    disabled={isUpdatingProfile}
+                    className="flex-[2] bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black text-lg hover:bg-indigo-700 disabled:opacity-50 shadow-xl shadow-indigo-200 flex items-center justify-center gap-3 transition-all active:scale-[0.98]"
+                  >
+                    {isUpdatingProfile ? (
+                      <span className="flex items-center gap-2">
+                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Saving Changes...
+                      </span>
+                    ) : (
+                      <>
+                        Save Profile Updates
+                        <Check className="w-5 h-5" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
             </div>
+          )}
 
-            <div className="grid lg:grid-cols-2 gap-6">
+          {activeTab === 'dashboard' && currentUser && isTutor && (
+            <div className="space-y-8">
               <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                <h3 className="font-black text-xl text-slate-900 mb-4">Booking Management & History</h3>
-                {bookings.length === 0 ? (
-                  <p className="text-slate-500">No student bookings yet.</p>
-                ) : (
-                  <div className="space-y-3">
-                    {bookings.slice(0, 8).map((booking) => {
-                      const isLoading = activeBookingActionId === booking.id;
-                      const canConfirm = booking.status === 'pending';
-                      const canComplete = booking.status === 'confirmed';
-                      const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed';
-
-                      return (
-                        <div key={booking.id} className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-3">
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="font-bold text-slate-900">{booking.subject}</p>
-                              <p className="text-xs text-slate-500">{booking.date} • Student ID: {booking.studentId}</p>
-                            </div>
-                            <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getBookingStatusPillClassName(booking.status)}`}>
-                              {booking.status}
-                            </span>
-                          </div>
-
-                          <div className="flex flex-wrap gap-2">
-                            {canConfirm && (
-                              <button
-                                type="button"
-                                disabled={isLoading}
-                                onClick={() => handleTutorBookingStatusChange(booking, 'confirmed')}
-                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
-                              >
-                                Confirm
-                              </button>
-                            )}
-                            {canComplete && (
-                              <button
-                                type="button"
-                                disabled={isLoading}
-                                onClick={() => handleTutorBookingStatusChange(booking, 'completed')}
-                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
-                              >
-                                Mark Completed
-                              </button>
-                            )}
-                            {canCancel && (
-                              <button
-                                type="button"
-                                disabled={isLoading}
-                                onClick={() => handleTutorBookingStatusChange(booking, 'cancelled')}
-                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
-                              >
-                                Cancel
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              disabled={isLoading}
-                              onClick={() => handleTutorMeetingLinkUpdate(booking)}
-                              className="px-3 py-1.5 rounded-lg text-[11px] font-bold border border-slate-200 text-slate-700 bg-white hover:bg-slate-100 disabled:opacity-60"
-                            >
-                              {booking.meetingLink ? 'Edit Link' : 'Add Link'}
-                            </button>
-                            {booking.meetingLink && (
-                              <a
-                                href={booking.meetingLink}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
-                              >
-                                Open Link
-                              </a>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                <h3 className="font-black text-xl text-slate-900 mb-4">Tutor Performance Snapshot</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Sessions</p>
-                    <p className="text-3xl font-black text-slate-900">{bookings.length}</p>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Reviews</p>
-                    <p className="text-3xl font-black text-slate-900">{currentTutorReviewCount}</p>
-                  </div>
+                <h2 className="text-3xl font-black text-slate-900 tracking-tight">Tutor Workspace</h2>
+                <p className="text-slate-500 mt-2">Manage your profile, subjects, schedule, bookings, feedback, and learning content.</p>
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-6">
+                  <button onClick={() => setActiveTab('register')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
+                    <p className="font-black text-slate-900">Profile & Qualifications</p>
+                    <p className="text-xs text-slate-500 mt-1">Update tutor profile details</p>
+                  </button>
+                  <button onClick={() => setActiveTab('settings')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
+                    <p className="font-black text-slate-900">Settings</p>
+                    <p className="text-xs text-slate-500 mt-1">Manage subjects and profile settings</p>
+                  </button>
+                  {(profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') && (
+                    <button onClick={() => setActiveTab('manageAvailability')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
+                      <p className="font-black text-slate-900">Manage Availability</p>
+                      <p className="text-xs text-slate-500 mt-1">Configure your tutoring schedule</p>
+                    </button>
+                  )}
+                  <button onClick={() => setActiveTab('courses')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
+                    <p className="font-black text-slate-900">Course Management</p>
+                    <p className="text-xs text-slate-500 mt-1">Upload and manage tutor courses</p>
+                  </button>
+                  <button onClick={() => setActiveTab('resources')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
+                    <p className="font-black text-slate-900">Resource Management</p>
+                    <p className="text-xs text-slate-500 mt-1">Upload and manage free resources</p>
+                  </button>
+                  <button
+                    onClick={async () => {
+                      const feedback = await localService.getSessionFeedback('Tutoring Performance', 'Advanced');
+                      alert(`Performance Summary:\n\n${feedback}`);
+                    }}
+                    className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all"
+                  >
+                    <p className="font-black text-slate-900">Feedback & Performance</p>
+                    <p className="text-xs text-slate-500 mt-1">View learner sentiment and AI insights</p>
+                  </button>
+                  <button
+                    onClick={() => {
+                      const latestLink = bookings[0]?.meetingLink;
+                      if (!latestLink) {
+                        alert('No session link available yet.');
+                        return;
+                      }
+                      navigator.clipboard.writeText(latestLink);
+                      alert('Latest session link copied to clipboard.');
+                    }}
+                    className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all"
+                  >
+                    <p className="font-black text-slate-900">Session Link Sharing</p>
+                    <p className="text-xs text-slate-500 mt-1">Copy and share current meeting links</p>
+                  </button>
                 </div>
               </div>
-            </div>
-          </div>
-        )}
 
-        {activeTab === 'dashboard' && currentUser && isStudent && (
-          <div className="space-y-10">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 bg-white p-8 rounded-[3rem] border border-slate-100 shadow-sm">
-              <div className="flex items-center gap-6">
-                <div className="relative">
-                  {currentUserAvatarUrl ? (
-                    <img 
-                      src={currentUserAvatarUrl} 
-                      alt={`${currentUser.firstName} ${currentUser.lastName}`} 
-                      className="w-20 h-20 rounded-3xl object-cover shadow-xl shadow-indigo-200"
-                      onError={(e) => {
-                        e.currentTarget.style.display = 'none';
-                        (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'flex';
-                      }}
-                    />
-                  ) : null}
-                  <div className="w-20 h-20 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-3xl flex items-center justify-center text-white text-3xl font-black shadow-xl shadow-indigo-200" style={{ display: currentUserAvatarUrl ? 'none' : 'flex' }}>
-                    {(currentUser.firstName + ' ' + currentUser.lastName).charAt(0)}
-                  </div>
-                </div>
-                <div>
-                  <h2 className="text-3xl font-black text-slate-900 tracking-tight">Welcome back, {currentUser.firstName} {currentUser.lastName}!</h2>
-                  <p className="text-slate-500 font-medium">You've completed <span className="text-indigo-600 font-bold">85%</span> of your weekly goals. Keep it up!</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-4 w-full md:w-auto">
-                <button 
-                  onClick={() => setActiveTab('quizzes')}
-                  className="flex-1 md:flex-none px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
-                >
-                  New Assessment
-                </button>
-              </div>
-            </div>
+              <div className="grid lg:grid-cols-2 gap-6">
+                <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                  <h3 className="font-black text-xl text-slate-900 mb-4">Booking Management & History</h3>
+                  {bookings.length === 0 ? (
+                    <p className="text-slate-500">No student bookings yet.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {bookings.slice(0, 8).map((booking) => {
+                        const isLoading = activeBookingActionId === booking.id;
+                        const canConfirm = booking.status === 'pending';
+                        const canComplete = booking.status === 'confirmed';
+                        const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed';
 
-            <div className="grid lg:grid-cols-3 gap-10">
-              {/* Left Column: Stats & Skills */}
-              <div className="lg:col-span-2 space-y-10">
-                <div className="grid md:grid-cols-2 gap-8">
-                  <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-indigo-50/50 relative overflow-hidden">
-                    <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50 rounded-full -mr-16 -mt-16" />
-                    <div className="flex items-center justify-between mb-8 relative z-10">
-                      <div className="flex items-center gap-4">
-                        <div className="bg-indigo-600 p-3 rounded-2xl shadow-lg shadow-indigo-200">
-                          <Award className="text-white w-6 h-6" />
-                        </div>
-                        <h3 className="font-black text-xl text-slate-900">Skill Matrix</h3>
-                      </div>
-                    </div>
-                    <div className="space-y-8 relative z-10">
-                      {skills.map((skill, idx) => {
-                        const colors = [
-                          'from-blue-500 to-indigo-500',
-                          'from-purple-500 to-violet-500',
-                          'from-emerald-500 to-teal-500'
-                        ];
                         return (
-                          <div key={skill.subject} className="group">
-                            <div className="flex justify-between text-sm font-black mb-3">
-                              <span className="text-slate-700 group-hover:text-indigo-600 transition-colors">{skill.subject}</span>
-                              <span className="text-indigo-600">{skill.level} • {skill.progress}%</span>
+                          <div key={booking.id} className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="font-bold text-slate-900">{booking.subject}</p>
+                                <p className="text-xs text-slate-500">{booking.date} • Student ID: {booking.studentId}</p>
+                              </div>
+                              <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getBookingStatusPillClassName(booking.status)}`}>
+                                {booking.status}
+                              </span>
                             </div>
-                            <div className="h-4 bg-slate-50 rounded-full overflow-hidden border border-slate-100 p-0.5">
-                              <motion.div 
-                                initial={{ width: 0 }}
-                                animate={{ width: `${skill.progress}%` }}
-                                transition={{ duration: 1.5, delay: idx * 0.1, ease: "circOut" }}
-                                className={`h-full bg-gradient-to-r ${colors[idx % colors.length]} rounded-full shadow-lg`} 
-                              />
+
+                            <div className="flex flex-wrap gap-2">
+                              {canConfirm && (
+                                <button
+                                  type="button"
+                                  disabled={isLoading}
+                                  onClick={() => handleTutorBookingStatusChange(booking, 'confirmed')}
+                                  className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
+                                >
+                                  Confirm
+                                </button>
+                              )}
+                              {canComplete && (
+                                <button
+                                  type="button"
+                                  disabled={isLoading}
+                                  onClick={() => handleTutorBookingStatusChange(booking, 'completed')}
+                                  className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                                >
+                                  Mark Completed
+                                </button>
+                              )}
+                              {canCancel && (
+                                <button
+                                  type="button"
+                                  disabled={isLoading}
+                                  onClick={() => handleTutorBookingStatusChange(booking, 'cancelled')}
+                                  className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
+                                >
+                                  Cancel
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                disabled={isLoading}
+                                onClick={() => handleTutorMeetingLinkUpdate(booking)}
+                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold border border-slate-200 text-slate-700 bg-white hover:bg-slate-100 disabled:opacity-60"
+                              >
+                                {booking.meetingLink ? 'Edit Link' : 'Add Link'}
+                              </button>
+                              {booking.meetingLink && (
+                                <a
+                                  href={booking.meetingLink}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-3 py-1.5 rounded-lg text-[11px] font-bold border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+                                >
+                                  Open Link
+                                </a>
+                              )}
                             </div>
                           </div>
                         );
                       })}
                     </div>
-                  </div>
-
-                  <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-emerald-50/50 relative overflow-hidden">
-                    <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-50 rounded-full -mr-16 -mt-16" />
-                    <div className="flex items-center gap-4 mb-10 relative z-10">
-                      <div className="bg-emerald-500 p-3 rounded-2xl shadow-lg shadow-emerald-200">
-                        <Calendar className="text-white w-6 h-6" />
-                      </div>
-                      <h3 className="font-black text-xl text-slate-900">Learning Activity</h3>
-                    </div>
-                    <div className="text-center py-6 relative z-10">
-                      <div className="text-7xl font-black text-slate-900 tracking-tighter mb-2">12.5</div>
-                      <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Hours Completed This Week</p>
-                    </div>
-                    <div className="pt-8 relative z-10">
-                      <button 
-                        onClick={handleGenerateStudyPlan}
-                        className="w-full bg-slate-900 text-white py-4 rounded-2xl font-black text-sm hover:bg-indigo-600 transition-all shadow-xl shadow-slate-200 flex items-center justify-center gap-2"
-                      >
-                        <Bot className="w-5 h-5" /> Update Study Plan
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Adaptive Study Plan */}
-                <AnimatePresence>
-                  {studyPlan && (
-                    <motion.div 
-                      initial={{ opacity: 0, y: 30 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="bg-slate-900 text-white p-10 md:p-12 rounded-[3.5rem] shadow-2xl relative overflow-hidden"
-                    >
-                      <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/20 rounded-full blur-[100px] -mr-48 -mt-48" />
-                      <div className="absolute bottom-0 left-0 w-64 h-64 bg-violet-500/10 rounded-full blur-[80px] -ml-32 -mb-32" />
-                      
-                      <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-12">
-                        <div className="flex items-center gap-5">
-                          <div className="bg-white/10 p-4 rounded-3xl backdrop-blur-md border border-white/10">
-                            <Bot className="text-indigo-400 w-8 h-8" />
-                          </div>
-                          <div>
-                            <h3 className="font-black text-3xl tracking-tight">Adaptive Study Plan</h3>
-                            <p className="text-indigo-300 font-medium">AI-optimized learning path for your goals.</p>
-                          </div>
-                        </div>
-                        <div className="px-4 py-2 bg-indigo-500/20 rounded-full border border-indigo-500/30 text-xs font-black uppercase tracking-widest text-indigo-300">
-                          Updated Today
-                        </div>
-                      </div>
-
-                      <div className="relative z-10 grid md:grid-cols-2 gap-12">
-                        <div className="space-y-6">
-                          <h4 className="font-black text-indigo-300 uppercase text-xs tracking-widest flex items-center gap-2">
-                            <Lightbulb className="w-4 h-4" /> Smart Recommendations
-                          </h4>
-                          <div className="space-y-4">
-                            {studyPlan.recommendations.map((rec, i) => (
-                              <motion.div 
-                                initial={{ opacity: 0, x: -20 }}
-                                animate={{ opacity: 1, x: 0 }}
-                                transition={{ delay: i * 0.1 }}
-                                key={i} 
-                                className="flex items-start gap-4 p-4 bg-white/5 rounded-2xl border border-white/5 hover:bg-white/10 transition-colors group"
-                              >
-                                <div className="bg-emerald-500/20 p-1 rounded-lg mt-0.5 group-hover:bg-emerald-500 transition-colors">
-                                  <Check className="w-4 h-4 text-emerald-400 group-hover:text-white" />
-                                </div>
-                                <span className="text-indigo-50 font-medium leading-relaxed">{rec}</span>
-                              </motion.div>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="space-y-8">
-                          <div className="bg-white/5 p-8 rounded-[2.5rem] border border-white/10 backdrop-blur-sm">
-                            <h4 className="font-black text-indigo-300 uppercase text-[10px] tracking-widest mb-6">Next Major Milestone</h4>
-                            <div className="space-y-6">
-                              <div className="flex justify-between items-end">
-                                <div>
-                                  <p className="text-2xl font-black text-white">Advanced Calculus</p>
-                                  <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest mt-1">Mathematics Track</p>
-                                </div>
-                                <div className="text-right">
-                                  <span className="text-3xl font-black text-indigo-400">75%</span>
-                                </div>
-                              </div>
-                              <div className="h-3 bg-white/5 rounded-full overflow-hidden p-0.5">
-                                <motion.div 
-                                  initial={{ width: 0 }}
-                                  animate={{ width: '75%' }}
-                                  className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full shadow-lg shadow-indigo-500/20"
-                                />
-                              </div>
-                              <button className="w-full py-4 bg-white text-slate-900 rounded-2xl font-black text-sm hover:bg-indigo-400 hover:text-white transition-all">
-                                Continue Learning
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                {/* My Enrolled Courses - Full Width Premium Design */}
-                <div className="relative w-full max-w-[1400px] mx-auto">
-                  <div className="bg-white rounded-[3rem] border border-slate-100 shadow-sm overflow-hidden w-full">
-                    {/* Header Section */}
-                    <div className="px-5 sm:px-7 lg:px-10 xl:px-12 py-6">
-                      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                        <div>
-                          <h3 className="font-black text-2xl sm:text-3xl text-slate-900 mb-2">
-                            My Enrolled Courses
-                          </h3>
-                          <p className="text-sm text-slate-500 font-medium">
-                            Continue learning and track your progress
-                          </p>
-                        </div>
-                        <button 
-                          onClick={() => setActiveTab('courses')} 
-                          className="self-start lg:self-auto px-5 sm:px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-black text-xs sm:text-sm uppercase tracking-wide rounded-xl hover:shadow-lg hover:shadow-indigo-200 transition-all flex items-center gap-2 whitespace-nowrap"
-                        >
-                          <BookOpen className="w-5 h-5" />
-                          <span className="hidden sm:inline">Browse More Courses</span>
-                          <span className="sm:hidden">Browse More</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Course Cards Grid */}
-                    <div className="px-5 sm:px-7 lg:px-10 xl:px-12 py-5 sm:py-7">
-                      {studentEnrolledCourses.length === 0 ? (
-                        <div className="text-center py-16 sm:py-20 bg-gradient-to-br from-slate-50 to-slate-100 rounded-[2rem] border border-dashed border-slate-200">
-                          <BookMarked className="w-12 sm:w-16 h-12 sm:h-16 text-slate-300 mx-auto mb-6" />
-                          <p className="text-slate-600 font-bold text-base sm:text-lg mb-2">
-                            No courses enrolled yet
-                          </p>
-                          <p className="text-slate-400 text-sm">
-                            Start learning by browsing our course catalog
-                          </p>
-                          <button 
-                            onClick={() => setActiveTab('courses')} 
-                            className="mt-6 px-6 sm:px-8 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-black text-sm uppercase tracking-widest rounded-xl hover:shadow-lg hover:shadow-indigo-200 transition-all flex items-center gap-2"
-                          >
-                            <BookOpen className="w-5 h-5" />
-                            Explore Courses
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="grid [grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr))] gap-6 lg:gap-7 2xl:gap-8">
-                          {studentEnrolledCourses.map(({ course, enrollment }) => {
-                            const tutor = MOCK_TUTORS.find(t => t.id === course.tutorId);
-                            const isCompleted = enrollment.progress >= 100;
-                            
-                            return (
-                              <motion.div
-                                key={course.id}
-                                initial={{ opacity: 0, y: 20 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                className="group bg-white rounded-[2rem] border border-slate-100 overflow-hidden hover:border-indigo-200 hover:shadow-2xl hover:shadow-indigo-50/70 transition-all duration-300 flex flex-col min-h-[460px] sm:min-h-[480px] w-full min-w-0"
-                              >
-                                {/* Thumbnail Section */}
-                                <div className="relative h-48 sm:h-56 bg-gradient-to-br from-indigo-500 to-violet-600 overflow-hidden">
-                                  {course.thumbnail ? (
-                                    <img
-                                      src={course.thumbnail}
-                                      alt={course.title}
-                                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
-                                    />
-                                  ) : (
-                                    <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-indigo-500 via-purple-500 to-violet-600">
-                                      <BookOpen className="w-12 sm:w-16 h-12 sm:h-16 text-white opacity-50" />
-                                    </div>
-                                  )}
-                                  
-                                  {/* Completion Badge */}
-                                  {isCompleted && (
-                                    <div className="absolute top-4 right-4 bg-emerald-500 text-white rounded-full p-2 sm:p-3 shadow-lg">
-                                      <CheckCircle className="w-5 sm:w-6 h-5 sm:h-6" />
-                                    </div>
-                                  )}
-                                  
-                                  {/* Course Type Badge */}
-                                  <div className="absolute top-4 left-4">
-                                    <span className={`inline-block px-3 sm:px-4 py-1 sm:py-2 font-black text-xs uppercase tracking-widest rounded-full ${
-                                      course.isFree || course.price <= 0 
-                                        ? 'bg-emerald-500 text-white' 
-                                        : 'bg-amber-500 text-white'
-                                    }`}>
-                                      {course.isFree || course.price <= 0 ? 'Free' : 'Paid'}
-                                    </span>
-                                  </div>
-                                </div>
-
-                                {/* Content Section */}
-                                <div className="p-6 sm:p-8 flex-1 flex flex-col w-full">
-                                  {/* Course Title */}
-                                  <h4 className="font-black text-lg xl:text-xl text-slate-900 leading-tight mb-4 line-clamp-2 min-h-[3.25rem]">
-                                    {course.title}
-                                  </h4>
-
-                                  {/* Instructor Info */}
-                                  {tutor && (
-                                    <div className="flex items-center gap-3 sm:gap-4 mb-4 sm:mb-6 pb-4 sm:pb-6 border-b border-slate-100">
-                                      <img
-                                        src={tutor.avatar}
-                                        alt={tutor.firstName}
-                                        className="w-8 sm:w-10 h-8 sm:h-10 rounded-full object-cover"
-                                        onError={(e) => {
-                                          e.currentTarget.style.display = 'none';
-                                        }}
-                                      />
-                                      <div className="flex-1 min-w-0">
-                                        <p className="text-sm font-black text-slate-700 truncate">
-                                          {tutor.firstName} {tutor.lastName}
-                                        </p>
-                                        <p className="text-xs text-slate-400 font-bold">
-                                          {tutor.rating} ⭐
-                                        </p>
-                                      </div>
-                                    </div>
-                                  )}
-
-                                  {/* Progress Section */}
-                                  <div className="mb-6 sm:mb-8">
-                                    <div className="flex items-center justify-between mb-2 sm:mb-3">
-                                      <span className="text-sm font-black text-slate-700">
-                                        Progress
-                                      </span>
-                                      <span className={`text-base sm:text-lg font-black ${
-                                        isCompleted 
-                                          ? 'text-emerald-600' 
-                                          : 'text-indigo-600'
-                                      }`}>
-                                        {enrollment.progress}%
-                                      </span>
-                                    </div>
-                                    <div className="h-2.5 sm:h-3 rounded-full bg-slate-100 overflow-hidden">
-                                      <motion.div
-                                        initial={{ width: 0 }}
-                                        animate={{ width: `${enrollment.progress}%` }}
-                                        transition={{ duration: 0.6, ease: 'easeOut' }}
-                                        className={`h-full rounded-full transition-colors ${
-                                          isCompleted
-                                            ? 'bg-gradient-to-r from-emerald-500 to-emerald-600'
-                                            : 'bg-gradient-to-r from-indigo-500 to-violet-600'
-                                        }`}
-                                      />
-                                    </div>
-                                  </div>
-
-                                  {/* Action Buttons */}
-                                  <div className="mt-auto grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleOpenCourseLearning(course.id)}
-                                      className="py-3.5 px-4 rounded-xl text-[11px] sm:text-xs lg:text-sm font-black uppercase tracking-wide transition-all flex items-center justify-center gap-2 bg-indigo-50 text-indigo-600 border border-indigo-100 hover:bg-indigo-600 hover:text-white w-full"
-                                    >
-                                      <Play className="w-4 sm:w-5 h-4 sm:h-5 flex-shrink-0" />
-                                      <span className="truncate">Continue Learning</span>
-                                    </button>
-                                    
-                                    <button
-                                      onClick={() => {
-                                        if (!isCompleted) {
-                                          alert('Complete all modules to unlock your certificate.');
-                                          return;
-                                        }
-                                        handleDownloadCertificate(enrollment, course.title);
-                                      }}
-                                      className={`py-3.5 px-4 rounded-xl text-[11px] sm:text-xs lg:text-sm font-black uppercase tracking-wide transition-all flex items-center justify-center gap-2 w-full ${
-                                        isCompleted
-                                          ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white border border-amber-600 hover:shadow-lg hover:shadow-amber-200'
-                                          : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
-                                      }`}
-                                    >
-                                      <Award className="w-4 sm:w-5 h-4 sm:h-5 flex-shrink-0" />
-                                      <span className="truncate">Download Certificate</span>
-                                    </button>
-                                  </div>
-                                </div>
-                              </motion.div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Bookings List */}
-                <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-sm">
-                  <div className="flex items-center justify-between mb-8">
-                    <h3 className="font-black text-xl text-slate-900">My Booked Sessions</h3>
-                    <Calendar className="w-5 h-5 text-slate-400" />
-                  </div>
-                  {bookings.length === 0 ? (
-                    <div className="text-center py-12 bg-slate-50 rounded-[2rem] border border-dashed border-slate-200">
-                      <Clock className="w-10 h-10 text-slate-300 mx-auto mb-4" />
-                      <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">No sessions booked yet</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-6">
-                      {bookings.map(booking => (
-                        <div key={booking.id} className="p-6 bg-slate-50 rounded-3xl border border-slate-100 space-y-6 hover:border-indigo-200 transition-all group">
-                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                            <div className="flex items-center gap-5">
-                              <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 group-hover:shadow-md transition-all">
-                                <Video className="text-indigo-600 w-6 h-6" />
-                              </div>
-                              <div>
-                                <h4 className="font-black text-slate-900 text-lg leading-tight">{booking.subject} Session</h4>
-                                <div className="flex items-center gap-2 mt-1">
-                                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">{booking.date}</p>
-                                  <span className="w-1 h-1 bg-slate-300 rounded-full" />
-                                  <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">{booking.status}</span>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              <button 
-                                onClick={async () => {
-                                  const feedback = await localService.getSessionFeedback(booking.subject, 'Intermediate');
-                                  alert(`AI Learning Assistant:\n\n${feedback}`);
-                                }}
-                                className="bg-white text-indigo-600 border border-indigo-100 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 hover:text-white transition-all flex items-center gap-2 shadow-sm"
-                              >
-                                <Bot className="w-3.5 h-3.5" /> AI Feedback
-                              </button>
-                              <button 
-                                onClick={() => {
-                                  const comment = prompt('Enter your review:');
-                                  const rating = parseInt(prompt('Enter rating (1-5):') || '5');
-                                  if (comment && rating) handleAddReview(booking.tutorId, rating, comment);
-                                }}
-                                className="bg-white text-amber-600 border border-amber-100 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-amber-500 hover:text-white transition-all flex items-center gap-2 shadow-sm"
-                              >
-                                <Star className="w-3.5 h-3.5" /> Review
-                              </button>
-                              <a 
-                                href={booking.meetingLink} 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 flex items-center gap-2"
-                              >
-                                Join Meeting <ArrowRight className="w-3.5 h-3.5" />
-                              </a>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
                   )}
                 </div>
-              </div>
 
-              {/* Right Column: Profile & Quick Actions */}
-              <div className="space-y-10">
-                <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-indigo-50/30 text-center relative overflow-hidden">
-                  <div className="absolute top-0 left-0 w-full h-24 bg-gradient-to-r from-indigo-600 to-violet-600 opacity-10" />
-                  <div className="relative z-10">
-                    {currentUserAvatarUrl ? (
-                      <img 
-                        src={currentUserAvatarUrl} 
-                        alt="Avatar" 
-                        className="w-28 h-28 rounded-[2rem] mx-auto mb-6 border-4 border-white shadow-2xl object-cover"
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                          (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'block';
-                        }}
-                      />
-                    ) : null}
-                    <img 
-                      src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.firstName + ' ' + currentUser.lastName}`} 
-                      alt="Avatar" 
-                      className="w-28 h-28 rounded-[2rem] mx-auto mb-6 border-4 border-white shadow-2xl object-cover" 
-                      style={{ display: currentUserAvatarUrl ? 'none' : 'block' }}
-                    />
-                    <h3 className="font-black text-2xl text-slate-900 tracking-tight">{currentUser.firstName} {currentUser.lastName}</h3>
-                    <p className="text-slate-400 font-bold text-xs uppercase tracking-widest mt-1">{currentUser.email}</p>
-                    
-                    <div className="flex justify-center gap-8 mt-10 pt-8 border-t border-slate-50">
-                      <div className="text-center">
-                        <p className="text-2xl font-black text-slate-900">12</p>
-                        <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mt-1">Sessions</p>
-                      </div>
-                      <div className="w-px h-10 bg-slate-100 self-center" />
-                      <div className="text-center">
-                        <p className="text-2xl font-black text-slate-900">{studentEnrolledCourses.length}</p>
-                        <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mt-1">Courses</p>
-                      </div>
+                <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                  <h3 className="font-black text-xl text-slate-900 mb-4">Tutor Performance Snapshot</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
+                      <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Sessions</p>
+                      <p className="text-3xl font-black text-slate-900">{bookings.length}</p>
                     </div>
-                  </div>
-                </div>
-
-                <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-sm">
-                  <h3 className="font-black text-xl text-slate-900 mb-8">Quick Actions</h3>
-                  <div className="grid gap-3">
-                    <button onClick={() => setActiveTab('tutors')} className="w-full text-left p-5 rounded-2xl bg-slate-50 hover:bg-indigo-50 border border-slate-50 hover:border-indigo-100 transition-all flex items-center gap-4 group">
-                      <div className="bg-white p-3 rounded-xl shadow-sm group-hover:scale-110 transition-transform">
-                        <Search className="w-5 h-5 text-indigo-600" />
-                      </div>
-                      <div>
-                        <p className="font-black text-slate-900 text-sm">Book Session</p>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Find expert tutors</p>
-                      </div>
-                    </button>
-                    <button onClick={() => setActiveTab('questions')} className="w-full text-left p-5 rounded-2xl bg-slate-50 hover:bg-violet-50 border border-slate-50 hover:border-violet-100 transition-all flex items-center gap-4 group">
-                      <div className="bg-white p-3 rounded-xl shadow-sm group-hover:scale-110 transition-transform">
-                        <MessageSquare className="w-5 h-5 text-violet-600" />
-                      </div>
-                      <div>
-                        <p className="font-black text-slate-900 text-sm">Ask AI Tutor</p>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Instant STEM answers</p>
-                      </div>
-                    </button>
-                    <button onClick={() => setActiveTab('quizzes')} className="w-full text-left p-5 rounded-2xl bg-slate-50 hover:bg-emerald-50 border border-slate-50 hover:border-emerald-100 transition-all flex items-center gap-4 group">
-                      <div className="bg-white p-3 rounded-xl shadow-sm group-hover:scale-110 transition-transform">
-                        <Award className="w-5 h-5 text-emerald-600" />
-                      </div>
-                      <div>
-                        <p className="font-black text-slate-900 text-sm">Take Quiz</p>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Test your knowledge</p>
-                      </div>
-                    </button>
+                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
+                      <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Reviews</p>
+                      <p className="text-3xl font-black text-slate-900">{currentTutorReviewCount}</p>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {activeTab === 'settings' && currentUser && (
-          <div className="max-w-5xl mx-auto">
-            <div className="text-center mb-10 md:mb-14">
-              <div className="inline-flex items-center justify-center p-3 bg-indigo-50 rounded-2xl text-indigo-600 mb-6">
-                <Edit className="w-8 h-8" />
-              </div>
-              <h2 className="text-4xl md:text-5xl font-black text-slate-900 tracking-tight mb-4">Account Settings</h2>
-              <p className="text-lg text-slate-500 max-w-2xl mx-auto">Manage your profile information, preferences, and account details.</p>
-            </div>
-
-            <form onSubmit={handleUpdateProfile} className="space-y-8">
-              
-              {/* Profile Image Section */}
-              <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
-                <h3 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-3">
-                  <Camera className="w-6 h-6 text-indigo-600" />
-                  Profile Picture
-                </h3>
-                <div className="flex flex-col sm:flex-row items-center gap-8">
-                  <div className="relative group cursor-pointer" onClick={() => setShowImageModal(true)}>
+          {activeTab === 'dashboard' && currentUser && isStudent && (
+            <div className="space-y-10">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 bg-white p-8 rounded-[3rem] border border-slate-100 shadow-sm">
+                <div className="flex items-center gap-6">
+                  <div className="relative">
                     {currentUserAvatarUrl ? (
                       <img
                         src={currentUserAvatarUrl}
-                        alt="Avatar"
-                        className="w-32 h-32 rounded-full object-cover border-4 border-indigo-50 shadow-xl"
+                        alt={`${currentUser.firstName} ${currentUser.lastName}`}
+                        className="w-20 h-20 rounded-3xl object-cover shadow-xl shadow-indigo-200"
                         onError={(e) => {
                           e.currentTarget.style.display = 'none';
                           (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'flex';
                         }}
                       />
                     ) : null}
-                    <div className="w-32 h-32 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-full flex items-center justify-center text-white text-4xl font-black shadow-xl border-4 border-indigo-50" style={{ display: currentUserAvatarUrl ? 'none' : 'flex' }}>
+                    <div className="w-20 h-20 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-3xl flex items-center justify-center text-white text-3xl font-black shadow-xl shadow-indigo-200" style={{ display: currentUserAvatarUrl ? 'none' : 'flex' }}>
                       {(currentUser.firstName + ' ' + currentUser.lastName).charAt(0)}
-                    </div>
-                    <div className="absolute inset-0 bg-black/40 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                      <Camera className="w-8 h-8 text-white" />
                     </div>
                   </div>
                   <div>
-                    <h4 className="font-bold text-slate-900 text-lg">Avatar</h4>
-                    <p className="text-slate-500 text-sm mb-4">Upload a professional headshot. PNG or JPEG, max 5MB.</p>
-                    <button
-                      type="button"
-                      onClick={() => setShowImageModal(true)}
-                      className="px-6 py-2.5 bg-indigo-50 text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition-colors text-sm"
-                    >
-                      Change Picture
-                    </button>
+                    <h2 className="text-3xl font-black text-slate-900 tracking-tight">Welcome back, {currentUser.firstName} {currentUser.lastName}!</h2>
+                    <p className="text-slate-500 font-medium">You've completed <span className="text-indigo-600 font-bold">85%</span> of your weekly goals. Keep it up!</p>
                   </div>
+                </div>
+                <div className="flex items-center gap-4 w-full md:w-auto">
+                  <button
+                    onClick={() => setActiveTab('quizzes')}
+                    className="flex-1 md:flex-none px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+                  >
+                    New Assessment
+                  </button>
                 </div>
               </div>
 
-              {/* Profile Info Section */}
-              <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
-                <h3 className="text-2xl font-bold text-slate-900 mb-8 flex items-center gap-3">
-                  <User className="w-6 h-6 text-indigo-600" />
-                  Basic Information
-                </h3>
-                
-                <div className="grid md:grid-cols-2 gap-6 mb-6">
-                  <div className="space-y-3">
-                    <label className="text-sm font-bold text-slate-700">First Name</label>
-                    <input
-                      type="text"
-                      required
-                      value={profileData.firstName}
-                      onChange={e => setProfileData({...profileData, firstName: e.target.value})}
-                      className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
-                      placeholder="Jane"
-                    />
-                  </div>
-                  <div className="space-y-3">
-                    <label className="text-sm font-bold text-slate-700">Last Name</label>
-                    <input
-                      type="text"
-                      required
-                      value={profileData.lastName}
-                      onChange={e => setProfileData({...profileData, lastName: e.target.value})}
-                      className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
-                      placeholder="Doe"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid md:grid-cols-2 gap-6 mb-6">
-                  <div className="space-y-3">
-                    <label className="text-sm font-bold text-slate-700">Email Address</label>
-                    <div className="relative">
-                      <Mail className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                      <input
-                        type="email"
-                        value={currentUser.email}
-                        disabled
-                        className="w-full pl-12 pr-5 py-4 rounded-2xl border border-slate-200 bg-slate-100 text-slate-500 font-medium cursor-not-allowed"
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-3">
-                    <label className="text-sm font-bold text-slate-700">Phone Number (Optional)</label>
-                    <div className="relative">
-                      <Phone className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                      <input
-                        type="tel"
-                        value={profileData.phone}
-                        onChange={e => setProfileData({...profileData, phone: e.target.value})}
-                        className="w-full pl-12 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
-                        placeholder="+1 (555) 000-0000"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {currentUser.role === 'tutor' && (
-                  <div className="space-y-3 mt-6">
-                    <label className="text-sm font-bold text-slate-700">Professional Bio</label>
-                    <textarea
-                      required
-                      value={profileData.bio}
-                      onChange={e => setProfileData({...profileData, bio: e.target.value})}
-                      className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all resize-none min-h-[140px]"
-                      placeholder="Tell students about yourself, your teaching experience, methodology, and what makes your classes unique..."
-                    />
-                  </div>
-                )}
-              </div>
-
-              {currentUser.role === 'tutor' && (
-                <>
-                  {/* Education & Qualifications Section */}
-                  <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
-                    <div className="flex items-center justify-between mb-8">
-                      <h3 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
-                        <Award className="w-6 h-6 text-indigo-600" />
-                        Education & Rates
-                      </h3>
-                    </div>
-                    
-                    <div className="grid md:grid-cols-2 gap-8">
-                      <div className="space-y-3 md:col-span-2">
-                        <label className="text-sm font-bold text-slate-700">Highest Qualifications</label>
-                        <textarea
-                          required
-                          value={profileData.education}
-                          onChange={e => setProfileData({...profileData, education: e.target.value})}
-                          className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all min-h-[100px]"
-                          placeholder="e.g. BSc in Computer Science, University of Colombo&#10;MSc in AI, Stanford University"
-                        />
+              <div className="grid lg:grid-cols-3 gap-10">
+                {/* Left Column: Stats & Skills */}
+                <div className="lg:col-span-2 space-y-10">
+                  <div className="grid md:grid-cols-2 gap-8">
+                    <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-indigo-50/50 relative overflow-hidden">
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50 rounded-full -mr-16 -mt-16" />
+                      <div className="flex items-center justify-between mb-8 relative z-10">
+                        <div className="flex items-center gap-4">
+                          <div className="bg-indigo-600 p-3 rounded-2xl shadow-lg shadow-indigo-200">
+                            <Award className="text-white w-6 h-6" />
+                          </div>
+                          <h3 className="font-black text-xl text-slate-900">Skill Matrix</h3>
+                        </div>
                       </div>
+                      <div className="space-y-8 relative z-10">
+                        {skills.map((skill, idx) => {
+                          const colors = [
+                            'from-blue-500 to-indigo-500',
+                            'from-purple-500 to-violet-500',
+                            'from-emerald-500 to-teal-500'
+                          ];
+                          return (
+                            <div key={skill.subject} className="group">
+                              <div className="flex justify-between text-sm font-black mb-3">
+                                <span className="text-slate-700 group-hover:text-indigo-600 transition-colors">{skill.subject}</span>
+                                <span className="text-indigo-600">{skill.level} • {skill.progress}%</span>
+                              </div>
+                              <div className="h-4 bg-slate-50 rounded-full overflow-hidden border border-slate-100 p-0.5">
+                                <motion.div
+                                  initial={{ width: 0 }}
+                                  animate={{ width: `${skill.progress}%` }}
+                                  transition={{ duration: 1.5, delay: idx * 0.1, ease: "circOut" }}
+                                  className={`h-full bg-gradient-to-r ${colors[idx % colors.length]} rounded-full shadow-lg`}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
 
-                      <div className="space-y-3">
-                        <label className="text-sm font-bold text-slate-700">Hourly Rate (USD)</label>
-                        <div className="relative">
-                          <span className="absolute left-5 top-1/2 -translate-y-1/2 font-bold text-slate-400">$</span>
-                          <input 
-                            type="number" 
-                            min="0"
-                            step="0.01"
-                            required
-                            value={profileData.pricePerHour}
-                            onChange={e => setProfileData({...profileData, pricePerHour: parseFloat(e.target.value) || 0})}
-                            className="w-full pl-10 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all" 
-                            placeholder="25.00"
-                          />
+                    <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-emerald-50/50 relative overflow-hidden">
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-50 rounded-full -mr-16 -mt-16" />
+                      <div className="flex items-center gap-4 mb-10 relative z-10">
+                        <div className="bg-emerald-500 p-3 rounded-2xl shadow-lg shadow-emerald-200">
+                          <Calendar className="text-white w-6 h-6" />
+                        </div>
+                        <h3 className="font-black text-xl text-slate-900">Learning Activity</h3>
+                      </div>
+                      <div className="text-center py-6 relative z-10">
+                        <div className="text-7xl font-black text-slate-900 tracking-tighter mb-2">12.5</div>
+                        <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Hours Completed This Week</p>
+                      </div>
+                      <div className="pt-8 relative z-10">
+                        <button
+                          onClick={handleGenerateStudyPlan}
+                          className="w-full bg-slate-900 text-white py-4 rounded-2xl font-black text-sm hover:bg-indigo-600 transition-all shadow-xl shadow-slate-200 flex items-center justify-center gap-2"
+                        >
+                          <Bot className="w-5 h-5" /> Update Study Plan
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Adaptive Study Plan */}
+                  <AnimatePresence>
+                    {studyPlan && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 30 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="bg-slate-900 text-white p-10 md:p-12 rounded-[3.5rem] shadow-2xl relative overflow-hidden"
+                      >
+                        <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/20 rounded-full blur-[100px] -mr-48 -mt-48" />
+                        <div className="absolute bottom-0 left-0 w-64 h-64 bg-violet-500/10 rounded-full blur-[80px] -ml-32 -mb-32" />
+
+                        <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-12">
+                          <div className="flex items-center gap-5">
+                            <div className="bg-white/10 p-4 rounded-3xl backdrop-blur-md border border-white/10">
+                              <Bot className="text-indigo-400 w-8 h-8" />
+                            </div>
+                            <div>
+                              <h3 className="font-black text-3xl tracking-tight">Adaptive Study Plan</h3>
+                              <p className="text-indigo-300 font-medium">AI-optimized learning path for your goals.</p>
+                            </div>
+                          </div>
+                          <div className="px-4 py-2 bg-indigo-500/20 rounded-full border border-indigo-500/30 text-xs font-black uppercase tracking-widest text-indigo-300">
+                            Updated Today
+                          </div>
+                        </div>
+
+                        <div className="relative z-10 grid md:grid-cols-2 gap-12">
+                          <div className="space-y-6">
+                            <h4 className="font-black text-indigo-300 uppercase text-xs tracking-widest flex items-center gap-2">
+                              <Lightbulb className="w-4 h-4" /> Smart Recommendations
+                            </h4>
+                            <div className="space-y-4">
+                              {studyPlan.recommendations.map((rec, i) => (
+                                <motion.div
+                                  initial={{ opacity: 0, x: -20 }}
+                                  animate={{ opacity: 1, x: 0 }}
+                                  transition={{ delay: i * 0.1 }}
+                                  key={i}
+                                  className="flex items-start gap-4 p-4 bg-white/5 rounded-2xl border border-white/5 hover:bg-white/10 transition-colors group"
+                                >
+                                  <div className="bg-emerald-500/20 p-1 rounded-lg mt-0.5 group-hover:bg-emerald-500 transition-colors">
+                                    <Check className="w-4 h-4 text-emerald-400 group-hover:text-white" />
+                                  </div>
+                                  <span className="text-indigo-50 font-medium leading-relaxed">{rec}</span>
+                                </motion.div>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="space-y-8">
+                            <div className="bg-white/5 p-8 rounded-[2.5rem] border border-white/10 backdrop-blur-sm">
+                              <h4 className="font-black text-indigo-300 uppercase text-[10px] tracking-widest mb-6">Next Major Milestone</h4>
+                              <div className="space-y-6">
+                                <div className="flex justify-between items-end">
+                                  <div>
+                                    <p className="text-2xl font-black text-white">Advanced Calculus</p>
+                                    <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest mt-1">Mathematics Track</p>
+                                  </div>
+                                  <div className="text-right">
+                                    <span className="text-3xl font-black text-indigo-400">75%</span>
+                                  </div>
+                                </div>
+                                <div className="h-3 bg-white/5 rounded-full overflow-hidden p-0.5">
+                                  <motion.div
+                                    initial={{ width: 0 }}
+                                    animate={{ width: '75%' }}
+                                    className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full shadow-lg shadow-indigo-500/20"
+                                  />
+                                </div>
+                                <button className="w-full py-4 bg-white text-slate-900 rounded-2xl font-black text-sm hover:bg-indigo-400 hover:text-white transition-all">
+                                  Continue Learning
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {/* My Enrolled Courses - Full Width Premium Design */}
+                  <div className="relative w-full max-w-[1400px] mx-auto">
+                    <div className="bg-white rounded-[3rem] border border-slate-100 shadow-sm overflow-hidden w-full">
+                      {/* Header Section */}
+                      <div className="px-5 sm:px-7 lg:px-10 xl:px-12 py-6">
+                        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                          <div>
+                            <h3 className="font-black text-2xl sm:text-3xl text-slate-900 mb-2">
+                              My Enrolled Courses
+                            </h3>
+                            <p className="text-sm text-slate-500 font-medium">
+                              Continue learning and track your progress
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => setActiveTab('courses')}
+                            className="self-start lg:self-auto px-5 sm:px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-black text-xs sm:text-sm uppercase tracking-wide rounded-xl hover:shadow-lg hover:shadow-indigo-200 transition-all flex items-center gap-2 whitespace-nowrap"
+                          >
+                            <BookOpen className="w-5 h-5" />
+                            <span className="hidden sm:inline">Browse More Courses</span>
+                            <span className="sm:hidden">Browse More</span>
+                          </button>
                         </div>
                       </div>
 
-                      <div className="space-y-3">
-                        <label className="text-sm font-bold text-slate-700">Primary Teaching Level</label>
-                        <select
-                          required
-                          value={profileData.teachingLevel}
-                          onChange={e => setProfileData({...profileData, teachingLevel: e.target.value})}
-                          className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all appearance-none"
-                        >
-                          <option value="" disabled>Select your primary audience</option>
-                          <option value="School">School Level (K-12)</option>
-                          <option value="University">University Level</option>
-                          <option value="Both">Both School & University</option>
-                        </select>
+                      {/* Course Cards Grid */}
+                      <div className="px-5 sm:px-7 lg:px-10 xl:px-12 py-5 sm:py-7">
+                        {studentEnrolledCourses.length === 0 ? (
+                          <div className="text-center py-16 sm:py-20 bg-gradient-to-br from-slate-50 to-slate-100 rounded-[2rem] border border-dashed border-slate-200">
+                            <BookMarked className="w-12 sm:w-16 h-12 sm:h-16 text-slate-300 mx-auto mb-6" />
+                            <p className="text-slate-600 font-bold text-base sm:text-lg mb-2">
+                              No courses enrolled yet
+                            </p>
+                            <p className="text-slate-400 text-sm">
+                              Start learning by browsing our course catalog
+                            </p>
+                            <button
+                              onClick={() => setActiveTab('courses')}
+                              className="mt-6 px-6 sm:px-8 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-black text-sm uppercase tracking-widest rounded-xl hover:shadow-lg hover:shadow-indigo-200 transition-all flex items-center gap-2"
+                            >
+                              <BookOpen className="w-5 h-5" />
+                              Explore Courses
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="grid [grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr))] gap-6 lg:gap-7 2xl:gap-8">
+                            {studentEnrolledCourses.map(({ course, enrollment }) => {
+                              const tutor = MOCK_TUTORS.find(t => t.id === course.tutorId);
+                              const isCompleted = enrollment.progress >= 100;
+
+                              return (
+                                <motion.div
+                                  key={course.id}
+                                  initial={{ opacity: 0, y: 20 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  className="group bg-white rounded-[2rem] border border-slate-100 overflow-hidden hover:border-indigo-200 hover:shadow-2xl hover:shadow-indigo-50/70 transition-all duration-300 flex flex-col min-h-[460px] sm:min-h-[480px] w-full min-w-0"
+                                >
+                                  {/* Thumbnail Section */}
+                                  <div className="relative h-48 sm:h-56 bg-gradient-to-br from-indigo-500 to-violet-600 overflow-hidden">
+                                    {course.thumbnail ? (
+                                      <img
+                                        src={course.thumbnail}
+                                        alt={course.title}
+                                        className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                                      />
+                                    ) : (
+                                      <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-indigo-500 via-purple-500 to-violet-600">
+                                        <BookOpen className="w-12 sm:w-16 h-12 sm:h-16 text-white opacity-50" />
+                                      </div>
+                                    )}
+
+                                    {/* Completion Badge */}
+                                    {isCompleted && (
+                                      <div className="absolute top-4 right-4 bg-emerald-500 text-white rounded-full p-2 sm:p-3 shadow-lg">
+                                        <CheckCircle className="w-5 sm:w-6 h-5 sm:h-6" />
+                                      </div>
+                                    )}
+
+                                    {/* Course Type Badge */}
+                                    <div className="absolute top-4 left-4">
+                                      <span className={`inline-block px-3 sm:px-4 py-1 sm:py-2 font-black text-xs uppercase tracking-widest rounded-full ${course.isFree || course.price <= 0
+                                          ? 'bg-emerald-500 text-white'
+                                          : 'bg-amber-500 text-white'
+                                        }`}>
+                                        {course.isFree || course.price <= 0 ? 'Free' : 'Paid'}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  {/* Content Section */}
+                                  <div className="p-6 sm:p-8 flex-1 flex flex-col w-full">
+                                    {/* Course Title */}
+                                    <h4 className="font-black text-lg xl:text-xl text-slate-900 leading-tight mb-4 line-clamp-2 min-h-[3.25rem]">
+                                      {course.title}
+                                    </h4>
+
+                                    {/* Instructor Info */}
+                                    {tutor && (
+                                      <div className="flex items-center gap-3 sm:gap-4 mb-4 sm:mb-6 pb-4 sm:pb-6 border-b border-slate-100">
+                                        <img
+                                          src={tutor.avatar}
+                                          alt={tutor.firstName}
+                                          className="w-8 sm:w-10 h-8 sm:h-10 rounded-full object-cover"
+                                          onError={(e) => {
+                                            e.currentTarget.style.display = 'none';
+                                          }}
+                                        />
+                                        <div className="flex-1 min-w-0">
+                                          <p className="text-sm font-black text-slate-700 truncate">
+                                            {tutor.firstName} {tutor.lastName}
+                                          </p>
+                                          <p className="text-xs text-slate-400 font-bold">
+                                            {tutor.rating} ⭐
+                                          </p>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {/* Progress Section */}
+                                    <div className="mb-6 sm:mb-8">
+                                      <div className="flex items-center justify-between mb-2 sm:mb-3">
+                                        <span className="text-sm font-black text-slate-700">
+                                          Progress
+                                        </span>
+                                        <span className={`text-base sm:text-lg font-black ${isCompleted
+                                            ? 'text-emerald-600'
+                                            : 'text-indigo-600'
+                                          }`}>
+                                          {enrollment.progress}%
+                                        </span>
+                                      </div>
+                                      <div className="h-2.5 sm:h-3 rounded-full bg-slate-100 overflow-hidden">
+                                        <motion.div
+                                          initial={{ width: 0 }}
+                                          animate={{ width: `${enrollment.progress}%` }}
+                                          transition={{ duration: 0.6, ease: 'easeOut' }}
+                                          className={`h-full rounded-full transition-colors ${isCompleted
+                                              ? 'bg-gradient-to-r from-emerald-500 to-emerald-600'
+                                              : 'bg-gradient-to-r from-indigo-500 to-violet-600'
+                                            }`}
+                                        />
+                                      </div>
+                                    </div>
+
+                                    {/* Action Buttons */}
+                                    <div className="mt-auto grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleOpenCourseLearning(course.id)}
+                                        className="py-3.5 px-4 rounded-xl text-[11px] sm:text-xs lg:text-sm font-black uppercase tracking-wide transition-all flex items-center justify-center gap-2 bg-indigo-50 text-indigo-600 border border-indigo-100 hover:bg-indigo-600 hover:text-white w-full"
+                                      >
+                                        <Play className="w-4 sm:w-5 h-4 sm:h-5 flex-shrink-0" />
+                                        <span className="truncate">Continue Learning</span>
+                                      </button>
+
+                                      <button
+                                        onClick={() => {
+                                          if (!isCompleted) {
+                                            alert('Complete all modules to unlock your certificate.');
+                                            return;
+                                          }
+                                          handleDownloadCertificate(enrollment, course.title);
+                                        }}
+                                        className={`py-3.5 px-4 rounded-xl text-[11px] sm:text-xs lg:text-sm font-black uppercase tracking-wide transition-all flex items-center justify-center gap-2 w-full ${isCompleted
+                                            ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white border border-amber-600 hover:shadow-lg hover:shadow-amber-200'
+                                            : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                                          }`}
+                                      >
+                                        <Award className="w-4 sm:w-5 h-4 sm:h-5 flex-shrink-0" />
+                                        <span className="truncate">Download Certificate</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                </motion.div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
 
-                  {/* Subjects Section */}
-                  <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
-                    <h3 className="text-2xl font-bold text-slate-900 mb-3 flex items-center gap-3">
-                      <BookOpen className="w-6 h-6 text-indigo-600" />
-                      Subjects Taught
-                    </h3>
-                    <p className="text-slate-500 mb-6">Select the STEM/ICT subjects you are qualified to teach.</p>
-                    
-                    <div className="flex flex-wrap gap-3">
-                      {STEM_SUBJECTS.map(s => {
-                        const isSelected = profileData.subjects.includes(s);
-                        return (
-                          <button
-                            key={s}
-                            type="button"
-                            onClick={() => {
-                              const newSubs = isSelected
-                                ? profileData.subjects.filter(x => x !== s)
-                                : [...profileData.subjects, s];
-                              setProfileData({...profileData, subjects: newSubs});
-                            }}
-                            className={`px-5 py-3 rounded-2xl text-sm font-bold transition-all flex items-center gap-2 border-2 ${
-                              isSelected
-                                ? 'bg-indigo-50 border-indigo-600 text-indigo-700 shadow-sm'
-                                : 'bg-white border-slate-100 text-slate-600 hover:border-indigo-200 hover:bg-slate-50'
-                            }`}
-                          >
-                            {isSelected ? <CheckCircle className="w-4 h-4 text-indigo-600" /> : <div className="w-4 h-4 rounded-full border-2 border-slate-300" />}
-                            {s}
-                          </button>
-                        );
-                      })}
+                  {/* Bookings List */}
+                  <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-sm">
+                    <div className="flex items-center justify-between mb-8">
+                      <h3 className="font-black text-xl text-slate-900">My Booked Sessions</h3>
+                      <Calendar className="w-5 h-5 text-slate-400" />
+                    </div>
+                    {bookings.length === 0 ? (
+                      <div className="text-center py-12 bg-slate-50 rounded-[2rem] border border-dashed border-slate-200">
+                        <Clock className="w-10 h-10 text-slate-300 mx-auto mb-4" />
+                        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">No sessions booked yet</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-6">
+                        {bookings.map(booking => (
+                          <div key={booking.id} className="p-6 bg-slate-50 rounded-3xl border border-slate-100 space-y-6 hover:border-indigo-200 transition-all group">
+                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                              <div className="flex items-center gap-5">
+                                <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 group-hover:shadow-md transition-all">
+                                  <Video className="text-indigo-600 w-6 h-6" />
+                                </div>
+                                <div>
+                                  <h4 className="font-black text-slate-900 text-lg leading-tight">{booking.subject} Session</h4>
+                                  <div className="flex items-center gap-2 mt-1">
+                                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">{booking.date}</p>
+                                    <span className="w-1 h-1 bg-slate-300 rounded-full" />
+                                    <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">{booking.status}</span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  onClick={async () => {
+                                    const feedback = await localService.getSessionFeedback(booking.subject, 'Intermediate');
+                                    alert(`AI Learning Assistant:\n\n${feedback}`);
+                                  }}
+                                  className="bg-white text-indigo-600 border border-indigo-100 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 hover:text-white transition-all flex items-center gap-2 shadow-sm"
+                                >
+                                  <Bot className="w-3.5 h-3.5" /> AI Feedback
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    const comment = prompt('Enter your review:');
+                                    const rating = parseInt(prompt('Enter rating (1-5):') || '5');
+                                    if (comment && rating) handleAddReview(booking.tutorId, rating, comment);
+                                  }}
+                                  className="bg-white text-amber-600 border border-amber-100 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-amber-500 hover:text-white transition-all flex items-center gap-2 shadow-sm"
+                                >
+                                  <Star className="w-3.5 h-3.5" /> Review
+                                </button>
+                                <a
+                                  href={booking.meetingLink}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 flex items-center gap-2"
+                                >
+                                  Join Meeting <ArrowRight className="w-3.5 h-3.5" />
+                                </a>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Right Column: Profile & Quick Actions */}
+                <div className="space-y-10">
+                  <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-indigo-50/30 text-center relative overflow-hidden">
+                    <div className="absolute top-0 left-0 w-full h-24 bg-gradient-to-r from-indigo-600 to-violet-600 opacity-10" />
+                    <div className="relative z-10">
+                      {currentUserAvatarUrl ? (
+                        <img
+                          src={currentUserAvatarUrl}
+                          alt="Avatar"
+                          className="w-28 h-28 rounded-[2rem] mx-auto mb-6 border-4 border-white shadow-2xl object-cover"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                            (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'block';
+                          }}
+                        />
+                      ) : null}
+                      <img
+                        src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.firstName + ' ' + currentUser.lastName}`}
+                        alt="Avatar"
+                        className="w-28 h-28 rounded-[2rem] mx-auto mb-6 border-4 border-white shadow-2xl object-cover"
+                        style={{ display: currentUserAvatarUrl ? 'none' : 'block' }}
+                      />
+                      <h3 className="font-black text-2xl text-slate-900 tracking-tight">{currentUser.firstName} {currentUser.lastName}</h3>
+                      <p className="text-slate-400 font-bold text-xs uppercase tracking-widest mt-1">{currentUser.email}</p>
+
+                      <div className="flex justify-center gap-8 mt-10 pt-8 border-t border-slate-50">
+                        <div className="text-center">
+                          <p className="text-2xl font-black text-slate-900">12</p>
+                          <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mt-1">Sessions</p>
+                        </div>
+                        <div className="w-px h-10 bg-slate-100 self-center" />
+                        <div className="text-center">
+                          <p className="text-2xl font-black text-slate-900">{studentEnrolledCourses.length}</p>
+                          <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mt-1">Courses</p>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  {/* Availability Section */}
-                  <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
-                    <div className="flex items-center justify-between mb-6">
-                      <div>
+                  <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-sm">
+                    <h3 className="font-black text-xl text-slate-900 mb-8">Quick Actions</h3>
+                    <div className="grid gap-3">
+                      <button onClick={() => setActiveTab('tutors')} className="w-full text-left p-5 rounded-2xl bg-slate-50 hover:bg-indigo-50 border border-slate-50 hover:border-indigo-100 transition-all flex items-center gap-4 group">
+                        <div className="bg-white p-3 rounded-xl shadow-sm group-hover:scale-110 transition-transform">
+                          <Search className="w-5 h-5 text-indigo-600" />
+                        </div>
+                        <div>
+                          <p className="font-black text-slate-900 text-sm">Book Session</p>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Find expert tutors</p>
+                        </div>
+                      </button>
+                      <button onClick={() => setActiveTab('questions')} className="w-full text-left p-5 rounded-2xl bg-slate-50 hover:bg-violet-50 border border-slate-50 hover:border-violet-100 transition-all flex items-center gap-4 group">
+                        <div className="bg-white p-3 rounded-xl shadow-sm group-hover:scale-110 transition-transform">
+                          <MessageSquare className="w-5 h-5 text-violet-600" />
+                        </div>
+                        <div>
+                          <p className="font-black text-slate-900 text-sm">Ask AI Tutor</p>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Instant STEM answers</p>
+                        </div>
+                      </button>
+                      <button onClick={() => setActiveTab('quizzes')} className="w-full text-left p-5 rounded-2xl bg-slate-50 hover:bg-emerald-50 border border-slate-50 hover:border-emerald-100 transition-all flex items-center gap-4 group">
+                        <div className="bg-white p-3 rounded-xl shadow-sm group-hover:scale-110 transition-transform">
+                          <Award className="w-5 h-5 text-emerald-600" />
+                        </div>
+                        <div>
+                          <p className="font-black text-slate-900 text-sm">Take Quiz</p>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Test your knowledge</p>
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'settings' && currentUser && (
+            <div className="max-w-5xl mx-auto">
+              <div className="text-center mb-10 md:mb-14">
+                <div className="inline-flex items-center justify-center p-3 bg-indigo-50 rounded-2xl text-indigo-600 mb-6">
+                  <Edit className="w-8 h-8" />
+                </div>
+                <h2 className="text-4xl md:text-5xl font-black text-slate-900 tracking-tight mb-4">Account Settings</h2>
+                <p className="text-lg text-slate-500 max-w-2xl mx-auto">Manage your profile information, preferences, and account details.</p>
+              </div>
+
+              <form onSubmit={handleUpdateProfile} className="space-y-8">
+
+                {/* Profile Image Section */}
+                <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                  <h3 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-3">
+                    <Camera className="w-6 h-6 text-indigo-600" />
+                    Profile Picture
+                  </h3>
+                  <div className="flex flex-col sm:flex-row items-center gap-8">
+                    <div className="relative group cursor-pointer" onClick={() => setShowImageModal(true)}>
+                      {currentUserAvatarUrl ? (
+                        <img
+                          src={currentUserAvatarUrl}
+                          alt="Avatar"
+                          className="w-32 h-32 rounded-full object-cover border-4 border-indigo-50 shadow-xl"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                            (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'flex';
+                          }}
+                        />
+                      ) : null}
+                      <div className="w-32 h-32 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-full flex items-center justify-center text-white text-4xl font-black shadow-xl border-4 border-indigo-50" style={{ display: currentUserAvatarUrl ? 'none' : 'flex' }}>
+                        {(currentUser.firstName + ' ' + currentUser.lastName).charAt(0)}
+                      </div>
+                      <div className="absolute inset-0 bg-black/40 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                        <Camera className="w-8 h-8 text-white" />
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-slate-900 text-lg">Avatar</h4>
+                      <p className="text-slate-500 text-sm mb-4">Upload a professional headshot. PNG or JPEG, max 5MB.</p>
+                      <button
+                        type="button"
+                        onClick={() => setShowImageModal(true)}
+                        className="px-6 py-2.5 bg-indigo-50 text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition-colors text-sm"
+                      >
+                        Change Picture
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Profile Info Section */}
+                <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                  <h3 className="text-2xl font-bold text-slate-900 mb-8 flex items-center gap-3">
+                    <User className="w-6 h-6 text-indigo-600" />
+                    Basic Information
+                  </h3>
+
+                  <div className="grid md:grid-cols-2 gap-6 mb-6">
+                    <div className="space-y-3">
+                      <label className="text-sm font-bold text-slate-700">First Name</label>
+                      <input
+                        type="text"
+                        required
+                        value={profileData.firstName}
+                        onChange={e => setProfileData({ ...profileData, firstName: e.target.value })}
+                        className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
+                        placeholder="Jane"
+                      />
+                    </div>
+                    <div className="space-y-3">
+                      <label className="text-sm font-bold text-slate-700">Last Name</label>
+                      <input
+                        type="text"
+                        required
+                        value={profileData.lastName}
+                        onChange={e => setProfileData({ ...profileData, lastName: e.target.value })}
+                        className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
+                        placeholder="Doe"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid md:grid-cols-2 gap-6 mb-6">
+                    <div className="space-y-3">
+                      <label className="text-sm font-bold text-slate-700">Email Address</label>
+                      <div className="relative">
+                        <Mail className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                        <input
+                          type="email"
+                          value={currentUser.email}
+                          disabled
+                          className="w-full pl-12 pr-5 py-4 rounded-2xl border border-slate-200 bg-slate-100 text-slate-500 font-medium cursor-not-allowed"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-3">
+                      <label className="text-sm font-bold text-slate-700">Phone Number (Optional)</label>
+                      <div className="relative">
+                        <Phone className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                        <input
+                          type="tel"
+                          value={profileData.phone}
+                          onChange={e => setProfileData({ ...profileData, phone: e.target.value })}
+                          className="w-full pl-12 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
+                          placeholder="+1 (555) 000-0000"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {currentUser.role === 'tutor' && (
+                    <div className="space-y-3 mt-6">
+                      <label className="text-sm font-bold text-slate-700">Professional Bio</label>
+                      <textarea
+                        required
+                        value={profileData.bio}
+                        onChange={e => setProfileData({ ...profileData, bio: e.target.value })}
+                        className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all resize-none min-h-[140px]"
+                        placeholder="Tell students about yourself, your teaching experience, methodology, and what makes your classes unique..."
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {currentUser.role === 'tutor' && (
+                  <>
+                    {/* Education & Qualifications Section */}
+                    <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                      <div className="flex items-center justify-between mb-8">
                         <h3 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
-                          <Calendar className="w-6 h-6 text-indigo-600" />
-                          Availability
+                          <Award className="w-6 h-6 text-indigo-600" />
+                          Education & Rates
                         </h3>
-                        <p className="text-slate-500 mt-2">Manage your regular weekly schedule for tutoring sessions.</p>
                       </div>
-                      <button 
+
+                      <div className="grid md:grid-cols-2 gap-8">
+                        <div className="space-y-3 md:col-span-2">
+                          <label className="text-sm font-bold text-slate-700">Highest Qualifications</label>
+                          <textarea
+                            required
+                            value={profileData.education}
+                            onChange={e => setProfileData({ ...profileData, education: e.target.value })}
+                            className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all min-h-[100px]"
+                            placeholder="e.g. BSc in Computer Science, University of Colombo&#10;MSc in AI, Stanford University"
+                          />
+                        </div>
+
+                        <div className="space-y-3">
+                          <label className="text-sm font-bold text-slate-700">Hourly Rate (USD)</label>
+                          <div className="relative">
+                            <span className="absolute left-5 top-1/2 -translate-y-1/2 font-bold text-slate-400">$</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              required
+                              value={profileData.pricePerHour}
+                              onChange={e => setProfileData({ ...profileData, pricePerHour: parseFloat(e.target.value) || 0 })}
+                              className="w-full pl-10 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
+                              placeholder="25.00"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-3">
+                          <label className="text-sm font-bold text-slate-700">Primary Teaching Level</label>
+                          <select
+                            required
+                            value={profileData.teachingLevel}
+                            onChange={e => setProfileData({ ...profileData, teachingLevel: e.target.value })}
+                            className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all appearance-none"
+                          >
+                            <option value="" disabled>Select your primary audience</option>
+                            <option value="School">School Level (K-12)</option>
+                            <option value="University">University Level</option>
+                            <option value="Both">Both School & University</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Subjects Section */}
+                    <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                      <h3 className="text-2xl font-bold text-slate-900 mb-3 flex items-center gap-3">
+                        <BookOpen className="w-6 h-6 text-indigo-600" />
+                        Subjects Taught
+                      </h3>
+                      <p className="text-slate-500 mb-6">Select the STEM/ICT subjects you are qualified to teach.</p>
+
+                      <div className="flex flex-wrap gap-3">
+                        {STEM_SUBJECTS.map(s => {
+                          const isSelected = profileData.subjects.includes(s);
+                          return (
+                            <button
+                              key={s}
+                              type="button"
+                              onClick={() => {
+                                const newSubs = isSelected
+                                  ? profileData.subjects.filter(x => x !== s)
+                                  : [...profileData.subjects, s];
+                                setProfileData({ ...profileData, subjects: newSubs });
+                              }}
+                              className={`px-5 py-3 rounded-2xl text-sm font-bold transition-all flex items-center gap-2 border-2 ${isSelected
+                                  ? 'bg-indigo-50 border-indigo-600 text-indigo-700 shadow-sm'
+                                  : 'bg-white border-slate-100 text-slate-600 hover:border-indigo-200 hover:bg-slate-50'
+                                }`}
+                            >
+                              {isSelected ? <CheckCircle className="w-4 h-4 text-indigo-600" /> : <div className="w-4 h-4 rounded-full border-2 border-slate-300" />}
+                              {s}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Availability Section */}
+                    <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                      <div className="flex items-center justify-between mb-6">
+                        <div>
+                          <h3 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
+                            <Calendar className="w-6 h-6 text-indigo-600" />
+                            Availability
+                          </h3>
+                          <p className="text-slate-500 mt-2">Manage your regular weekly schedule for tutoring sessions.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                              setActiveTab('manageAvailability');
+                            } else {
+                              alert('Advanced schedule manager is currently available for School level tutors only.');
+                            }
+                          }}
+                          className="hidden sm:flex items-center gap-2 bg-slate-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold hover:bg-indigo-50 transition-colors"
+                        >
+                          <Edit className="w-4 h-4" /> Manage Slots
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-3">
+                        {availabilityByDay.map(({ day, count }, i) => (
+                          <div key={day} className={`flex flex-col items-center p-4 rounded-2xl border-2 ${count > 0 ? 'border-indigo-100 bg-indigo-50/30' : i < 5 ? 'border-indigo-100 bg-indigo-50/20' : 'border-slate-100 bg-slate-50'}`}>
+                            <span className="text-sm font-bold text-slate-700 mb-2">{day}</span>
+                            {count > 0 ? (
+                              <span className="text-xs font-black text-indigo-600 bg-indigo-100 px-2 py-1 rounded-md">{count} Slot{count > 1 ? 's' : ''}</span>
+                            ) : (
+                              <span className="text-xs font-medium text-slate-400">Off</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      <button
                         type="button"
                         onClick={() => {
-                      if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
-                        setActiveTab('manageAvailability');
-                      } else {
-                        alert('Advanced schedule manager is currently available for School level tutors only.');
-                      }
-                    }}
-                        className="hidden sm:flex items-center gap-2 bg-slate-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold hover:bg-indigo-50 transition-colors"
+                          if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                            setActiveTab('manageAvailability');
+                          } else {
+                            alert('Advanced schedule manager is currently available for School level tutors only.');
+                          }
+                        }}
+                        className="w-full sm:hidden mt-4 flex items-center justify-center gap-2 bg-slate-50 text-indigo-600 px-5 py-3 rounded-xl font-bold hover:bg-indigo-50 transition-colors"
                       >
                         <Edit className="w-4 h-4" /> Manage Slots
                       </button>
                     </div>
+                  </>
+                )}
 
-                    <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-3">
-                      {availabilityByDay.map(({ day, count }, i) => (
-                        <div key={day} className={`flex flex-col items-center p-4 rounded-2xl border-2 ${count > 0 ? 'border-indigo-100 bg-indigo-50/30' : i < 5 ? 'border-indigo-100 bg-indigo-50/20' : 'border-slate-100 bg-slate-50'}`}>
-                          <span className="text-sm font-bold text-slate-700 mb-2">{day}</span>
-                          {count > 0 ? (
-                            <span className="text-xs font-black text-indigo-600 bg-indigo-100 px-2 py-1 rounded-md">{count} Slot{count > 1 ? 's' : ''}</span>
-                          ) : (
-                            <span className="text-xs font-medium text-slate-400">Off</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                    <button 
-                      type="button"
-                      onClick={() => {
-                      if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
-                        setActiveTab('manageAvailability');
-                      } else {
-                        alert('Advanced schedule manager is currently available for School level tutors only.');
-                      }
-                    }}
-                      className="w-full sm:hidden mt-4 flex items-center justify-center gap-2 bg-slate-50 text-indigo-600 px-5 py-3 rounded-xl font-bold hover:bg-indigo-50 transition-colors"
-                    >
-                      <Edit className="w-4 h-4" /> Manage Slots
-                    </button>
-                  </div>
-                </>
-              )}
+                {/* Submit Actions */}
+                <div className="flex gap-4 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('dashboard')}
+                    className="flex-1 px-8 py-4 rounded-2xl font-bold text-lg text-slate-600 bg-slate-100 hover:bg-slate-200 transition-all"
+                  >
+                    Back to Dashboard
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isUpdatingProfile}
+                    className="flex-[2] bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black text-lg hover:bg-indigo-700 disabled:opacity-50 shadow-xl shadow-indigo-200 flex items-center justify-center gap-3 transition-all active:scale-[0.98]"
+                  >
+                    {isUpdatingProfile ? (
+                      <span className="flex items-center gap-2">
+                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Saving...
+                      </span>
+                    ) : (
+                      <>
+                        Save Settings
+                        <Check className="w-5 h-5" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
 
-              {/* Submit Actions */}
-              <div className="flex gap-4 pt-4">
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('dashboard')}
-                  className="flex-1 px-8 py-4 rounded-2xl font-bold text-lg text-slate-600 bg-slate-100 hover:bg-slate-200 transition-all"
-                >
-                  Back to Dashboard
-                </button>
-                <button
-                  type="submit"
-                  disabled={isUpdatingProfile}
-                  className="flex-[2] bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black text-lg hover:bg-indigo-700 disabled:opacity-50 shadow-xl shadow-indigo-200 flex items-center justify-center gap-3 transition-all active:scale-[0.98]"
-                >
-                  {isUpdatingProfile ? (
-                    <span className="flex items-center gap-2">
-                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Saving...
-                    </span>
-                  ) : (
-                    <>
-                      Save Settings
-                      <Check className="w-5 h-5" />
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
+          {/* Manage Availability Page */}
+          {activeTab === 'manageAvailability' && isTutor && currentUser && (
+            <TutorAvailabilityManagePage
+              tutor={currentTutor}
+              onSaveAvailability={handleSaveTutorAvailability}
+              onBack={() => setActiveTab('dashboard')}
+            />
+          )}
 
-        {/* Manage Availability Page */}
-        {activeTab === 'manageAvailability' && isTutor && currentUser && (
-          <TutorAvailabilityManagePage 
-            tutor={currentTutor}
-            onSaveAvailability={handleSaveTutorAvailability}
-            onBack={() => setActiveTab('dashboard')} 
-          />
-        )}
+          {/* About Page */}
+          {activeTab === 'about' && (
+            <AboutPage setActiveTab={setActiveTab} />
+          )}
 
-        {/* About Page */}
-        {activeTab === 'about' && (
-          <AboutPage setActiveTab={setActiveTab} />
-        )}
-
-      </main>
+        </main>
       )}
 
       {/* Auth Modal */}
       <AnimatePresence>
         {showAuthModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4">
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setShowAuthModal(false)}
               className="absolute inset-0 bg-slate-900/40 backdrop-blur-md"
             />
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -4897,9 +4704,9 @@ export default function App() {
               <div className="hidden md:flex md:w-4/12 lg:w-5/12 bg-indigo-600 p-6 sm:p-7 md:p-8 flex-col justify-between relative overflow-hidden">
                 <div className="absolute top-0 right-0 -translate-y-1/2 translate-x-1/2 w-96 h-96 bg-white/10 rounded-full blur-3xl" />
                 <div className="absolute bottom-0 left-0 translate-y-1/2 -translate-x-1/2 w-96 h-96 bg-indigo-400/20 rounded-full blur-3xl" />
-                
+
                 <div className="relative z-10">
-                  <motion.div 
+                  <motion.div
                     initial={{ opacity: 0, y: -10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.2 }}
@@ -4910,7 +4717,7 @@ export default function App() {
                     </div>
                     <span className="text-xl sm:text-2xl font-bold text-white tracking-tight">TutorSphere</span>
                   </motion.div>
-                  
+
                   <motion.div
                     initial={{ opacity: 0, x: -20 }}
                     animate={{ opacity: 1, x: 0 }}
@@ -4929,7 +4736,7 @@ export default function App() {
                     { icon: <Award className="w-5 h-5 text-indigo-300" />, text: 'Certified Learning Paths' },
                     { icon: <Bot className="w-5 h-5 text-indigo-300" />, text: 'AI-Powered Study Plans' }
                   ].map((item, idx) => (
-                    <motion.div 
+                    <motion.div
                       key={idx}
                       initial={{ opacity: 0, x: -10 }}
                       animate={{ opacity: 1, x: 0 }}
@@ -4947,8 +4754,8 @@ export default function App() {
 
               {/* Right Side - Form */}
               <div className="flex-1 p-4 sm:p-5 md:p-6 lg:p-7 bg-white relative">
-                <button 
-                  onClick={() => setShowAuthModal(false)} 
+                <button
+                  onClick={() => setShowAuthModal(false)}
                   className="absolute top-4 right-4 sm:top-8 sm:right-8 p-2.5 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-all hover:rotate-90"
                 >
                   <X className="w-6 h-6" />
@@ -4960,8 +4767,8 @@ export default function App() {
                       {authMode === 'login' ? 'Sign In' : 'Sign Up'}
                     </h2>
                     <p className="text-slate-500 text-sm font-medium">
-                      {authMode === 'login' 
-                        ? 'Enter your details to access your account.' 
+                      {authMode === 'login'
+                        ? 'Enter your details to access your account.'
                         : 'Join TutorSphere and start your learning journey.'
                       }
                     </p>
@@ -4971,10 +4778,10 @@ export default function App() {
                   <div className="grid grid-cols-1 gap-3 mb-6">
                     <button type="button" className="flex items-center justify-center gap-2 py-3 px-4 border border-slate-200 rounded-2xl hover:bg-slate-50 transition-all font-bold text-sm text-slate-700">
                       <svg className="w-5 h-5" viewBox="0 0 24 24">
-                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
-                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
+                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
                       </svg>
                       Google
                     </button>
@@ -4988,7 +4795,7 @@ export default function App() {
                       <span className="bg-white px-4 text-slate-400 font-bold tracking-widest">Or continue with email</span>
                     </div>
                   </div>
-                  
+
                   <form onSubmit={handleAuth} className="space-y-4">
                     {authMode === 'signup' && (
                       <>
@@ -4997,11 +4804,11 @@ export default function App() {
                             <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">First Name</label>
                             <div className="relative group">
                               <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
-                              <input 
+                              <input
                                 required
-                                type="text" 
+                                type="text"
                                 value={authData.firstName || ''}
-                                onChange={e => setAuthData({...authData, firstName: e.target.value})}
+                                onChange={e => setAuthData({ ...authData, firstName: e.target.value })}
                                 className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all bg-slate-50/50 font-medium"
                                 placeholder="John"
                               />
@@ -5011,11 +4818,11 @@ export default function App() {
                             <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Last Name</label>
                             <div className="relative group">
                               <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
-                              <input 
+                              <input
                                 required
-                                type="text" 
+                                type="text"
                                 value={authData.lastName || ''}
-                                onChange={e => setAuthData({...authData, lastName: e.target.value})}
+                                onChange={e => setAuthData({ ...authData, lastName: e.target.value })}
                                 className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all bg-slate-50/50 font-medium"
                                 placeholder="Doe"
                               />
@@ -5028,11 +4835,11 @@ export default function App() {
                       <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Email Address</label>
                       <div className="relative group">
                         <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
-                        <input 
+                        <input
                           required
-                          type="email" 
+                          type="email"
                           value={authData.email}
-                          onChange={e => setAuthData({...authData, email: e.target.value})}
+                          onChange={e => setAuthData({ ...authData, email: e.target.value })}
                           className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all bg-slate-50/50 font-medium"
                           placeholder="name@example.com"
                         />
@@ -5047,11 +4854,11 @@ export default function App() {
                       </div>
                       <div className="relative group">
                         <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
-                        <input 
+                        <input
                           required
-                          type="password" 
+                          type="password"
                           value={authData.password}
-                          onChange={e => setAuthData({...authData, password: e.target.value})}
+                          onChange={e => setAuthData({ ...authData, password: e.target.value })}
                           className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all bg-slate-50/50 font-medium"
                           placeholder="••••••••"
                         />
@@ -5062,11 +4869,11 @@ export default function App() {
                         <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Confirm Password</label>
                         <div className="relative group">
                           <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
-                          <input 
+                          <input
                             required
-                            type="password" 
+                            type="password"
                             value={authData.confirmPassword || ''}
-                            onChange={e => setAuthData({...authData, confirmPassword: e.target.value})}
+                            onChange={e => setAuthData({ ...authData, confirmPassword: e.target.value })}
                             className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all bg-slate-50/50 font-medium"
                             placeholder="••••••••"
                           />
@@ -5080,20 +4887,20 @@ export default function App() {
                         <label htmlFor="remember" className="text-xs text-slate-500 font-medium cursor-pointer">Remember me for 30 days</label>
                       </div>
                     )}
-                    
-                    <button 
-                      type="submit" 
+
+                    <button
+                      type="submit"
                       className="w-full bg-indigo-600 text-white py-3 rounded-2xl font-bold hover:bg-indigo-700 shadow-xl shadow-indigo-200 transition-all mt-3 active:scale-[0.98] flex items-center justify-center gap-2"
                     >
                       {authMode === 'login' ? 'Sign In' : 'Sign Up'}
                       <ArrowRight className="w-5 h-5" />
                     </button>
                   </form>
-                  
+
                   <div className="mt-10 text-center">
                     <p className="text-slate-500 text-sm font-medium">
                       {authMode === 'login' ? "Don't have an account?" : "Already have an account?"}
-                      <button 
+                      <button
                         type="button"
                         onClick={() => {
                           if (authMode === 'login') {
@@ -5119,7 +4926,7 @@ export default function App() {
       <AnimatePresence>
         {showImageModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -5204,65 +5011,64 @@ export default function App() {
 
       {/* Chatbot Widget */}
       {canUseChatbot && (
-      <div className="fixed bottom-6 right-6 z-50">
-        <AnimatePresence>
-          {isChatOpen && (
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="bg-white w-80 md:w-96 h-[500px] rounded-3xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden mb-4"
-            >
-              <div className="bg-indigo-600 p-4 text-white flex justify-between items-center">
-                <div className="flex items-center gap-2">
-                  <Bot className="w-5 h-5" />
-                  <span className="font-bold">TutorSphere Assistant</span>
-                </div>
-                <button onClick={() => setIsChatOpen(false)}><X className="w-5 h-5" /></button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {chatMessages.map((msg, i) => (
-                  <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                    <div className={`max-w-[80%] p-3 rounded-2xl text-sm relative group ${
-                      msg.role === 'user' 
-                        ? 'bg-indigo-600 text-white rounded-tr-none' 
-                        : 'bg-slate-100 text-slate-700 rounded-tl-none'
-                    }`}>
-                      {msg.text}
-                      {msg.role === 'bot' && (
-                        <button 
-                          onClick={() => handleSpeak(msg.text, i)}
-                          className={`absolute -right-8 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-white border border-slate-100 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity ${isSpeaking === i.toString() ? 'text-indigo-600 animate-pulse' : 'text-slate-400 hover:text-indigo-600'}`}
-                        >
-                          <Volume2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
+        <div className="fixed bottom-6 right-6 z-50">
+          <AnimatePresence>
+            {isChatOpen && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                className="bg-white w-80 md:w-96 h-[500px] rounded-3xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden mb-4"
+              >
+                <div className="bg-indigo-600 p-4 text-white flex justify-between items-center">
+                  <div className="flex items-center gap-2">
+                    <Bot className="w-5 h-5" />
+                    <span className="font-bold">TutorSphere Assistant</span>
                   </div>
-                ))}
-              </div>
-              <form onSubmit={handleChatSubmit} className="p-4 border-t border-slate-100 flex gap-2">
-                <input 
-                  type="text" 
-                  value={chatInput}
-                  onChange={e => setChatInput(e.target.value)}
-                  placeholder="Ask me anything..." 
-                  className="flex-1 px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-                />
-                <button type="submit" className="bg-indigo-600 text-white p-2 rounded-xl">
-                  <Send className="w-4 h-4" />
-                </button>
-              </form>
-            </motion.div>
-          )}
-        </AnimatePresence>
-        <button 
-          onClick={() => setIsChatOpen(!isChatOpen)}
-          className="bg-indigo-600 text-white p-4 rounded-full shadow-lg hover:bg-indigo-700 transition-all hover:scale-110"
-        >
-          {isChatOpen ? <X /> : <MessageSquare />}
-        </button>
-      </div>
+                  <button onClick={() => setIsChatOpen(false)}><X className="w-5 h-5" /></button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  {chatMessages.map((msg, i) => (
+                    <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                      <div className={`max-w-[80%] p-3 rounded-2xl text-sm relative group ${msg.role === 'user'
+                          ? 'bg-indigo-600 text-white rounded-tr-none'
+                          : 'bg-slate-100 text-slate-700 rounded-tl-none'
+                        }`}>
+                        {msg.text}
+                        {msg.role === 'bot' && (
+                          <button
+                            onClick={() => handleSpeak(msg.text, i)}
+                            className={`absolute -right-8 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-white border border-slate-100 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity ${isSpeaking === i.toString() ? 'text-indigo-600 animate-pulse' : 'text-slate-400 hover:text-indigo-600'}`}
+                          >
+                            <Volume2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <form onSubmit={handleChatSubmit} className="p-4 border-t border-slate-100 flex gap-2">
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={e => setChatInput(e.target.value)}
+                    placeholder="Ask me anything..."
+                    className="flex-1 px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                  />
+                  <button type="submit" className="bg-indigo-600 text-white p-2 rounded-xl">
+                    <Send className="w-4 h-4" />
+                  </button>
+                </form>
+              </motion.div>
+            )}
+          </AnimatePresence>
+          <button
+            onClick={() => setIsChatOpen(!isChatOpen)}
+            className="bg-indigo-600 text-white p-4 rounded-full shadow-lg hover:bg-indigo-700 transition-all hover:scale-110"
+          >
+            {isChatOpen ? <X /> : <MessageSquare />}
+          </button>
+        </div>
       )}
 
       {/* Footer */}
@@ -5351,7 +5157,7 @@ export default function App() {
                 <h3 className="text-3xl font-black text-slate-900 mb-6">{currentUser?.firstName} {currentUser?.lastName}</h3>
                 <p className="text-slate-500 font-medium mb-2 uppercase tracking-widest text-sm">has successfully completed the course</p>
                 <h4 className="text-2xl font-bold text-indigo-700 italic mb-8 leading-tight max-w-lg mx-auto">"{certificateModalData.courseTitle}"</h4>
-                
+
                 <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mt-8 pt-8 border-t border-slate-200">
                   <button
                     onClick={() => setCertificateModalData(null)}

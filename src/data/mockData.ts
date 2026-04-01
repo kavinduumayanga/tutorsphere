@@ -154,6 +154,7 @@ export const MOCK_RESOURCES: Resource[] = [
     url: '#',
     description: 'Solved past paper with marking scheme and model answers.',
     isFree: true,
+    downloadCount: 128,
   },
   {
     id: 'r2',
@@ -164,6 +165,7 @@ export const MOCK_RESOURCES: Resource[] = [
     url: '#',
     description: 'Concise theory notes and worked examples for mechanics.',
     isFree: true,
+    downloadCount: 74,
   }
 ];
 

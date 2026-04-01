@@ -1402,18 +1402,18 @@ export default function App() {
     });
   };
 
-  const handleSaveCourse = async (event: React.FormEvent) => {
+  const handleSaveCourse = async (event: React.FormEvent): Promise<boolean> => {
     event.preventDefault();
 
     if (!currentUser || currentUser.role !== 'tutor') {
       alert('Only tutor accounts can manage courses.');
-      return;
+      return false;
     }
 
     const tutorId = currentTutor?.id || currentUser.id;
     if (!tutorId) {
       alert('Tutor profile is required to manage courses.');
-      return;
+      return false;
     }
 
     const normalizedModules = courseForm.modules
@@ -1442,18 +1442,18 @@ export default function App() {
 
     if (!courseForm.title.trim() || !courseForm.description.trim()) {
       alert('Course title and description are required.');
-      return;
+      return false;
     }
 
     if (normalizedModules.length === 0) {
       alert('Please add at least one module with a title and a video URL (or uploaded video).');
-      return;
+      return false;
     }
 
     const normalizedPrice = Number(courseForm.price) || 0;
     if (!courseForm.isFree && normalizedPrice <= 0) {
       alert('Paid courses must have a price greater than zero.');
-      return;
+      return false;
     }
 
     setIsSavingCourse(true);
@@ -1488,30 +1488,27 @@ export default function App() {
       }
 
       handleResetCourseForm();
+      return true;
     } catch (error) {
       console.error('Failed to save course:', error);
       const message = error instanceof Error ? error.message : 'Failed to save course.';
       alert(message);
+      return false;
     } finally {
       setIsSavingCourse(false);
     }
   };
 
-  const handleDeleteCourse = async (courseId: string) => {
+  const handleDeleteCourse = async (courseId: string): Promise<boolean> => {
     if (!currentUser || currentUser.role !== 'tutor') {
       alert('Only tutor accounts can delete courses.');
-      return;
+      return false;
     }
 
     const tutorId = currentTutor?.id || currentUser.id;
     if (!tutorId) {
       alert('Tutor profile is required to delete courses.');
-      return;
-    }
-
-    const confirmed = confirm('Delete this course? This will also remove associated student enrollments.');
-    if (!confirmed) {
-      return;
+      return false;
     }
 
     try {
@@ -1525,10 +1522,12 @@ export default function App() {
       }
 
       alert('Course deleted successfully.');
+      return true;
     } catch (error) {
       console.error('Failed to delete course:', error);
       const message = error instanceof Error ? error.message : 'Failed to delete course.';
       alert(message);
+      return false;
     }
   };
 
@@ -1561,25 +1560,25 @@ export default function App() {
     });
   };
 
-  const handleSaveResource = async (event: React.FormEvent) => {
+  const handleSaveResource = async (event: React.FormEvent): Promise<boolean> => {
     event.preventDefault();
 
     if (!currentUser || currentUser.role !== 'tutor') {
       alert('Only tutor accounts can manage resources.');
-      return;
+      return false;
     }
 
     const tutorId = currentTutor?.id || currentUser.id;
     if (!tutorId) {
       alert('Tutor profile is required to manage resources.');
-      return;
+      return false;
     }
 
     if (!resourceForm.title.trim()) {
       alert('Resource title is required.');
       setResourceUploadStatus('error');
       setResourceUploadStatusMessage('Resource title is required.');
-      return;
+      return false;
     }
 
     setIsSavingResource(true);
@@ -1609,7 +1608,7 @@ export default function App() {
           alert(validationMessage);
           setResourceUploadStatus('error');
           setResourceUploadStatusMessage(validationMessage);
-          return;
+          return false;
         } else {
           setResourceUploadProgress(100);
           setResourceUploadStatusMessage('Using previously uploaded file path.');
@@ -1619,10 +1618,10 @@ export default function App() {
         alert(validationMessage);
         setResourceUploadStatus('error');
         setResourceUploadStatusMessage(validationMessage);
-        return;
+        return false;
       }
 
-      const payload: Omit<Resource, 'id'> = {
+      const payload: Omit<Resource, 'id' | 'downloadCount'> = {
         tutorId,
         title: resourceForm.title.trim(),
         type: resourceForm.type,
@@ -1652,33 +1651,30 @@ export default function App() {
           ? 'File uploaded and resource saved successfully.'
           : 'Resource saved successfully.'
       );
+      return true;
     } catch (error) {
       console.error('Failed to save resource:', error);
       const message = error instanceof Error ? error.message : 'Failed to save resource.';
       setResourceUploadStatus('error');
       setResourceUploadStatusMessage(message);
       alert(message);
+      return false;
     } finally {
       setIsSavingResource(false);
       setIsUploadingResourceFile(false);
     }
   };
 
-  const handleDeleteResource = async (resourceId: string) => {
+  const handleDeleteResource = async (resourceId: string): Promise<boolean> => {
     if (!currentUser || currentUser.role !== 'tutor') {
       alert('Only tutor accounts can delete resources.');
-      return;
+      return false;
     }
 
     const tutorId = currentTutor?.id || currentUser.id;
     if (!tutorId) {
       alert('Tutor profile is required to delete resources.');
-      return;
-    }
-
-    const confirmed = confirm('Delete this resource?');
-    if (!confirmed) {
-      return;
+      return false;
     }
 
     try {
@@ -1690,10 +1686,12 @@ export default function App() {
       }
 
       alert('Resource deleted successfully.');
+      return true;
     } catch (error) {
       console.error('Failed to delete resource:', error);
       const message = error instanceof Error ? error.message : 'Failed to delete resource.';
       alert(message);
+      return false;
     }
   };
 
@@ -2085,6 +2083,26 @@ export default function App() {
   };
 
   const isDirectVideoFile = (url: string): boolean => /\.(mp4|webm|ogg|mov|m4v)(\?.*)?$/i.test(url.trim());
+
+  const resolveCourseLearningResourceUrl = (rawUrl: string): string => {
+    const trimmed = rawUrl.trim();
+    if (!trimmed) {
+      return '';
+    }
+
+    if (/^https?:\/\//i.test(trimmed)) {
+      return trimmed;
+    }
+
+    if (trimmed.startsWith('/uploads/')) {
+      if (window.location.port === '3000') {
+        return `${window.location.origin}${trimmed}`;
+      }
+      return `http://localhost:3000${trimmed}`;
+    }
+
+    return trimmed;
+  };
 
   return (
     <div className={`${activeTab === 'quizzes' ? 'h-[100dvh] overflow-hidden' : 'min-h-screen'} bg-[#F8FAFC] font-sans text-slate-900`}>
@@ -2698,13 +2716,20 @@ export default function App() {
                           <div className="space-y-4">
                             {currentModule.resources.length > 0 ? (
                               <div className="grid grid-cols-1 gap-3">
-                                {currentModule.resources.map((resource, idx) => (
+                                {currentModule.resources.map((resource, idx) => {
+                                  const resolvedResourceUrl = resolveCourseLearningResourceUrl(resource.url);
+                                  return (
                                   <a
                                     key={`${currentModule.id}-res-${idx}`}
-                                    href={resource.url}
+                                    href={resolvedResourceUrl || '#'}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     download={resource.url.startsWith('/uploads/') ? resource.name : undefined}
+                                    onClick={(event) => {
+                                      if (!resolvedResourceUrl) {
+                                        event.preventDefault();
+                                      }
+                                    }}
                                     className="p-4 rounded-xl bg-slate-50 border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 transition-all flex items-center justify-between group"
                                   >
                                     <div className="flex items-center gap-3">
@@ -2720,7 +2745,8 @@ export default function App() {
                                     </div>
                                     <ArrowRight className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 transition-colors" />
                                   </a>
-                                ))}
+                                  );
+                                })}
                               </div>
                             ) : (
                               <div className="text-center py-12">

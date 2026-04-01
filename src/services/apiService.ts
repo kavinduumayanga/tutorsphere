@@ -262,6 +262,17 @@ class ApiService {
     } as Course;
   }
 
+  private normalizeResource(resource: any): Resource {
+    const normalizedId = String(resource?.id ?? resource?._id ?? '').trim();
+    const parsedDownloadCount = Number(resource?.downloadCount);
+
+    return {
+      ...resource,
+      id: normalizedId,
+      downloadCount: Number.isFinite(parsedDownloadCount) ? Math.max(0, parsedDownloadCount) : 0,
+    } as Resource;
+  }
+
   private async fetchWithApiFallback(endpoint: string, options?: RequestInit): Promise<Response> {
     const baseCandidates = getApiBaseCandidates();
     let lastError: unknown;
@@ -606,14 +617,23 @@ class ApiService {
       params.set('freeOnly', 'true');
     }
     const query = params.toString();
-    return this.request(`/resources${query ? `?${query}` : ''}`);
+    const resources = await this.request<any[]>(`/resources${query ? `?${query}` : ''}`);
+    return resources.map((resource) => this.normalizeResource(resource));
   }
 
-  async createResource(resource: Omit<Resource, 'id'>): Promise<Resource> {
-    return this.request('/resources', {
+  async createResource(resource: Omit<Resource, 'id' | 'downloadCount'>): Promise<Resource> {
+    const createdResource = await this.request<any>('/resources', {
       method: 'POST',
       body: JSON.stringify(resource),
     });
+    return this.normalizeResource(createdResource);
+  }
+
+  async incrementResourceDownload(id: string): Promise<Resource> {
+    const updatedResource = await this.request<any>(`/resources/${id}/download`, {
+      method: 'POST',
+    });
+    return this.normalizeResource(updatedResource);
   }
 
   async updateResource(id: string, resource: Partial<Resource>, actorId?: string): Promise<Resource> {
@@ -622,10 +642,11 @@ class ApiService {
       params.set('actorId', actorId);
     }
     const query = params.toString();
-    return this.request(`/resources/${id}${query ? `?${query}` : ''}`, {
+    const updatedResource = await this.request<any>(`/resources/${id}${query ? `?${query}` : ''}`, {
       method: 'PUT',
       body: JSON.stringify({ ...resource, actorId }),
     });
+    return this.normalizeResource(updatedResource);
   }
 
   async deleteResource(id: string, actorId?: string): Promise<void> {

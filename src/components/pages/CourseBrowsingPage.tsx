@@ -25,6 +25,7 @@ import {
   ArrowUpDown,
 } from 'lucide-react';
 import { Course, CourseEnrollment, Tutor } from '../../types';
+import { formatLkr } from '../../utils/currency';
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -213,7 +214,7 @@ const QuickPreviewModal: React.FC<QuickPreviewProps> = ({
           </div>
           <div className="absolute bottom-4 right-4">
             <span className={`px-3 py-1.5 rounded-full text-sm font-extrabold ${isFreeCourse ? 'bg-emerald-500 text-white' : 'bg-white/95 text-slate-900 backdrop-blur-sm'}`}>
-              {isFreeCourse ? 'Free' : `LKR ${course.price}`}
+              {isFreeCourse ? 'Free' : formatLkr(course.price)}
             </span>
           </div>
         </div>
@@ -332,7 +333,7 @@ const QuickPreviewModal: React.FC<QuickPreviewProps> = ({
             ) : isFreeCourse ? (
               <><Sparkles className="w-4 h-4" /> Enroll for Free</>
             ) : (
-              <><GraduationCap className="w-4 h-4" /> Buy Course — LKR {course.price}</>
+              <><GraduationCap className="w-4 h-4" /> Buy Course — {formatLkr(course.price)}</>
             )}
           </button>
         </div>
@@ -774,7 +775,7 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
                           </span>
                         ) : (
                           <span className="text-slate-900 font-extrabold text-base">
-                            LKR {course.price}
+                            {formatLkr(course.price)}
                           </span>
                         )}
                       </div>

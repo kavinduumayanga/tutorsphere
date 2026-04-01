@@ -18,6 +18,7 @@ import {
   Lock,
   Info,
 } from "lucide-react";
+import { formatLkr } from "../../utils/currency";
 
 interface TutorBookingPageProps {
   tutor: any;
@@ -127,6 +128,7 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
   }
 
   const displayName = tutor.user?.name || tutor.name || `${tutor.firstName || ''} ${tutor.lastName || ''}`.trim() || "Tutor";
+  const formattedHourlyRate = formatLkr(tutor.pricePerHour);
 
   // Deterministic available slots per date
   const availableSlots = CONSTANT_SLOTS.filter((_, i) => (selectedDate.getDate() + i) % 3 !== 0);
@@ -272,7 +274,7 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
                   </div>
                   <div>
                     <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Total</div>
-                    <div className="font-bold text-slate-900 text-sm">${tutor.pricePerHour?.toFixed(2)} — Video Call</div>
+                    <div className="font-bold text-slate-900 text-sm">{formattedHourlyRate} — Video Call</div>
                   </div>
                 </div>
               </div>
@@ -390,7 +392,7 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
               <div className="font-bold text-slate-900 text-sm">{displayName}</div>
               <div className="text-xs text-slate-500 font-medium flex items-center justify-end gap-1">
                 <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
-                {tutor.rating || '4.8'} • ${tutor.pricePerHour}/hr
+                {tutor.rating || '4.8'} • {formattedHourlyRate}/hour
               </div>
             </div>
           </div>
@@ -597,7 +599,7 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
               <div className="border-t border-slate-100 pt-6 mb-8">
                 <div className="flex justify-between items-center mb-2.5">
                   <span className="font-bold text-slate-500 text-sm">Rate per hour</span>
-                  <span className="font-bold text-slate-900">${tutor.pricePerHour?.toFixed(2)}</span>
+                  <span className="font-bold text-slate-900">{formattedHourlyRate}</span>
                 </div>
                 <div className="flex justify-between items-center mb-4">
                   <span className="font-bold text-slate-500 text-sm">Service Fee</span>
@@ -605,7 +607,7 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
                 </div>
                 <div className="flex justify-between items-end pt-4 border-t border-slate-100">
                   <span className="font-black text-slate-900 text-lg">Total</span>
-                  <span className="font-black text-slate-900 text-3xl tracking-tight">${tutor.pricePerHour?.toFixed(2)}</span>
+                  <span className="font-black text-slate-900 text-3xl tracking-tight">{formattedHourlyRate}</span>
                 </div>
               </div>
 

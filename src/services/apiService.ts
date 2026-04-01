@@ -156,6 +156,10 @@ export type QuizChatResponse = {
   sessionEnded: boolean;
 };
 
+export type FaqChatResponse = {
+  reply: string;
+};
+
 class ApiService {
   private sanitizeTutorName(value: string): string {
     return value.replace(/\s+updated\s*$/i, '').trim();
@@ -802,6 +806,23 @@ class ApiService {
       body: JSON.stringify({
         userId: user.id,
         role: user.role,
+      }),
+    });
+  }
+
+  async sendFaqChatMessage(
+    message: string,
+    context?: {
+      currentTab?: string;
+      userRole?: string;
+      userName?: string;
+    }
+  ): Promise<FaqChatResponse> {
+    return this.request('/faq-chatbot/chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        message,
+        context,
       }),
     });
   }

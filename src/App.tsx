@@ -1923,6 +1923,45 @@ export default function App() {
     await updateTutorBooking(booking.id, { meetingLink: nextMeetingLink });
   };
 
+  const handleStudentCancelBooking = async (booking: Booking) => {
+    if (!currentUser || currentUser.role !== 'student') {
+      alert('Only student accounts can cancel booked sessions.');
+      return;
+    }
+
+    if (booking.studentId !== currentUser.id) {
+      alert('You can only cancel your own bookings.');
+      return;
+    }
+
+    if (booking.status === 'cancelled' || booking.status === 'completed') {
+      return;
+    }
+
+    const shouldCancel = confirm('Are you sure you want to cancel this booking?');
+    if (!shouldCancel) {
+      return;
+    }
+
+    setActiveBookingActionId(booking.id);
+    try {
+      const updatedBooking = await apiService.updateBooking(booking.id, { status: 'cancelled' });
+      setBookings((prevBookings) =>
+        prevBookings.map((entry) =>
+          entry.id === booking.id
+            ? { ...entry, ...updatedBooking }
+            : entry
+        )
+      );
+      alert('Booking cancelled successfully.');
+    } catch (error) {
+      console.error('Failed to cancel booking:', error);
+      alert('Failed to cancel booking. Please try again.');
+    } finally {
+      setActiveBookingActionId(null);
+    }
+  };
+
   const getBookingStatusPillClassName = (status: Booking['status']) => {
     if (status === 'completed') return 'text-emerald-700 bg-emerald-50 border-emerald-200';
     if (status === 'confirmed') return 'text-indigo-700 bg-indigo-50 border-indigo-200';
@@ -3348,7 +3387,20 @@ export default function App() {
               initialRole="tutor"
               showRoleSelector={false}
               onBack={() => setActiveTab('registerSelect')}
-              onAccountCreated={(user) => {
+              onAccountCreated={(user, tutorProfile) => {
+                if (tutorProfile) {
+                  setTutors((prevTutors) => {
+                    const existingIndex = prevTutors.findIndex((tutor) => tutor.id === tutorProfile.id);
+                    if (existingIndex === -1) {
+                      return [tutorProfile, ...prevTutors];
+                    }
+
+                    return prevTutors.map((tutor) => (
+                      tutor.id === tutorProfile.id ? tutorProfile : tutor
+                    ));
+                  });
+                }
+
                 setCurrentUser(user);
                 setActiveTab('dashboard');
                 localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
@@ -3760,7 +3812,7 @@ export default function App() {
                                   onClick={() => handleTutorBookingStatusChange(booking, 'cancelled')}
                                   className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
                                 >
-                                  Cancel
+                                  Cancel Booking
                                 </button>
                               )}
                               <button
@@ -4179,7 +4231,11 @@ export default function App() {
                       </div>
                     ) : (
                       <div className="space-y-6">
-                        {bookings.map(booking => (
+                        {bookings.map(booking => {
+                          const isLoading = activeBookingActionId === booking.id;
+                          const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed';
+
+                          return (
                           <div key={booking.id} className="p-6 bg-slate-50 rounded-3xl border border-slate-100 space-y-6 hover:border-indigo-200 transition-all group">
                             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
                               <div className="flex items-center gap-5">
@@ -4197,36 +4253,48 @@ export default function App() {
                               </div>
                               <div className="flex flex-wrap gap-2">
                                 <button
+                                  disabled={isLoading}
                                   onClick={async () => {
                                     const feedback = await localService.getSessionFeedback(booking.subject, 'Intermediate');
                                     alert(`AI Learning Assistant:\n\n${feedback}`);
                                   }}
-                                  className="bg-white text-indigo-600 border border-indigo-100 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 hover:text-white transition-all flex items-center gap-2 shadow-sm"
+                                  className="bg-white text-indigo-600 border border-indigo-100 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 hover:text-white transition-all flex items-center gap-2 shadow-sm disabled:opacity-60"
                                 >
                                   <Bot className="w-3.5 h-3.5" /> AI Feedback
                                 </button>
                                 <button
+                                  disabled={isLoading}
                                   onClick={() => {
                                     const comment = prompt('Enter your review:');
                                     const rating = parseInt(prompt('Enter rating (1-5):') || '5');
                                     if (comment && rating) handleAddReview(booking.tutorId, rating, comment);
                                   }}
-                                  className="bg-white text-amber-600 border border-amber-100 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-amber-500 hover:text-white transition-all flex items-center gap-2 shadow-sm"
+                                  className="bg-white text-amber-600 border border-amber-100 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-amber-500 hover:text-white transition-all flex items-center gap-2 shadow-sm disabled:opacity-60"
                                 >
                                   <Star className="w-3.5 h-3.5" /> Review
                                 </button>
+                                {canCancel && (
+                                  <button
+                                    type="button"
+                                    disabled={isLoading}
+                                    onClick={() => handleStudentCancelBooking(booking)}
+                                    className="bg-rose-600 text-white px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-rose-700 transition-all flex items-center gap-2 shadow-sm disabled:opacity-60"
+                                  >
+                                    Cancel Booking
+                                  </button>
+                                )}
                                 <a
                                   href={booking.meetingLink}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 flex items-center gap-2"
+                                  className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg shadow-indigo-100 flex items-center gap-2 ${booking.status === 'cancelled' ? 'bg-slate-300 text-slate-600 pointer-events-none' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
                                 >
                                   Join Meeting <ArrowRight className="w-3.5 h-3.5" />
                                 </a>
                               </div>
                             </div>
                           </div>
-                        ))}
+                        )})}
                       </div>
                     )}
                   </div>

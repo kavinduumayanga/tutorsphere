@@ -10,11 +10,17 @@ import {
   ChevronLeft,
   ChevronRight,
   Play,
+  Pause,
+  Volume2,
+  VolumeX,
+  SkipBack,
+  SkipForward,
   BookOpen,
   Download,
   FileText,
   Clock,
   CheckCircle,
+  Check,
   Bookmark,
   Gauge,
   PenLine,
@@ -230,11 +236,64 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
   const hasPrevModule = currentModuleIndex > 0;
   const courseTutor = tutors.find(t => t.id === course.tutorId);
 
+  const [localNote, setLocalNote] = useState<string>('');
+  
+  // Custom video controls state
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [volume, setVolume] = useState(1);
+  const [isMuted, setIsMuted] = useState(false);
+
+  const togglePlay = () => {
+    if (videoRef.current) {
+      if (isPlaying) {
+        videoRef.current.pause();
+      } else {
+        videoRef.current.play();
+      }
+      setIsPlaying(!isPlaying);
+    }
+  };
+
+  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseFloat(e.target.value);
+    setVolume(val);
+    if (val > 0) setIsMuted(false);
+    if (videoRef.current) {
+      videoRef.current.volume = val;
+      videoRef.current.muted = val === 0;
+    }
+  };
+
+  const toggleMute = () => {
+    setIsMuted(!isMuted);
+    if (videoRef.current) {
+      videoRef.current.muted = !isMuted;
+    }
+  };
+
+  useEffect(() => {
+    // Reset play state when module changes
+    setIsPlaying(false);
+  }, [currentModule?.id]);
+
+  useEffect(() => {
+    if (currentModule) {
+      setLocalNote(studentNotes[currentModule.id] || '');
+    }
+  }, [currentModule?.id, studentNotes]);
+
   const handleNoteChange = (value: string) => {
-    onSetStudentNotes({ ...studentNotes, [currentModule.id]: value });
-    setShowAutoSave(true);
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    autoSaveTimerRef.current = setTimeout(() => setShowAutoSave(false), 2000);
+    setLocalNote(value);
+  };
+
+  const handleSaveNote = () => {
+    if (currentModule) {
+      onSetStudentNotes({ ...studentNotes, [currentModule.id]: localNote });
+      setShowAutoSave(true);
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = setTimeout(() => setShowAutoSave(false), 3000);
+    }
   };
 
   const toggleBookmark = (moduleId: string) => {
@@ -317,11 +376,6 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
                 {isBookmarked && (
                   <span className="inline-flex items-center gap-0.5 text-[10px] text-amber-600 font-semibold bg-amber-50 px-1.5 py-0.5 rounded-full">
                     <Bookmark className="w-2.5 h-2.5 fill-amber-500 text-amber-500" /> Saved
-                  </span>
-                )}
-                {isModCompleted && (
-                  <span className="inline-flex items-center gap-0.5 text-[10px] text-emerald-600 font-semibold bg-emerald-50 px-1.5 py-0.5 rounded-full">
-                    <CheckCircle className="w-2.5 h-2.5" /> Done
                   </span>
                 )}
               </div>
@@ -429,24 +483,74 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
         {/* Left: Video + Content (3/4 on desktop) */}
         <div className="flex-1 lg:w-3/4 overflow-y-auto">
           {/* --- VIDEO PLAYER --- */}
-          <div className="relative bg-black aspect-video flex items-center justify-center group">
+          <div className="relative bg-black aspect-video flex-col flex items-center justify-center group overflow-hidden">
             {directVideoFile ? (
-              <video
-                controls
-                src={currentModule.videoUrl}
-                ref={(video) => {
-                  if (video) video.playbackRate = Number(playbackSpeed);
-                }}
-                className="w-full h-full"
-              />
+              <>
+                <video
+                  src={currentModule.videoUrl}
+                  ref={(video) => {
+                    //@ts-ignore
+                    videoRef.current = video;
+                    if (video) video.playbackRate = Number(playbackSpeed);
+                  }}
+                  className="w-full h-full object-contain cursor-pointer"
+                  onClick={togglePlay}
+                  onPlay={() => setIsPlaying(true)}
+                  onPause={() => setIsPlaying(false)}
+                />
+                {!isPlaying && (
+                  <button onClick={togglePlay} className="absolute inset-0 m-auto w-20 h-20 rounded-full bg-indigo-600/80 backdrop-blur flex items-center justify-center hover:bg-indigo-500 hover:scale-110 transition-all text-white border border-white/20 shadow-xl z-20">
+                    <Play className="w-8 h-8 fill-current translate-x-1" />
+                  </button>
+                )}
+                {/* Custom Video Controls overlay */}
+                <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/80 to-transparent flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-all duration-300 z-30">
+                  <div className="flex items-center gap-4 text-white">
+                    <button onClick={() => hasPrevModule && selectModule(course.modules[currentModuleIndex - 1].id)} disabled={!hasPrevModule} className="p-1 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-white">
+                      <SkipBack className="w-5 h-5 fill-current" />
+                    </button>
+                    <button onClick={togglePlay} className="w-10 h-10 flex items-center justify-center bg-indigo-600 rounded-full hover:bg-indigo-500 transition-colors">
+                      {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current translate-x-0.5" />}
+                    </button>
+                    <button onClick={() => hasNextModule && selectModule(course.modules[currentModuleIndex + 1].id)} disabled={!hasNextModule} className="p-1 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-white">
+                      <SkipForward className="w-5 h-5 fill-current" />
+                    </button>
+
+                    <div className="flex items-center gap-2 group/vol">
+                      <button onClick={toggleMute} className="p-1 hover:text-indigo-400">
+                        {isMuted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+                      </button>
+                      <input 
+                        type="range" 
+                        min="0" max="1" step="0.05"
+                        value={isMuted ? 0 : volume}
+                        onChange={handleVolumeChange}
+                        className="w-0 opacity-0 group-hover/vol:w-20 group-hover/vol:opacity-100 transition-all duration-300 cursor-pointer accent-indigo-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </>
             ) : embedUrl ? (
-              <iframe
-                src={embedUrl}
-                title={currentModule.title}
-                className="w-full h-full"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                allowFullScreen
-              />
+              <>
+                <iframe
+                  src={embedUrl}
+                  title={currentModule.title}
+                  className="w-full h-full pb-14" // leave room for custom bottom bar
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  allowFullScreen
+                />
+                <div className="absolute bottom-0 left-0 right-0 h-14 bg-slate-900 border-t border-white/10 flex items-center px-4 gap-4 text-white z-10 justify-between">
+                  <div className="flex items-center gap-4">
+                    <button onClick={() => hasPrevModule && selectModule(course.modules[currentModuleIndex - 1].id)} disabled={!hasPrevModule} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-semibold transition-colors disabled:opacity-30 disabled:hover:bg-white/10">
+                      <SkipBack className="w-4 h-4" /> Prev Lesson
+                    </button>
+                    <button onClick={() => hasNextModule && selectModule(course.modules[currentModuleIndex + 1].id)} disabled={!hasNextModule} className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-semibold transition-colors disabled:opacity-30 disabled:hover:bg-indigo-600">
+                      Next Lesson <SkipForward className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              </>
             ) : (
               <div className="w-full h-full flex items-center justify-center text-center px-6 bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900">
                 <div className="space-y-4">
@@ -559,22 +663,25 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
                         </h4>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           {currentModule.resources.map((resource, idx) => (
-                            <a
+                            <button
                               key={`${currentModule.id}-resource-${idx}`}
-                              href={resource}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="p-4 rounded-xl bg-white border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50/50 transition-all duration-200 flex items-center gap-3 group shadow-sm hover:shadow-md"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                onSetLearningContentTab('resources');
+                              }}
+                              className="p-4 rounded-xl bg-white border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50/50 transition-all duration-200 flex items-center justify-between gap-3 group shadow-sm hover:shadow-md w-full text-left"
                             >
-                              <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center text-indigo-600 group-hover:bg-indigo-200 transition-colors flex-shrink-0">
-                                <Download className="w-5 h-5" />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sm font-bold text-slate-900">Resource {idx + 1}</p>
-                                <p className="text-[11px] text-slate-500 truncate">Click to open</p>
+                              <div className="flex items-center gap-3 w-full">
+                                <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center text-indigo-600 group-hover:bg-indigo-200 transition-colors flex-shrink-0">
+                                  <FileText className="w-5 h-5" />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-bold text-slate-900">Resource {idx + 1}</p>
+                                  <p className="text-[11px] text-slate-500 truncate">Click to view in Resources</p>
+                                </div>
                               </div>
                               <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-indigo-500 group-hover:translate-x-0.5 transition-all flex-shrink-0" />
-                            </a>
+                            </button>
                           ))}
                         </div>
                       </div>
@@ -640,26 +747,32 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
                             </motion.span>
                           )}
                         </AnimatePresence>
-                        {studentNotes[currentModule.id] && (
+                        {localNote && (
                           <button
-                            onClick={() => onSetStudentNotes({ ...studentNotes, [currentModule.id]: '' })}
+                            onClick={() => setLocalNote('')}
                             className="text-xs text-slate-400 hover:text-rose-500 font-semibold transition-colors"
                           >
                             Clear
                           </button>
                         )}
+                        <button
+                          onClick={handleSaveNote}
+                          className="flex items-center gap-1 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-sm"
+                        >
+                          <Check className="w-3.5 h-3.5" /> Save
+                        </button>
                       </div>
                     </div>
                     <textarea
-                      value={studentNotes[currentModule.id] || ''}
+                      value={localNote}
                       onChange={(e) => handleNoteChange(e.target.value)}
-                      placeholder="Start typing your notes for this module… They will be saved automatically."
+                      placeholder="Start typing your notes for this module..."
                       rows={12}
                       className="w-full p-5 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 outline-none font-mono text-sm resize-none bg-slate-50/50 transition-all placeholder:text-slate-300"
                     />
                     <div className="flex items-center justify-between text-xs text-slate-400">
-                      <span>{(studentNotes[currentModule.id] || '').split(/\s+/).filter(Boolean).length} words</span>
-                      <span>{(studentNotes[currentModule.id] || '').length} characters</span>
+                      <span>{localNote.split(/\s+/).filter(Boolean).length} words</span>
+                      <span>{localNote.length} characters</span>
                     </div>
                   </motion.div>
                 )}

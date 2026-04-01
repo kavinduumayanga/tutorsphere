@@ -42,6 +42,7 @@ export interface CourseBrowsingPageProps {
   onSetCourseCategoryFilter: (cat: string) => void;
   onEnrollCourse: (courseId: string) => void;
   onOpenCourseLearning: (courseId: string) => void;
+  onViewCertificate: (enrollment: CourseEnrollment, courseTitle: string) => void;
   stemSubjects: string[];
 }
 
@@ -149,6 +150,7 @@ interface QuickPreviewProps {
   onClose: () => void;
   onEnroll: (courseId: string) => void;
   onContinue: (courseId: string) => void;
+  onViewCertificate: (enrollment: CourseEnrollment, courseTitle: string) => void;
 }
 
 const QuickPreviewModal: React.FC<QuickPreviewProps> = ({
@@ -161,6 +163,7 @@ const QuickPreviewModal: React.FC<QuickPreviewProps> = ({
   onClose,
   onEnroll,
   onContinue,
+  onViewCertificate,
 }) => {
   const isEnrolled = Boolean(enrollment);
   const progress = enrollment?.progress || 0;
@@ -293,6 +296,17 @@ const QuickPreviewModal: React.FC<QuickPreviewProps> = ({
               <div className="h-2 rounded-full bg-indigo-200 overflow-hidden">
                 <div className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full transition-all" style={{ width: `${progress}%` }} />
               </div>
+              {progress === 100 && enrollment && (
+                <button
+                  onClick={() => {
+                    onViewCertificate(enrollment, course.title);
+                    onClose();
+                  }}
+                  className="w-full mt-3 py-2 rounded-lg bg-emerald-600 text-white font-bold text-xs uppercase tracking-widest hover:bg-emerald-700 transition-colors flex items-center justify-center gap-2"
+                >
+                  <Award className="w-4 h-4" /> View Certificate
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -343,6 +357,7 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
   onSetCourseCategoryFilter,
   onEnrollCourse,
   onOpenCourseLearning,
+  onViewCertificate,
   stemSubjects,
 }) => {
   const [sortBy, setSortBy] = useState<SortOption>('popular');

@@ -226,6 +226,17 @@ const formatCertificateDate = (dateValue: Date | string): string => {
   });
 };
 
+const normalizeTeachingLevel = (value: unknown): 'School' | 'University' | 'School and University' => {
+  const normalized = String(value || '').trim();
+  if (normalized === 'Both' || normalized === 'School & University' || normalized === 'School and University') {
+    return 'School and University';
+  }
+  if (normalized === 'University') {
+    return 'University';
+  }
+  return 'School';
+};
+
 type CertificatePdfInput = {
   studentName: string;
   courseTitle: string;
@@ -813,6 +824,65 @@ async function startServer() {
     }
   });
 
+  app.delete("/api/auth/user/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const user = await User.findOne({ id });
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const avatarPath = resolveStoredAvatarPath(user.avatar);
+
+      // Remove role-specific data first to keep dangling references out of the app.
+      if (user.role === 'tutor') {
+        const tutorCourses = await Course.find({ tutorId: id }, { id: 1 });
+        const tutorCourseIds = tutorCourses.map((course) => course.id);
+
+        if (tutorCourseIds.length > 0) {
+          await CourseEnrollment.deleteMany({ courseId: { $in: tutorCourseIds } });
+        }
+
+        await Course.deleteMany({ tutorId: id });
+        await Resource.deleteMany({ tutorId: id });
+        await Booking.deleteMany({ tutorId: id });
+        await Review.deleteMany({ tutorId: id });
+      } else {
+        await Booking.deleteMany({ studentId: id });
+        await Review.deleteMany({ studentId: id });
+        await Question.deleteMany({ studentId: id });
+        await CourseEnrollment.deleteMany({ studentId: id });
+        await Course.updateMany(
+          { enrolledStudents: id },
+          { $pull: { enrolledStudents: id } }
+        );
+        await StudyPlan.deleteMany({ studentId: id });
+        await SkillLevel.deleteMany({ studentId: id });
+      }
+
+      // Remove tutor profile if one exists (safe no-op for students).
+      await Tutor.deleteMany({ id });
+      await User.deleteOne({ id });
+
+      if (avatarPath) {
+        try {
+          await fs.unlink(avatarPath);
+        } catch (deleteError) {
+          const err = deleteError as NodeJS.ErrnoException;
+          if (err.code !== 'ENOENT') {
+            console.warn('Failed to remove avatar during account deletion:', avatarPath, deleteError);
+          }
+        }
+      }
+
+      res.json({ message: "Account deleted successfully" });
+    } catch (error) {
+      console.error("Delete user account error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   app.get("/api/auth/user/:id/avatar", async (req, res) => {
     try {
       const { id } = req.params;
@@ -894,7 +964,11 @@ async function startServer() {
     try {
       const tutorData = req.body;
       const id = tutorData.id || Math.random().toString(36).substr(2, 9);
-      const tutor = new Tutor({ ...tutorData, id });
+      const tutor = new Tutor({
+        ...tutorData,
+        teachingLevel: normalizeTeachingLevel(tutorData.teachingLevel),
+        id,
+      });
       await tutor.save();
       res.json(tutor);
     } catch (error) {
@@ -906,11 +980,19 @@ async function startServer() {
   app.put("/api/tutors/:id", async (req, res) => {
     try {
       let tutor = await Tutor.findOne({ id: req.params.id });
+      const { teachingLevel: requestedTeachingLevel, ...incomingTutorData } = req.body || {};
 
       if (tutor) {
+        const nextTutorPayload = {
+          ...incomingTutorData,
+          ...(requestedTeachingLevel !== undefined
+            ? { teachingLevel: normalizeTeachingLevel(requestedTeachingLevel) }
+            : {}),
+        };
+
         tutor = await Tutor.findOneAndUpdate(
           { id: req.params.id },
-          req.body,
+          nextTutorPayload,
           { new: true }
         );
         res.json(tutor);
@@ -921,20 +1003,20 @@ async function startServer() {
         }
 
         tutor = new Tutor({
+          ...incomingTutorData,
           id: user.id,
-          name: `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}`,
-          email: user.email,
+          name: incomingTutorData.name || `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}`,
+          email: incomingTutorData.email || user.email,
           role: 'tutor',
-          qualifications: req.body.qualifications || 'Not specified',
-          subjects: req.body.subjects || [],
-          teachingLevel: req.body.teachingLevel || 'School',
-          pricePerHour: req.body.pricePerHour || 0,
-          rating: 0,
-          reviewCount: 0,
-          bio: req.body.bio || 'New tutor on TutorSphere',
-          availability: req.body.availability || [],
-          isVerified: false,
-          ...req.body
+          qualifications: incomingTutorData.qualifications || 'Not specified',
+          subjects: incomingTutorData.subjects || [],
+          teachingLevel: normalizeTeachingLevel(requestedTeachingLevel || 'School'),
+          pricePerHour: incomingTutorData.pricePerHour || 0,
+          rating: incomingTutorData.rating ?? 0,
+          reviewCount: incomingTutorData.reviewCount ?? 0,
+          bio: incomingTutorData.bio || 'New tutor on TutorSphere',
+          availability: incomingTutorData.availability || [],
+          isVerified: incomingTutorData.isVerified ?? false,
         });
 
         await tutor.save();

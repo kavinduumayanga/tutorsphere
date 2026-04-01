@@ -35,7 +35,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
   { value: 'newest', label: 'Newest' },
 ];
 
-const LEVEL_OPTIONS = ['All Levels', 'School', 'University', 'Both'];
+const LEVEL_OPTIONS = ['All Levels', 'School', 'University', 'School and University'];
 
 const ITEMS_PER_PAGE = 9;
 
@@ -82,7 +82,7 @@ export const FindTutorsPage: React.FC<FindTutorsPageProps> = ({
 
     // Level
     if (levelFilter !== 'All Levels') {
-      result = result.filter((t) => t.teachingLevel === levelFilter || t.teachingLevel === 'Both');
+      result = result.filter((t) => t.teachingLevel === levelFilter);
     }
 
     // Rating

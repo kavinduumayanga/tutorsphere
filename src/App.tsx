@@ -262,6 +262,7 @@ export default function App() {
     bio: ''
   });
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [activeBookingActionId, setActiveBookingActionId] = useState<string | null>(null);
 
   // Courses browsing state
@@ -350,7 +351,7 @@ export default function App() {
     email: '',
     education: '',
     subjects: [] as string[],
-    teachingLevel: 'School' as 'School' | 'University' | 'Both',
+    teachingLevel: 'School' as 'School' | 'University' | 'School and University',
     bio: ''
   });
   const [isValidating, setIsValidating] = useState(false);
@@ -1730,6 +1731,73 @@ export default function App() {
     setActiveTab('home');
   };
 
+  const handleDeleteAccount = async () => {
+    if (!currentUser) {
+      return;
+    }
+
+    const confirmed = confirm('Delete your account permanently? This will remove your profile and related data. This action cannot be undone.');
+    if (!confirmed) {
+      return;
+    }
+
+    const confirmationInput = prompt('Type DELETE to confirm account deletion:');
+    if (confirmationInput !== 'DELETE') {
+      alert('Account deletion cancelled.');
+      return;
+    }
+
+    const deletedUser = currentUser;
+    setIsDeletingAccount(true);
+
+    try {
+      await apiService.deleteUser(deletedUser.id);
+
+      setTutors((prevTutors) => prevTutors.filter((tutor) => tutor.id !== deletedUser.id));
+
+      setCourses((prevCourses) =>
+        deletedUser.role === 'tutor'
+          ? prevCourses.filter((course) => course.tutorId !== deletedUser.id)
+          : prevCourses.map((course) => ({
+            ...course,
+            enrolledStudents: course.enrolledStudents.filter((studentId) => studentId !== deletedUser.id),
+          }))
+      );
+
+      if (deletedUser.role === 'tutor') {
+        setResources((prevResources) => prevResources.filter((resource) => resource.tutorId !== deletedUser.id));
+      }
+
+      setAllReviews((prevReviews) =>
+        prevReviews.filter(
+          (review) => review.tutorId !== deletedUser.id && review.studentId !== deletedUser.id
+        )
+      );
+
+      setBookings([]);
+      setReviews([]);
+      setQuestions([]);
+      setCourseEnrollments([]);
+      setUserCourses([]);
+
+      localStorage.removeItem('session');
+      setCurrentUser(null);
+      setActiveLearningCourseId(null);
+      setIsUserMenuOpen(false);
+      setShowAuthModal(false);
+      setAuthMode('login');
+      setActiveTab('home');
+
+      alert('Your account was deleted successfully.');
+    } catch (error) {
+      console.error('Failed to delete account:', error);
+      const message = error instanceof Error ? error.message : 'Failed to delete account. Please try again.';
+      alert(message);
+    } finally {
+      setIsDeletingAccount(false);
+    }
+  };
+
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -1823,7 +1891,10 @@ export default function App() {
       if (currentUser.role === 'tutor') {
         const tutorId = currentTutor?.id || currentUser.id;
         const hasSubjects = profileData.subjects.length > 0;
-        const validTeachingLevel = profileData.teachingLevel === 'School' || profileData.teachingLevel === 'University' || profileData.teachingLevel === 'Both';
+        const validTeachingLevel =
+          profileData.teachingLevel === 'School' ||
+          profileData.teachingLevel === 'University' ||
+          profileData.teachingLevel === 'School and University';
 
         if (!hasSubjects || !validTeachingLevel || !profileData.education.trim()) {
           alert('Tutor profiles require Education, Subject(s), and Teaching Level.');
@@ -2546,7 +2617,7 @@ export default function App() {
                                   />
                                   <div className="flex-1">
                                     <h5 className="text-lg font-black text-slate-900">{getTutorDisplayName(courseTutor)}</h5>
-                                    <p className="text-sm text-indigo-700 font-semibold">{courseTutor.teachingLevel === 'Both' ? 'School & University Tutor' : `${courseTutor.teachingLevel} Tutor`}</p>
+                                    <p className="text-sm text-indigo-700 font-semibold">{`${courseTutor.teachingLevel} Tutor`}</p>
                                     <p className="text-sm text-slate-600 mt-2 line-clamp-2">{courseTutor.bio}</p>
                                     <button
                                       onClick={() => {
@@ -3578,9 +3649,9 @@ export default function App() {
                         className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all appearance-none"
                       >
                         <option value="" disabled>Select your primary audience</option>
-                        <option value="School">School Level (K-12)</option>
+                        <option value="School">School Level</option>
                         <option value="University">University Level</option>
-                        <option value="Both">Both School & University</option>
+                        <option value="School and University">School and University</option>
                       </select>
                     </div>
                   </div>
@@ -3633,7 +3704,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => {
-                        if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                        if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') {
                           setActiveTab('manageAvailability');
                         } else {
                           alert('Advanced schedule manager is currently available for School level tutors only.');
@@ -3660,7 +3731,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                      if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') {
                         setActiveTab('manageAvailability');
                       } else {
                         alert('Advanced schedule manager is currently available for School level tutors only.');
@@ -3699,6 +3770,25 @@ export default function App() {
                     )}
                   </button>
                 </div>
+
+                {/* Danger Zone */}
+                <div className="bg-rose-50/60 border border-rose-200 rounded-[2rem] p-6 md:p-7">
+                  <h3 className="text-xl font-black text-rose-700 mb-2">Danger Zone</h3>
+                  <p className="text-sm text-rose-700/90 mb-5">
+                    Deleting your account is permanent and cannot be undone.
+                    {currentUser.role === 'tutor'
+                      ? ' Your tutor profile and learning content records will be removed.'
+                      : ' Your bookings and learning records will be removed.'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleDeleteAccount}
+                    disabled={isDeletingAccount || isUpdatingProfile}
+                    className="px-6 py-3 rounded-2xl font-black text-sm uppercase tracking-widest bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60 disabled:cursor-not-allowed transition-all"
+                  >
+                    {isDeletingAccount ? 'Deleting Account...' : 'Delete Account'}
+                  </button>
+                </div>
               </form>
             </div>
           )}
@@ -3717,7 +3807,7 @@ export default function App() {
                     <p className="font-black text-slate-900">Settings</p>
                     <p className="text-xs text-slate-500 mt-1">Manage subjects and profile settings</p>
                   </button>
-                  {(profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') && (
+                  {(profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') && (
                     <button onClick={() => setActiveTab('manageAvailability')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
                       <p className="font-black text-slate-900">Manage Availability</p>
                       <p className="text-xs text-slate-500 mt-1">Configure your tutoring schedule</p>
@@ -4551,9 +4641,9 @@ export default function App() {
                             className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all appearance-none"
                           >
                             <option value="" disabled>Select your primary audience</option>
-                            <option value="School">School Level (K-12)</option>
+                            <option value="School">School Level</option>
                             <option value="University">University Level</option>
-                            <option value="Both">Both School & University</option>
+                            <option value="School and University">School and University</option>
                           </select>
                         </div>
                       </div>
@@ -4606,7 +4696,7 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => {
-                            if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                            if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') {
                               setActiveTab('manageAvailability');
                             } else {
                               alert('Advanced schedule manager is currently available for School level tutors only.');
@@ -4633,7 +4723,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => {
-                          if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                          if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') {
                             setActiveTab('manageAvailability');
                           } else {
                             alert('Advanced schedule manager is currently available for School level tutors only.');
@@ -4672,6 +4762,25 @@ export default function App() {
                         <Check className="w-5 h-5" />
                       </>
                     )}
+                  </button>
+                </div>
+
+                {/* Danger Zone */}
+                <div className="bg-rose-50/60 border border-rose-200 rounded-[2rem] p-6 md:p-7">
+                  <h3 className="text-xl font-black text-rose-700 mb-2">Danger Zone</h3>
+                  <p className="text-sm text-rose-700/90 mb-5">
+                    Deleting your account is permanent and cannot be undone.
+                    {currentUser.role === 'tutor'
+                      ? ' Your tutor profile and learning content records will be removed.'
+                      : ' Your bookings and learning records will be removed.'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleDeleteAccount}
+                    disabled={isDeletingAccount || isUpdatingProfile}
+                    className="px-6 py-3 rounded-2xl font-black text-sm uppercase tracking-widest bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60 disabled:cursor-not-allowed transition-all"
+                  >
+                    {isDeletingAccount ? 'Deleting Account...' : 'Delete Account'}
                   </button>
                 </div>
               </form>

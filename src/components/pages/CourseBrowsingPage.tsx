@@ -255,7 +255,7 @@ const QuickPreviewModal: React.FC<QuickPreviewProps> = ({
               <div>
                 <p className="text-sm font-bold text-slate-900">{getTutorDisplayName(tutor)}</p>
                 <p className="text-xs text-slate-500">
-                  {tutor.teachingLevel === 'Both' ? 'School & University' : tutor.teachingLevel} Tutor
+                  {tutor.teachingLevel} Tutor
                   {tutor.rating > 0 && ` · ★ ${tutor.rating}`}
                 </p>
               </div>

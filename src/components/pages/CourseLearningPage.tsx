@@ -705,7 +705,7 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
                           <div className="flex-1 min-w-0">
                             <h5 className="text-lg font-extrabold text-slate-900">{getTutorDisplayName(courseTutor)}</h5>
                             <p className="text-sm text-indigo-600 font-semibold">
-                              {courseTutor.teachingLevel === 'Both' ? 'School & University Tutor' : `${courseTutor.teachingLevel} Tutor`}
+                              {`${courseTutor.teachingLevel} Tutor`}
                             </p>
                             {courseTutor.rating > 0 && (
                               <div className="flex items-center gap-1 mt-1">

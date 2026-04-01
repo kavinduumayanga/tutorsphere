@@ -48,7 +48,7 @@ export const MOCK_TUTORS: Tutor[] = [
     role: 'tutor',
     qualifications: 'MSc in Applied Physics',
     subjects: ['Science', 'Maths'],
-    teachingLevel: 'Both',
+    teachingLevel: 'School and University',
     pricePerHour: 1800,
     rating: 4.8,
     reviewCount: 56,

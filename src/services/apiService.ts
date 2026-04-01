@@ -161,13 +161,30 @@ class ApiService {
     return value.replace(/\s+updated\s*$/i, '').trim();
   }
 
+  private normalizeTeachingLevel(value: unknown): Tutor['teachingLevel'] {
+    const raw = String(value || '').trim();
+    if (raw === 'Both' || raw === 'School & University') {
+      return 'School and University';
+    }
+    if (raw === 'School and University') {
+      return raw;
+    }
+    if (raw === 'School' || raw === 'University') {
+      return raw;
+    }
+    return 'School';
+  }
+
   private normalizeTutor(tutor: any): Tutor {
     const firstName = this.sanitizeTutorName((tutor?.firstName || '').trim());
     const lastName = this.sanitizeTutorName((tutor?.lastName || '').trim());
     const fullName = this.sanitizeTutorName((tutor?.name || '').trim());
 
     if (firstName || lastName) {
-      return tutor as Tutor;
+      return {
+        ...tutor,
+        teachingLevel: this.normalizeTeachingLevel(tutor?.teachingLevel),
+      } as Tutor;
     }
 
     if (fullName) {
@@ -176,6 +193,7 @@ class ApiService {
         ...tutor,
         firstName: parsedFirstName || 'Tutor',
         lastName: rest.join(' '),
+        teachingLevel: this.normalizeTeachingLevel(tutor?.teachingLevel),
       } as Tutor;
     }
 
@@ -183,6 +201,7 @@ class ApiService {
       ...tutor,
       firstName: 'Tutor',
       lastName: '',
+      teachingLevel: this.normalizeTeachingLevel(tutor?.teachingLevel),
     } as Tutor;
   }
 
@@ -339,6 +358,12 @@ class ApiService {
     });
   }
 
+  async deleteUser(id: string): Promise<{ message: string }> {
+    return this.request(`/auth/user/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
   // Tutor methods
   async getTutors(): Promise<Tutor[]> {
     const tutors = await this.request<any[]>('/tutors');
@@ -351,17 +376,19 @@ class ApiService {
   }
 
   async createTutor(tutor: Omit<Tutor, 'id'>): Promise<Tutor> {
-    return this.request('/tutors', {
+    const createdTutor = await this.request<any>('/tutors', {
       method: 'POST',
       body: JSON.stringify(tutor),
     });
+    return this.normalizeTutor(createdTutor);
   }
 
   async updateTutor(id: string, tutor: Partial<Tutor>): Promise<Tutor> {
-    return this.request(`/tutors/${id}`, {
+    const updatedTutor = await this.request<any>(`/tutors/${id}`, {
       method: 'PUT',
       body: JSON.stringify(tutor),
     });
+    return this.normalizeTutor(updatedTutor);
   }
 
   async deleteTutor(id: string): Promise<void> {

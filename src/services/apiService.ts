@@ -36,6 +36,19 @@ type UploadedCourseAsset = {
   mimeType: string;
 };
 
+type QuizChatSessionStage =
+  | 'awaitingSubject'
+  | 'awaitingTopic'
+  | 'quiz'
+  | 'awaitingRestart'
+  | 'closed';
+
+export type QuizChatResponse = {
+  reply: string;
+  stage: QuizChatSessionStage;
+  sessionEnded: boolean;
+};
+
 class ApiService {
   private sanitizeTutorName(value: string): string {
     return value.replace(/\s+updated\s*$/i, '').trim();
@@ -110,11 +123,11 @@ class ApiService {
   private normalizeCourse(course: any): Course {
     const modules = Array.isArray(course?.modules)
       ? course.modules.map((module: any) => ({
-          ...module,
-          resources: (Array.isArray(module?.resources) ? module.resources : [])
-            .map((resource: any, index: number) => this.normalizeCourseModuleResource(resource, index))
-            .filter((resource: CourseModuleResource | null): resource is CourseModuleResource => Boolean(resource)),
-        }))
+        ...module,
+        resources: (Array.isArray(module?.resources) ? module.resources : [])
+          .map((resource: any, index: number) => this.normalizeCourseModuleResource(resource, index))
+          .filter((resource: CourseModuleResource | null): resource is CourseModuleResource => Boolean(resource)),
+      }))
       : [];
 
     return {
@@ -130,9 +143,9 @@ class ApiService {
       headers: isFormDataBody
         ? options?.headers
         : {
-            'Content-Type': 'application/json',
-            ...(options?.headers || {}),
-          },
+          'Content-Type': 'application/json',
+          ...(options?.headers || {}),
+        },
     };
 
     const response = await fetch(`${API_BASE_URL}${endpoint}`, requestOptions);
@@ -560,6 +573,27 @@ class ApiService {
   async deleteSkillLevel(id: string): Promise<void> {
     return this.request(`/skill-levels/${id}`, {
       method: 'DELETE',
+    });
+  }
+
+  async sendQuizChatMessage(message: string, user: Pick<User, 'id' | 'role'>): Promise<QuizChatResponse> {
+    return this.request('/quiz-chatbot/chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        message,
+        userId: user.id,
+        role: user.role,
+      }),
+    });
+  }
+
+  async resetQuizChatSession(user: Pick<User, 'id' | 'role'>): Promise<QuizChatResponse> {
+    return this.request('/quiz-chatbot/reset', {
+      method: 'POST',
+      body: JSON.stringify({
+        userId: user.id,
+        role: user.role,
+      }),
     });
   }
 }

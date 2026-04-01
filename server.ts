@@ -19,6 +19,7 @@ import { Quiz } from "./src/models/Quiz.js";
 import { StudyPlan } from "./src/models/StudyPlan.js";
 import { SkillLevel } from "./src/models/SkillLevel.js";
 import { CourseEnrollment } from "./src/models/CourseEnrollment.js";
+import { quizChatbotRouter } from "./src/server/quiz-chatbot/chatController.js";
 
 // Load environment variables
 dotenv.config();
@@ -613,6 +614,7 @@ async function startServer() {
   app.use(express.json());
   app.use(cors());
   app.use('/uploads', express.static(UPLOADS_DIR));
+  app.use('/api/quiz-chatbot', quizChatbotRouter);
 
   app.post('/api/uploads/course-thumbnail', handleCourseThumbnailUpload, async (req, res) => {
     try {
@@ -703,9 +705,9 @@ async function startServer() {
 
       const normalizedEmail = email.trim();
       const escapedEmail = normalizedEmail.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
-      const user = await User.findOne({ 
-        email: { $regex: new RegExp(`^${escapedEmail}$`, 'i') }, 
-        password 
+      const user = await User.findOne({
+        email: { $regex: new RegExp(`^${escapedEmail}$`, 'i') },
+        password
       });
 
       if (user) {
@@ -1292,12 +1294,12 @@ async function startServer() {
       const validModuleIds = new Set(course.modules.map((module: any) => module.id));
       const normalizedCompletedModuleIds = Array.isArray(completedModuleIds)
         ? Array.from(
-            new Set(
-              completedModuleIds
-                .map((moduleId: any) => String(moduleId).trim())
-                .filter((moduleId: string) => validModuleIds.has(moduleId))
-            )
+          new Set(
+            completedModuleIds
+              .map((moduleId: any) => String(moduleId).trim())
+              .filter((moduleId: string) => validModuleIds.has(moduleId))
           )
+        )
         : [];
 
       const nextProgress = calculateProgress(normalizedCompletedModuleIds.length, course.modules.length);
@@ -1784,7 +1786,7 @@ async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     try {
       const vite = await createViteServer({
-        server: { 
+        server: {
           middlewareMode: true,
           hmr: {
             port: 24679, // Use a different port for WebSocket to avoid conflicts

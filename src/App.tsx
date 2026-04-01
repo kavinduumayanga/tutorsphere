@@ -27,6 +27,7 @@ import {
   Users,
   ArrowRight,
   Send,
+  Download,
   Bot,
   Award,
   BookMarked,
@@ -195,6 +196,8 @@ export default function App() {
   const [completedCrop, setCompletedCrop] = useState<PixelCrop | null>(null);
   const cropImageRef = useRef<HTMLImageElement | null>(null);
 
+  const [certificateModalData, setCertificateModalData] = useState<{enrollment: CourseEnrollment, courseTitle: string} | null>(null);
+
   // Load user and activeTab from localStorage on app start
   useEffect(() => {
     const storedSession = localStorage.getItem('session');
@@ -293,7 +296,12 @@ export default function App() {
   const [learningContentTab, setLearningContentTab] = useState<'overview' | 'notes' | 'resources' | 'qa'>('overview');
   const [bookmarkedModules, setBookmarkedModules] = useState<Set<string>>(new Set());
   const [playbackSpeed, setPlaybackSpeed] = useState<'0.75' | '1' | '1.25' | '1.5'>('1');
+  const [videoIsPlaying, setVideoIsPlaying] = useState(false);
+  const [videoVolume, setVideoVolume] = useState(1);
+  const [videoMuted, setVideoMuted] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [studentNotes, setStudentNotes] = useState<Record<string, string>>({});
+  const [notesSaved, setNotesSaved] = useState<Record<string, boolean>>({});
   const [isLoadingUserData, setIsLoadingUserData] = useState(false);
 
   // API Data State
@@ -1057,12 +1065,16 @@ export default function App() {
       );
 
       if (updatedEnrollment.progress === 100 && !enrollment.certificateId) {
-        alert('Congratulations! Your course completion certificate is now available.');
+        setCertificateModalData({ enrollment: updatedEnrollment, courseTitle: course.title });
       }
     } catch (error) {
       console.error('Failed to update course progress:', error);
       alert('Failed to update course progress. Please try again.');
     }
+  };
+
+  const handleShowCertificateModal = (enrollment: CourseEnrollment, courseTitle: string) => {
+    setCertificateModalData({ enrollment, courseTitle });
   };
 
   const handleDownloadCertificate = async (enrollment: CourseEnrollment, courseTitle: string) => {
@@ -1889,24 +1901,153 @@ export default function App() {
                   {currentModule ? (
                     <div className="space-y-0">
                       {/* Video Player Container */}
-                      <div className="relative bg-black aspect-video flex items-center justify-center group">
+                      <div className="relative bg-black aspect-video flex-col flex items-center justify-center group overflow-hidden">
                         {directVideoFile ? (
-                          <video
-                            controls
-                            src={currentModule.videoUrl}
-                            ref={(video) => {
-                              if (video) video.playbackRate = Number(playbackSpeed);
-                            }}
-                            className="w-full h-full"
-                          />
+                          <>
+                            <video
+                              src={currentModule.videoUrl}
+                              ref={(video) => {
+                                videoRef.current = video;
+                                if (video) video.playbackRate = Number(playbackSpeed);
+                              }}
+                              className="w-full h-full object-contain cursor-pointer"
+                              onClick={() => {
+                                if (videoRef.current) {
+                                  videoIsPlaying ? videoRef.current.pause() : videoRef.current.play();
+                                  setVideoIsPlaying(!videoIsPlaying);
+                                }
+                              }}
+                              onPlay={() => setVideoIsPlaying(true)}
+                              onPause={() => setVideoIsPlaying(false)}
+                            />
+                            {!videoIsPlaying && (
+                              <button
+                                onClick={() => {
+                                  videoRef.current?.play();
+                                  setVideoIsPlaying(true);
+                                }}
+                                className="absolute inset-0 m-auto w-20 h-20 rounded-full bg-indigo-600/80 backdrop-blur flex items-center justify-center hover:bg-indigo-500 hover:scale-110 transition-all text-white border border-white/20 shadow-xl z-20"
+                              >
+                                <Play className="w-8 h-8 fill-current translate-x-1" />
+                              </button>
+                            )}
+                            <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/80 to-transparent flex items-center justify-between opacity-0 group-hover:opacity-100 transition-all duration-300 z-30">
+                              <div className="flex flex-col gap-2 w-full">
+                                <div className="flex items-center gap-4 text-white">
+                                  <button
+                                    onClick={() => {
+                                      const currentIndex = activeLearningCourse.modules.findIndex(m => m.id === currentModule.id);
+                                      if (currentIndex > 0) setActiveVideoModuleId(activeLearningCourse.modules[currentIndex - 1].id);
+                                    }}
+                                    disabled={activeLearningCourse.modules.findIndex(m => m.id === currentModule.id) === 0}
+                                    className="p-1 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-white"
+                                  >
+                                    <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      if (videoRef.current) {
+                                        videoIsPlaying ? videoRef.current.pause() : videoRef.current.play();
+                                        setVideoIsPlaying(!videoIsPlaying);
+                                      }
+                                    }}
+                                    className="w-10 h-10 flex items-center justify-center bg-indigo-600 rounded-full hover:bg-indigo-500 transition-colors"
+                                  >
+                                    {videoIsPlaying ? (
+                                      <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                                    ) : (
+                                      <Play className="w-4 h-4 fill-current translate-x-0.5" />
+                                    )}
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      const currentIndex = activeLearningCourse.modules.findIndex(m => m.id === currentModule.id);
+                                      if (currentIndex < activeLearningCourse.modules.length - 1) setActiveVideoModuleId(activeLearningCourse.modules[currentIndex + 1].id);
+                                    }}
+                                    disabled={activeLearningCourse.modules.findIndex(m => m.id === currentModule.id) === activeLearningCourse.modules.length - 1}
+                                    className="p-1 hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-white"
+                                  >
+                                    <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+                                  </button>
+                                  <div className="flex items-center gap-2 group/vol">
+                                    <button
+                                      onClick={() => {
+                                        setVideoMuted(!videoMuted);
+                                        if (videoRef.current) videoRef.current.muted = !videoMuted;
+                                      }}
+                                      className="p-1 hover:text-indigo-400"
+                                    >
+                                      {videoMuted || videoVolume === 0 ? (
+                                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path fillRule="evenodd" clipRule="evenodd" d="M11 5L6 9H2v6h4l5 4V5zm2 14v-2c2.28 0 4-1.72 4-4s-1.72-4-4-4V7c3.31 0 6 2.69 6 6s-2.69 6-6 6zM13 3v2c4.42 0 8 3.58 8 8s-3.58 8-8 8v2c5.52 0 10-4.48 10-10S18.52 3 13 3z"/></svg>
+                                      ) : (
+                                        <Volume2 className="w-5 h-5" />
+                                      )}
+                                    </button>
+                                    <input
+                                      type="range"
+                                      min="0" max="1" step="0.05"
+                                      value={videoMuted ? 0 : videoVolume}
+                                      onChange={(e) => {
+                                        const val = parseFloat(e.target.value);
+                                        setVideoVolume(val);
+                                        if (val > 0) setVideoMuted(false);
+                                        if (videoRef.current) {
+                                          videoRef.current.volume = val;
+                                          videoRef.current.muted = val === 0;
+                                        }
+                                      }}
+                                      className="w-0 opacity-0 group-hover/vol:w-20 group-hover/vol:opacity-100 transition-all duration-300 cursor-pointer accent-indigo-500"
+                                    />
+                                  </div>
+                                  <div className="flex-1"></div>
+                                  <select
+                                    value={playbackSpeed}
+                                    onChange={(e) => setPlaybackSpeed(e.target.value as any)}
+                                    className="bg-black/60 border border-white/30 text-white text-xs font-semibold rounded px-2 py-1 appearance-none outline-none cursor-pointer backdrop-blur"
+                                  >
+                                    <option value="0.75" className="bg-slate-900 text-white">0.75x</option>
+                                    <option value="1" className="bg-slate-900 text-white">1.0x</option>
+                                    <option value="1.25" className="bg-slate-900 text-white">1.25x</option>
+                                    <option value="1.5" className="bg-slate-900 text-white">1.5x</option>
+                                  </select>
+                                </div>
+                              </div>
+                            </div>
+                          </>
                         ) : embedUrl ? (
-                          <iframe
-                            src={embedUrl}
-                            title={currentModule.title}
-                            className="w-full h-full"
-                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                            allowFullScreen
-                          />
+                          <>
+                            <iframe
+                              src={embedUrl}
+                              title={currentModule.title}
+                              className="w-full h-full pb-14"
+                              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                              allowFullScreen
+                            />
+                            <div className="absolute bottom-0 left-0 right-0 h-14 bg-slate-900 border-t border-white/10 flex items-center px-4 gap-4 text-white z-10 justify-between">
+                              <div className="flex items-center gap-4">
+                                <button
+                                  onClick={() => {
+                                    const currentIndex = activeLearningCourse.modules.findIndex(m => m.id === currentModule.id);
+                                    if (currentIndex > 0) setActiveVideoModuleId(activeLearningCourse.modules[currentIndex - 1].id);
+                                  }}
+                                  disabled={activeLearningCourse.modules.findIndex(m => m.id === currentModule.id) === 0}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-semibold transition-colors disabled:opacity-30 disabled:hover:bg-white/10"
+                                >
+                                  <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg> Prev Lesson
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    const currentIndex = activeLearningCourse.modules.findIndex(m => m.id === currentModule.id);
+                                    if (currentIndex < activeLearningCourse.modules.length - 1) setActiveVideoModuleId(activeLearningCourse.modules[currentIndex + 1].id);
+                                  }}
+                                  disabled={activeLearningCourse.modules.findIndex(m => m.id === currentModule.id) === activeLearningCourse.modules.length - 1}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-semibold transition-colors disabled:opacity-30 disabled:hover:bg-indigo-600"
+                                >
+                                  Next Lesson <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+                                </button>
+                              </div>
+                            </div>
+                          </>
                         ) : (
                           <div className="w-full h-full flex items-center justify-center text-center px-6">
                             <div className="space-y-4">
@@ -1928,22 +2069,6 @@ export default function App() {
                                 </a>
                               )}
                             </div>
-                          </div>
-                        )}
-
-                        {/* Playback Speed Overlay (bottom right) */}
-                        {(directVideoFile || embedUrl) && (
-                          <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <select
-                              value={playbackSpeed}
-                              onChange={(e) => setPlaybackSpeed(e.target.value as any)}
-                              className="bg-black/60 border border-white/30 text-white text-xs rounded px-2 py-1 backdrop-blur"
-                            >
-                              <option value="0.75">0.75x</option>
-                              <option value="1">1x</option>
-                              <option value="1.25">1.25x</option>
-                              <option value="1.5">1.5x</option>
-                            </select>
                           </div>
                         )}
                       </div>
@@ -2019,22 +2144,25 @@ export default function App() {
                                   <h4 className="text-sm font-black uppercase tracking-widest text-slate-900 mb-4">Module Resources</h4>
                                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                     {currentModule.resources.map((resource, idx) => (
-                                      <a
+                                      <button
                                         key={`${currentModule.id}-resource-${idx}`}
-                                        href={resource}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="p-3 rounded-xl bg-white border border-slate-200 hover:border-indigo-200 hover:bg-indigo-50 transition-all flex items-center gap-3 group"
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          setLearningContentTab('resources');
+                                        }}
+                                        className="w-full text-left p-3 rounded-xl bg-white border border-slate-200 hover:border-indigo-200 hover:bg-indigo-50 transition-all flex items-center justify-between gap-3 group"
                                       >
-                                        <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-600 group-hover:bg-indigo-200 transition-colors flex-shrink-0">
-                                          <LinkIcon className="w-5 h-5" />
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                          <p className="text-xs font-bold text-slate-900">Resource {idx + 1}</p>
-                                          <p className="text-[10px] text-slate-500 truncate">Click to open</p>
+                                        <div className="flex items-center gap-3">
+                                          <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-600 group-hover:bg-indigo-200 transition-colors flex-shrink-0">
+                                            <LinkIcon className="w-5 h-5" />
+                                          </div>
+                                          <div className="flex-1 min-w-0">
+                                            <p className="text-xs font-bold text-slate-900">Resource {idx + 1}</p>
+                                            <p className="text-[10px] text-slate-500 truncate">Click to view in Resources</p>
+                                          </div>
                                         </div>
                                         <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-indigo-600 transition-colors flex-shrink-0" />
-                                      </a>
+                                      </button>
                                     ))}
                                   </div>
                                 </div>
@@ -2083,7 +2211,7 @@ export default function App() {
                                   <svg className={`w-5 h-5 ${isCurrentModuleCompleted ? '' : 'hidden'}`} fill="currentColor" viewBox="0 0 24 24">
                                     <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
                                   </svg>
-                                  {isCurrentModuleCompleted ? 'Completed ✓' : 'Mark Complete'}
+                                  {isCurrentModuleCompleted ? 'Completed' : 'Mark as Complete'}
                                 </button>
                                 
                                 {hasNextModule && (
@@ -2102,11 +2230,23 @@ export default function App() {
                           {learningContentTab === 'notes' && (
                             <div className="space-y-4">
                               <div>
-                                <label className="block text-sm font-bold text-slate-900 mb-2">Your Notes</label>
+                                <div className="flex items-center justify-between mb-2">
+                                  <label className="text-sm font-bold text-slate-900">Your Notes</label>
+                                  <button
+                                    onClick={() => {
+                                      setNotesSaved({ ...notesSaved, [currentModule.id]: true });
+                                      setTimeout(() => setNotesSaved(prev => ({ ...prev, [currentModule.id]: false })), 2000);
+                                    }}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm shadow-indigo-600/20"
+                                  >
+                                    <Check className="w-3.5 h-3.5" />
+                                    {notesSaved[currentModule.id] ? 'Saved ✓' : 'Save Notes'}
+                                  </button>
+                                </div>
                                 <textarea
                                   value={studentNotes[currentModule.id] || ''}
                                   onChange={(e) => setStudentNotes({ ...studentNotes, [currentModule.id]: e.target.value })}
-                                  placeholder="Add your personal notes here. They're automatically saved as you type..."
+                                  placeholder="Add your personal notes here..."
                                   rows={10}
                                   className="w-full p-4 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none font-mono text-sm resize-none"
                                 />
@@ -3027,6 +3167,7 @@ export default function App() {
                 onSetCourseCategoryFilter={setCourseCategoryFilter}
                 onEnrollCourse={handleEnrollCourse}
                 onOpenCourseLearning={handleOpenCourseLearning}
+                onViewCertificate={handleShowCertificateModal}
                 stemSubjects={STEM_SUBJECTS}
               />
             )}
@@ -5155,6 +5296,53 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* CERTIFICATE MODAL */}
+      <AnimatePresence>
+        {certificateModalData && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden relative"
+            >
+              <button
+                onClick={() => setCertificateModalData(null)}
+                className="absolute top-4 right-4 p-2 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 z-10 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+              <div className="relative h-48 bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 p-8 flex flex-col justify-center items-center text-center overflow-hidden">
+                <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10" />
+                <Award className="w-16 h-16 text-emerald-400 mb-3 relative z-10 animate-bounce" />
+                <h2 className="text-2xl sm:text-3xl font-extrabold text-white relative z-10">Certificate of Completion</h2>
+              </div>
+              <div className="p-8 sm:p-12 text-center bg-slate-50/50">
+                <p className="text-slate-500 font-medium mb-2 uppercase tracking-widest text-sm">This certifies that</p>
+                <h3 className="text-3xl font-black text-slate-900 mb-6">{currentUser?.firstName} {currentUser?.lastName}</h3>
+                <p className="text-slate-500 font-medium mb-2 uppercase tracking-widest text-sm">has successfully completed the course</p>
+                <h4 className="text-2xl font-bold text-indigo-700 italic mb-8 leading-tight max-w-lg mx-auto">"{certificateModalData.courseTitle}"</h4>
+                
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mt-8 pt-8 border-t border-slate-200">
+                  <button
+                    onClick={() => setCertificateModalData(null)}
+                    className="w-full sm:w-auto px-6 py-3 rounded-xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-all text-sm"
+                  >
+                    Close
+                  </button>
+                  <button
+                    onClick={() => handleDownloadCertificate(certificateModalData.enrollment, certificateModalData.courseTitle)}
+                    className="w-full sm:w-auto px-6 py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20"
+                  >
+                    <Download className="w-4 h-4" /> Download PDF
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

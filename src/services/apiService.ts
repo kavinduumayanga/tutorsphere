@@ -1,4 +1,17 @@
-import { User, Tutor, Review, Course, Resource, Booking, Question, Quiz, StudyPlan, SkillLevel, CourseEnrollment } from '../types';
+import {
+  User,
+  Tutor,
+  Review,
+  Course,
+  Resource,
+  Booking,
+  Question,
+  Quiz,
+  StudyPlan,
+  SkillLevel,
+  CourseEnrollment,
+  CourseModuleResource,
+} from '../types';
 
 const API_BASE_URL = `${window.location.origin}/api`;
 
@@ -14,6 +27,13 @@ const getDownloadFileName = (contentDisposition: string | null): string | null =
 
   const basicMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
   return basicMatch?.[1] || null;
+};
+
+type UploadedCourseAsset = {
+  path: string;
+  originalName: string;
+  size: number;
+  mimeType: string;
 };
 
 class ApiService {
@@ -44,6 +64,63 @@ class ApiService {
       firstName: 'Tutor',
       lastName: '',
     } as Tutor;
+  }
+
+  private getResourceNameFromUrl(url: string, fallback = 'Resource'): string {
+    const trimmed = String(url || '').trim();
+    if (!trimmed) {
+      return fallback;
+    }
+
+    try {
+      if (/^https?:\/\//i.test(trimmed)) {
+        const parsed = new URL(trimmed);
+        const baseName = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || '');
+        return baseName || fallback;
+      }
+    } catch {
+      // Fallback to path parsing below.
+    }
+
+    const baseName = decodeURIComponent(trimmed.split('?')[0].split('#')[0].split('/').filter(Boolean).pop() || '');
+    return baseName || fallback;
+  }
+
+  private normalizeCourseModuleResource(resource: any, index: number): CourseModuleResource | null {
+    if (typeof resource === 'string') {
+      const value = resource.trim();
+      if (!value) {
+        return null;
+      }
+      return {
+        name: this.getResourceNameFromUrl(value, `Resource ${index + 1}`),
+        url: value,
+      };
+    }
+
+    const url = String(resource?.url ?? resource?.path ?? '').trim();
+    if (!url) {
+      return null;
+    }
+
+    const name = String(resource?.name ?? '').trim() || this.getResourceNameFromUrl(url, `Resource ${index + 1}`);
+    return { name, url };
+  }
+
+  private normalizeCourse(course: any): Course {
+    const modules = Array.isArray(course?.modules)
+      ? course.modules.map((module: any) => ({
+          ...module,
+          resources: (Array.isArray(module?.resources) ? module.resources : [])
+            .map((resource: any, index: number) => this.normalizeCourseModuleResource(resource, index))
+            .filter((resource: CourseModuleResource | null): resource is CourseModuleResource => Boolean(resource)),
+        }))
+      : [];
+
+    return {
+      ...course,
+      modules,
+    } as Course;
   }
 
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
@@ -174,18 +251,21 @@ class ApiService {
       params.set('tutorId', filters.tutorId);
     }
     const query = params.toString();
-    return this.request(`/courses${query ? `?${query}` : ''}`);
+    const courses = await this.request<any[]>(`/courses${query ? `?${query}` : ''}`);
+    return courses.map((course) => this.normalizeCourse(course));
   }
 
   async getCourse(id: string): Promise<Course> {
-    return this.request(`/courses/${id}`);
+    const course = await this.request<any>(`/courses/${id}`);
+    return this.normalizeCourse(course);
   }
 
   async createCourse(course: Omit<Course, 'id'>): Promise<Course> {
-    return this.request('/courses', {
+    const createdCourse = await this.request<any>('/courses', {
       method: 'POST',
       body: JSON.stringify(course),
     });
+    return this.normalizeCourse(createdCourse);
   }
 
   async updateCourse(id: string, course: Partial<Course>, actorId?: string): Promise<Course> {
@@ -194,9 +274,37 @@ class ApiService {
       params.set('actorId', actorId);
     }
     const query = params.toString();
-    return this.request(`/courses/${id}${query ? `?${query}` : ''}`, {
+    const updatedCourse = await this.request<any>(`/courses/${id}${query ? `?${query}` : ''}`, {
       method: 'PUT',
       body: JSON.stringify({ ...course, actorId }),
+    });
+    return this.normalizeCourse(updatedCourse);
+  }
+
+  async uploadCourseThumbnail(file: File): Promise<UploadedCourseAsset> {
+    const formData = new FormData();
+    formData.append('thumbnail', file);
+    return this.request('/uploads/course-thumbnail', {
+      method: 'POST',
+      body: formData,
+    });
+  }
+
+  async uploadCourseModuleVideo(file: File): Promise<UploadedCourseAsset> {
+    const formData = new FormData();
+    formData.append('video', file);
+    return this.request('/uploads/course-video', {
+      method: 'POST',
+      body: formData,
+    });
+  }
+
+  async uploadCourseModuleResource(file: File): Promise<UploadedCourseAsset> {
+    const formData = new FormData();
+    formData.append('resource', file);
+    return this.request('/uploads/course-resource', {
+      method: 'POST',
+      body: formData,
     });
   }
 

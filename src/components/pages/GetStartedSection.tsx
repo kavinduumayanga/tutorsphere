@@ -282,7 +282,7 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
                        </select>
                     </div>
                     <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700">Hourly Rate ($)</label>
+                      <label className="text-sm font-bold text-slate-700">Hourly Rate (LKR)</label>
                       <input
                         type="number"
                         required

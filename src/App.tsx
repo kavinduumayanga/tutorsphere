@@ -49,6 +49,7 @@ import Markdown from 'react-markdown';
 import CountUp from 'react-countup';
 import { localService } from './services/localService';
 import { apiService } from './services/apiService';
+import { formatLkr } from './utils/currency';
 
 import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz, TimeSlot, CourseEnrollment } from './types';
 import { TutorProfilePage } from './components/pages/TutorProfilePage';
@@ -1078,7 +1079,7 @@ export default function App() {
 
     if (!isFreeCourse) {
       const proceedToPayment = confirm(
-        `This is a paid course (LKR ${selectedCourse.price}). Do you want to proceed to payment?`
+        `This is a paid course (${formatLkr(selectedCourse.price)}). Do you want to proceed to payment?`
       );
 
       if (!proceedToPayment) {
@@ -1930,7 +1931,7 @@ export default function App() {
   };
 
   const getCourseAccessLabel = (course: Course) =>
-    course.isFree || course.price <= 0 ? 'Free' : `LKR ${course.price}`;
+    course.isFree || course.price <= 0 ? 'Free' : formatLkr(course.price);
 
   const getEmbeddableVideoUrl = (url: string): string | null => {
     const trimmed = url.trim();
@@ -3500,9 +3501,9 @@ export default function App() {
                     </div>
 
                     <div className="space-y-3">
-                      <label className="text-sm font-bold text-slate-700">Hourly Rate (USD)</label>
+                      <label className="text-sm font-bold text-slate-700">Hourly Rate (LKR)</label>
                       <div className="relative">
-                        <span className="absolute left-5 top-1/2 -translate-y-1/2 font-bold text-slate-400">$</span>
+                        <span className="absolute left-5 top-1/2 -translate-y-1/2 font-bold text-slate-400">LKR</span>
                         <input
                           type="number"
                           min="0"
@@ -3510,8 +3511,8 @@ export default function App() {
                           required
                           value={profileData.pricePerHour}
                           onChange={e => setProfileData({ ...profileData, pricePerHour: parseFloat(e.target.value) || 0 })}
-                          className="w-full pl-10 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
-                          placeholder="25.00"
+                          className="w-full pl-16 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
+                          placeholder="2500.00"
                         />
                       </div>
                     </div>
@@ -4457,9 +4458,9 @@ export default function App() {
                         </div>
 
                         <div className="space-y-3">
-                          <label className="text-sm font-bold text-slate-700">Hourly Rate (USD)</label>
+                          <label className="text-sm font-bold text-slate-700">Hourly Rate (LKR)</label>
                           <div className="relative">
-                            <span className="absolute left-5 top-1/2 -translate-y-1/2 font-bold text-slate-400">$</span>
+                            <span className="absolute left-5 top-1/2 -translate-y-1/2 font-bold text-slate-400">LKR</span>
                             <input
                               type="number"
                               min="0"
@@ -4467,8 +4468,8 @@ export default function App() {
                               required
                               value={profileData.pricePerHour}
                               onChange={e => setProfileData({ ...profileData, pricePerHour: parseFloat(e.target.value) || 0 })}
-                              className="w-full pl-10 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
-                              placeholder="25.00"
+                              className="w-full pl-16 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
+                              placeholder="2500.00"
                             />
                           </div>
                         </div>

@@ -2087,7 +2087,7 @@ export default function App() {
   const isDirectVideoFile = (url: string): boolean => /\.(mp4|webm|ogg|mov|m4v)(\?.*)?$/i.test(url.trim());
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] font-sans text-slate-900">
+    <div className={`${activeTab === 'quizzes' ? 'h-[100dvh] overflow-hidden' : 'min-h-screen'} bg-[#F8FAFC] font-sans text-slate-900`}>
       {/* Navbar */}
       <nav className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -2876,7 +2876,9 @@ export default function App() {
 
       {/* Main Content - All other tabs */}
       {activeTab !== 'courseLearning' && (
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <main className={activeTab === 'quizzes'
+          ? 'h-[calc(100dvh-4rem)] overflow-hidden'
+          : 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8'}>
           {activeTab === 'tutorProfile' && viewingTutorId && (
             <TutorProfilePage
               tutorId={viewingTutorId}
@@ -3315,7 +3317,7 @@ export default function App() {
           )}
 
           {activeTab === 'quizzes' && (
-            <div className="flex-1 w-full bg-slate-50">
+            <div className="h-full w-full bg-slate-50 overflow-hidden">
               <QuizChatbotPage currentUser={currentUser} />
             </div>
           )}

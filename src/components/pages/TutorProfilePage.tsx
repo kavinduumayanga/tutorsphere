@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { apiService } from '../../services/apiService';
 import { Tutor, Course, Review } from '../../types';
+import { formatLkr } from '../../utils/currency';
 
 interface TutorProfilePageProps {
   tutorId: string;
@@ -337,7 +338,7 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
                                 <img src={course.thumbnail} alt={course.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
                                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-60"></div>
                                 <div className={`absolute top-3 right-3 bg-white/95 backdrop-blur px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm border border-white/20 ${course.isFree || course.price <= 0 ? 'text-emerald-600' : 'text-slate-900'}`}>
-                                  {course.isFree || course.price <= 0 ? 'Free' : `LKR ${course.price}`}
+                                  {course.isFree || course.price <= 0 ? 'Free' : formatLkr(course.price)}
                                 </div>
                                 <div className="absolute top-3 left-3 bg-indigo-600/90 backdrop-blur px-3 py-1.5 rounded-lg text-xs font-bold text-white shadow-sm">
                                   {course.subject}
@@ -459,8 +460,8 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
                     <div>
                       <span className="text-xs text-slate-500 font-bold uppercase tracking-wider">Hourly Rate</span>
                       <div className="flex items-baseline gap-1 mt-1">
-                        <span className="text-4xl font-extrabold text-slate-900 tracking-tight">${tutor.pricePerHour}</span>
-                        <span className="text-slate-400 font-medium">/hr</span>
+                        <span className="text-4xl font-extrabold text-slate-900 tracking-tight">{formatLkr(tutor.pricePerHour)}</span>
+                        <span className="text-slate-400 font-medium">/hour</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-1 text-green-600 bg-green-50 px-2 py-1 rounded-md text-xs font-bold">

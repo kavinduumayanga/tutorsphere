@@ -16,6 +16,7 @@ import { Tutor } from '../../types';
 import { SkeletonGrid } from '../common/SkeletonCard';
 import { EmptyState } from '../common/EmptyState';
 import { Pagination } from '../common/Pagination';
+import { formatLkr } from '../../utils/currency';
 
 interface FindTutorsPageProps {
   tutors: Tutor[];
@@ -420,7 +421,7 @@ export const FindTutorsPage: React.FC<FindTutorsPageProps> = ({
                   <div className="mt-8 pt-6 border-t border-slate-50 flex items-center justify-between">
                     <div>
                       <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Hourly Rate</span>
-                      <p className="text-2xl font-black text-slate-900">LKR {tutor.pricePerHour}</p>
+                      <p className="text-2xl font-black text-slate-900">{formatLkr(tutor.pricePerHour)}</p>
                     </div>
                     <button
                       onClick={() => onViewProfile(tutor.id)}

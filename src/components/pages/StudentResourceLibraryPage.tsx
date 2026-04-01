@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Search,
@@ -10,15 +10,7 @@ import {
   FileText,
   File,
   Star,
-  Clock,
-  TrendingUp,
-  ArrowRight,
-  ArrowUpDown,
-  ChevronLeft,
-  ChevronRight,
-  Sparkles,
   Library,
-  Filter,
 } from 'lucide-react';
 import { Resource } from '../../types';
 import { EmptyState } from '../common/EmptyState';
@@ -98,7 +90,6 @@ const resolveResourceViewUrl = (rawUrl: string): string => {
 };
 
 const WISHLIST_KEY = 'tutorsphere_resource_wishlist';
-const RECENTLY_VIEWED_KEY = 'tutorsphere_recently_viewed';
 const ITEMS_PER_PAGE = 12;
 
 // ─── Local Storage Helpers ────────────────────────────────────────────────────
@@ -112,119 +103,6 @@ const loadWishlist = (): Set<string> => {
 
 const saveWishlist = (ids: Set<string>) => {
   localStorage.setItem(WISHLIST_KEY, JSON.stringify([...ids]));
-};
-
-const loadRecentlyViewed = (): string[] => {
-  try {
-    const data = localStorage.getItem(RECENTLY_VIEWED_KEY);
-    return data ? JSON.parse(data) : [];
-  } catch { return []; }
-};
-
-const addToRecentlyViewed = (id: string) => {
-  const recent = loadRecentlyViewed().filter((r) => r !== id);
-  recent.unshift(id);
-  localStorage.setItem(RECENTLY_VIEWED_KEY, JSON.stringify(recent.slice(0, 10)));
-};
-
-// ─── Horizontal Scroll Section ────────────────────────────────────────────────
-
-const HorizontalSection: React.FC<{
-  title: string;
-  icon: React.ElementType;
-  children: React.ReactNode;
-  isEmpty?: boolean;
-}> = ({ title, icon: Icon, children, isEmpty }) => {
-  const scrollRef = React.useRef<HTMLDivElement>(null);
-
-  const scroll = (direction: 'left' | 'right') => {
-    if (scrollRef.current) {
-      const scrollAmount = 320;
-      scrollRef.current.scrollBy({
-        left: direction === 'left' ? -scrollAmount : scrollAmount,
-        behavior: 'smooth',
-      });
-    }
-  };
-
-  if (isEmpty) return null;
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center">
-            <Icon className="w-4 h-4 text-indigo-600" />
-          </div>
-          <h3 className="text-base font-extrabold text-slate-900">{title}</h3>
-        </div>
-        <div className="flex gap-1.5">
-          <button
-            onClick={() => scroll('left')}
-            className="p-1.5 rounded-lg border border-slate-200 text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => scroll('right')}
-            className="p-1.5 rounded-lg border border-slate-200 text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-colors"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-      <div
-        ref={scrollRef}
-        className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide"
-        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
-      >
-        {children}
-      </div>
-    </div>
-  );
-};
-
-// ─── Mini Resource Card (for horizontal scroll) ──────────────────────────────
-
-const MiniResourceCard: React.FC<{
-  resource: Resource;
-  isWishlisted: boolean;
-  onToggleWishlist: () => void;
-  onPreview: () => void;
-}> = ({ resource, isWishlisted, onToggleWishlist, onPreview }) => {
-  const TypeIcon = getFileTypeIcon(resource.type);
-  const badge = getFileTypeBadge(resource.type);
-
-  return (
-    <div
-      className="min-w-[280px] max-w-[300px] bg-white rounded-xl border border-slate-100 p-4 hover:shadow-md transition-all duration-200 flex-shrink-0 group cursor-pointer"
-      onClick={onPreview}
-    >
-      <div className="flex items-start gap-3">
-        <div className={`w-10 h-10 rounded-lg ${badge.bg} border ${badge.border} flex items-center justify-center flex-shrink-0`}>
-          <TypeIcon className={`w-4 h-4 ${badge.text}`} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <h4 className="text-sm font-bold text-slate-900 line-clamp-1 group-hover:text-indigo-600 transition-colors">
-            {resource.title}
-          </h4>
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-0.5">
-            {resource.subject} • {resource.type}
-          </p>
-        </div>
-        <button
-          onClick={(e) => { e.stopPropagation(); onToggleWishlist(); }}
-          className={`p-1.5 rounded-lg transition-colors flex-shrink-0 ${
-            isWishlisted
-              ? 'text-rose-500 bg-rose-50'
-              : 'text-slate-300 hover:text-rose-400 hover:bg-rose-50'
-          }`}
-        >
-          <Heart className={`w-3.5 h-3.5 ${isWishlisted ? 'fill-current' : ''}`} />
-        </button>
-      </div>
-    </div>
-  );
 };
 
 // ─── Resource Card ────────────────────────────────────────────────────────────
@@ -348,29 +226,12 @@ export const StudentResourceLibraryPage: React.FC<StudentResourceLibraryPageProp
   const [sortBy, setSortBy] = useState<SortOption>('popular');
   const [currentPage, setCurrentPage] = useState(1);
   const [wishlist, setWishlist] = useState<Set<string>>(loadWishlist);
-  const [recentlyViewedIds, setRecentlyViewedIds] = useState<string[]>(loadRecentlyViewed);
 
   // Free resources only
   const freeResources = useMemo(
     () => resources.filter((r) => r.isFree),
     [resources]
   );
-
-  // Recently viewed resources
-  const recentlyViewed = useMemo(
-    () => recentlyViewedIds
-      .map((id) => freeResources.find((r) => r.id === id))
-      .filter((r): r is Resource => Boolean(r))
-      .slice(0, 6),
-    [recentlyViewedIds, freeResources]
-  );
-
-  // Recommended resources (top by simulated rating)
-  const recommended = useMemo(() => {
-    return [...freeResources]
-      .sort((a, b) => getSimulatedRating(b.id) - getSimulatedRating(a.id))
-      .slice(0, 6);
-  }, [freeResources]);
 
   // Filtered & sorted
   const filteredResources = useMemo(() => {
@@ -418,8 +279,6 @@ export const StudentResourceLibraryPage: React.FC<StudentResourceLibraryPageProp
 
   // Preview / Download
   const handleOpenResource = useCallback((resource: Resource) => {
-    addToRecentlyViewed(resource.id);
-    setRecentlyViewedIds(loadRecentlyViewed());
     if (!resource.url || resource.url === '#') {
       alert('Resource link is not available yet.');
       return;
@@ -470,43 +329,6 @@ export const StudentResourceLibraryPage: React.FC<StudentResourceLibraryPageProp
           )}
         </div>
       </div>
-
-      {/* ═══ Recently Viewed ═══ */}
-      {!isLoading && (
-        <HorizontalSection
-          title="Recently Viewed"
-          icon={Clock}
-          isEmpty={recentlyViewed.length === 0}
-        >
-          {recentlyViewed.map((resource) => (
-            <MiniResourceCard
-              key={`recent-${resource.id}`}
-              resource={resource}
-              isWishlisted={wishlist.has(resource.id)}
-              onToggleWishlist={() => toggleWishlist(resource.id)}
-              onPreview={() => handleOpenResource(resource)}
-            />
-          ))}
-        </HorizontalSection>
-      )}
-
-      {/* ═══ Recommended ═══ */}
-      {!isLoading && recommended.length > 0 && (
-        <HorizontalSection
-          title="Recommended Resources"
-          icon={Sparkles}
-        >
-          {recommended.map((resource) => (
-            <MiniResourceCard
-              key={`rec-${resource.id}`}
-              resource={resource}
-              isWishlisted={wishlist.has(resource.id)}
-              onToggleWishlist={() => toggleWishlist(resource.id)}
-              onPreview={() => handleOpenResource(resource)}
-            />
-          ))}
-        </HorizontalSection>
-      )}
 
       {/* ═══ Filters ═══ */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-wrap">

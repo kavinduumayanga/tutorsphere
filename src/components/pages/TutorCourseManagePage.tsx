@@ -30,6 +30,7 @@ import { ConfirmDialog } from '../common/ConfirmDialog';
 import { EmptyState } from '../common/EmptyState';
 import { SkeletonCard, SkeletonGrid } from '../common/SkeletonCard';
 import { Pagination } from '../common/Pagination';
+import { formatLkr } from '../../utils/currency';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -694,7 +695,7 @@ const CourseCard: React.FC<{
               ? 'bg-emerald-500 text-white'
               : 'bg-white/90 backdrop-blur-sm text-slate-800'
           }`}>
-            {isFreeCourse ? 'Free' : `LKR ${course.price}`}
+            {isFreeCourse ? 'Free' : formatLkr(course.price)}
           </span>
         </div>
       </div>
@@ -1118,7 +1119,7 @@ export const TutorCourseManagePage: React.FC<TutorCourseManagePageProps> = ({
                   <span className="px-2.5 py-1 bg-slate-100 rounded-full">{previewCourse.subject}</span>
                   <span className="px-2.5 py-1 bg-slate-100 rounded-full">{previewCourse.modules.length} Modules</span>
                   <span className="px-2.5 py-1 bg-slate-100 rounded-full">
-                    {(previewCourse.isFree || previewCourse.price <= 0) ? 'Free' : `LKR ${previewCourse.price}`}
+                    {(previewCourse.isFree || previewCourse.price <= 0) ? 'Free' : formatLkr(previewCourse.price)}
                   </span>
                 </div>
                 {previewCourse.modules.length > 0 && (

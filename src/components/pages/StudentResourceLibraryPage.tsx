@@ -77,6 +77,26 @@ const getSimulatedRating = (id: string): number => {
   return Math.round((3.5 + (Math.abs(hash) % 15) / 10) * 10) / 10;
 };
 
+const resolveResourceViewUrl = (rawUrl: string): string => {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  if (trimmed.startsWith('/uploads/')) {
+    if (window.location.port === '3000') {
+      return `${window.location.origin}${trimmed}`;
+    }
+    return `http://localhost:3000${trimmed}`;
+  }
+
+  return trimmed;
+};
+
 const WISHLIST_KEY = 'tutorsphere_resource_wishlist';
 const RECENTLY_VIEWED_KEY = 'tutorsphere_recently_viewed';
 const ITEMS_PER_PAGE = 12;
@@ -404,7 +424,12 @@ export const StudentResourceLibraryPage: React.FC<StudentResourceLibraryPageProp
       alert('Resource link is not available yet.');
       return;
     }
-    window.open(resource.url, '_blank', 'noopener,noreferrer');
+    const resolvedUrl = resolveResourceViewUrl(resource.url);
+    if (!resolvedUrl) {
+      alert('Resource link is not available yet.');
+      return;
+    }
+    window.open(resolvedUrl, '_blank', 'noopener,noreferrer');
   }, []);
 
   const resetPage = () => setCurrentPage(1);

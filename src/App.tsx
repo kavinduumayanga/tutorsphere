@@ -231,6 +231,11 @@ const createInitialResourceForm = () => ({
   description: '',
 });
 
+type ResourceInputMode = 'url' | 'file';
+type ResourceUploadStatus = 'idle' | 'uploading' | 'uploaded' | 'error';
+
+const isUploadedResourcePath = (value: string): boolean => value.trim().startsWith('/uploads/');
+
 export default function App() {
   const [selectedTutor, setSelectedTutor] = useState<Tutor | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('home');
@@ -368,6 +373,12 @@ export default function App() {
   const [resourceForm, setResourceForm] = useState(createInitialResourceForm);
   const [editingResourceId, setEditingResourceId] = useState<string | null>(null);
   const [isSavingResource, setIsSavingResource] = useState(false);
+  const [resourceInputMode, setResourceInputMode] = useState<ResourceInputMode>('url');
+  const [resourceUploadFile, setResourceUploadFile] = useState<File | null>(null);
+  const [isUploadingResourceFile, setIsUploadingResourceFile] = useState(false);
+  const [resourceUploadStatus, setResourceUploadStatus] = useState<ResourceUploadStatus>('idle');
+  const [resourceUploadProgress, setResourceUploadProgress] = useState(0);
+  const [resourceUploadStatusMessage, setResourceUploadStatusMessage] = useState('');
   const [activeLearningCourseId, setActiveLearningCourseId] = useState<string | null>(null);
   const [activeVideoModuleId, setActiveVideoModuleId] = useState<string | null>(null);
   const [learningContentTab, setLearningContentTab] = useState<'overview' | 'notes' | 'resources' | 'qa'>('overview');
@@ -1517,13 +1528,26 @@ export default function App() {
     }
   };
 
+  const clearResourceUploadFeedback = () => {
+    setResourceUploadStatus('idle');
+    setResourceUploadProgress(0);
+    setResourceUploadStatusMessage('');
+  };
+
   const handleResetResourceForm = () => {
     setResourceForm(createInitialResourceForm());
     setEditingResourceId(null);
+    setResourceInputMode('url');
+    setResourceUploadFile(null);
+    setIsUploadingResourceFile(false);
+    clearResourceUploadFeedback();
   };
 
   const handleEditResource = (resource: Resource) => {
     setEditingResourceId(resource.id);
+    setResourceInputMode(isUploadedResourcePath(resource.url) ? 'file' : 'url');
+    setResourceUploadFile(null);
+    clearResourceUploadFeedback();
     setResourceForm({
       title: resource.title,
       subject: resource.subject,
@@ -1547,24 +1571,63 @@ export default function App() {
       return;
     }
 
-    if (!resourceForm.title.trim() || !resourceForm.url.trim()) {
-      alert('Resource title and URL are required.');
+    if (!resourceForm.title.trim()) {
+      alert('Resource title is required.');
+      setResourceUploadStatus('error');
+      setResourceUploadStatusMessage('Resource title is required.');
       return;
     }
 
     setIsSavingResource(true);
-
-    const payload: Omit<Resource, 'id'> = {
-      tutorId,
-      title: resourceForm.title.trim(),
-      type: resourceForm.type,
-      subject: resourceForm.subject,
-      url: resourceForm.url.trim(),
-      description: resourceForm.description.trim(),
-      isFree: true,
-    };
+    setResourceUploadStatus('idle');
+    setResourceUploadProgress(0);
+    setResourceUploadStatusMessage('');
 
     try {
+      let resourceUrl = resourceForm.url.trim();
+
+      if (resourceInputMode === 'file') {
+        const canReuseExistingUploadedPath =
+          Boolean(editingResourceId) && isUploadedResourcePath(resourceUrl);
+
+        if (resourceUploadFile) {
+          setIsUploadingResourceFile(true);
+          setResourceUploadStatus('uploading');
+          setResourceUploadStatusMessage('Uploading resource file...');
+          const uploadedResource = await apiService.uploadTutorResource(resourceUploadFile, (progress) => {
+            setResourceUploadProgress(progress);
+          });
+          resourceUrl = uploadedResource.path;
+          setResourceUploadProgress(100);
+          setResourceUploadStatusMessage(`Uploaded ${uploadedResource.originalName}. Saving resource details...`);
+        } else if (!canReuseExistingUploadedPath) {
+          const validationMessage = 'Please choose a file to upload.';
+          alert(validationMessage);
+          setResourceUploadStatus('error');
+          setResourceUploadStatusMessage(validationMessage);
+          return;
+        } else {
+          setResourceUploadProgress(100);
+          setResourceUploadStatusMessage('Using previously uploaded file path.');
+        }
+      } else if (!resourceUrl) {
+        const validationMessage = 'Resource URL is required when using URL mode.';
+        alert(validationMessage);
+        setResourceUploadStatus('error');
+        setResourceUploadStatusMessage(validationMessage);
+        return;
+      }
+
+      const payload: Omit<Resource, 'id'> = {
+        tutorId,
+        title: resourceForm.title.trim(),
+        type: resourceForm.type,
+        subject: resourceForm.subject,
+        url: resourceUrl,
+        description: resourceForm.description.trim(),
+        isFree: true,
+      };
+
       if (editingResourceId) {
         const updatedResource = await apiService.updateResource(editingResourceId, payload, tutorId);
         setResources((prev) =>
@@ -1577,13 +1640,23 @@ export default function App() {
         alert('Resource uploaded successfully.');
       }
 
-      handleResetResourceForm();
+      setResourceUploadFile(null);
+      setResourceForm((prev) => ({ ...prev, url: resourceUrl }));
+      setResourceUploadStatus('uploaded');
+      setResourceUploadStatusMessage(
+        resourceInputMode === 'file'
+          ? 'File uploaded and resource saved successfully.'
+          : 'Resource saved successfully.'
+      );
     } catch (error) {
       console.error('Failed to save resource:', error);
       const message = error instanceof Error ? error.message : 'Failed to save resource.';
+      setResourceUploadStatus('error');
+      setResourceUploadStatusMessage(message);
       alert(message);
     } finally {
       setIsSavingResource(false);
+      setIsUploadingResourceFile(false);
     }
   };
 
@@ -3243,6 +3316,15 @@ export default function App() {
                 setResourceForm={setResourceForm}
                 editingResourceId={editingResourceId}
                 isSavingResource={isSavingResource}
+                isUploadingResourceFile={isUploadingResourceFile}
+                resourceUploadStatus={resourceUploadStatus}
+                resourceUploadProgress={resourceUploadProgress}
+                resourceUploadStatusMessage={resourceUploadStatusMessage}
+                onClearResourceUploadFeedback={clearResourceUploadFeedback}
+                resourceInputMode={resourceInputMode}
+                setResourceInputMode={setResourceInputMode}
+                resourceUploadFile={resourceUploadFile}
+                setResourceUploadFile={setResourceUploadFile}
                 isLoading={isLoadingResources}
                 stemSubjects={STEM_SUBJECTS}
                 onSaveResource={handleSaveResource}

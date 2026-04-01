@@ -37,6 +37,9 @@ type ResourceFormData = {
   description: string;
 };
 
+type ResourceInputMode = 'url' | 'file';
+type ResourceUploadStatus = 'idle' | 'uploading' | 'uploaded' | 'error';
+
 type SortOption = 'newest' | 'title' | 'type';
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -48,6 +51,15 @@ export interface TutorResourceManagePageProps {
   setResourceForm: React.Dispatch<React.SetStateAction<ResourceFormData>>;
   editingResourceId: string | null;
   isSavingResource: boolean;
+  isUploadingResourceFile: boolean;
+  resourceUploadStatus: ResourceUploadStatus;
+  resourceUploadProgress: number;
+  resourceUploadStatusMessage: string;
+  onClearResourceUploadFeedback: () => void;
+  resourceInputMode: ResourceInputMode;
+  setResourceInputMode: React.Dispatch<React.SetStateAction<ResourceInputMode>>;
+  resourceUploadFile: File | null;
+  setResourceUploadFile: React.Dispatch<React.SetStateAction<File | null>>;
   isLoading: boolean;
   stemSubjects: string[];
   onSaveResource: (event: React.FormEvent) => void;
@@ -76,6 +88,26 @@ const getFileTypeBadge = (type: Resource['type']): { bg: string; text: string } 
   }
 };
 
+const resolveResourcePreviewUrl = (rawUrl: string): string => {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  if (trimmed.startsWith('/uploads/')) {
+    if (window.location.port === '3000') {
+      return `${window.location.origin}${trimmed}`;
+    }
+    return `http://localhost:3000${trimmed}`;
+  }
+
+  return trimmed;
+};
+
 // Simulated download count from resource id for display purposes
 const getSimulatedDownloadCount = (id: string): number => {
   let hash = 0;
@@ -100,10 +132,37 @@ const UploadModal: React.FC<{
   setForm: React.Dispatch<React.SetStateAction<ResourceFormData>>;
   editingId: string | null;
   isSaving: boolean;
+  isUploadingFile: boolean;
+  uploadStatus: ResourceUploadStatus;
+  uploadProgress: number;
+  uploadStatusMessage: string;
+  onClearUploadFeedback: () => void;
+  inputMode: ResourceInputMode;
+  setInputMode: React.Dispatch<React.SetStateAction<ResourceInputMode>>;
+  selectedFile: File | null;
+  setSelectedFile: React.Dispatch<React.SetStateAction<File | null>>;
   stemSubjects: string[];
   onSave: (event: React.FormEvent) => void;
   onClose: () => void;
-}> = ({ isOpen, form, setForm, editingId, isSaving, stemSubjects, onSave, onClose }) => (
+}> = ({
+  isOpen,
+  form,
+  setForm,
+  editingId,
+  isSaving,
+  isUploadingFile,
+  uploadStatus,
+  uploadProgress,
+  uploadStatusMessage,
+  onClearUploadFeedback,
+  inputMode,
+  setInputMode,
+  selectedFile,
+  setSelectedFile,
+  stemSubjects,
+  onSave,
+  onClose,
+}) => (
   <AnimatePresence>
     {isOpen && (
       <>
@@ -181,16 +240,134 @@ const UploadModal: React.FC<{
               </div>
 
               <div>
-                <label className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5 block">Resource URL *</label>
-                <input
-                  type="url"
-                  value={form.url}
-                  onChange={(e) => setForm((p) => ({ ...p, url: e.target.value }))}
-                  placeholder="https://example.com/resource.pdf"
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm"
-                  required
-                />
+                <label className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5 block">Resource Source *</label>
+                <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClearUploadFeedback();
+                      setInputMode('url');
+                      setSelectedFile(null);
+                    }}
+                    className={`px-3 py-2 rounded-lg text-xs font-extrabold transition-colors ${
+                      inputMode === 'url'
+                        ? 'bg-white text-indigo-700 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    Use URL
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClearUploadFeedback();
+                      setInputMode('file');
+                      setSelectedFile(null);
+                    }}
+                    className={`px-3 py-2 rounded-lg text-xs font-extrabold transition-colors ${
+                      inputMode === 'file'
+                        ? 'bg-white text-indigo-700 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    Upload File
+                  </button>
+                </div>
               </div>
+
+              {inputMode === 'url' ? (
+                <div>
+                  <label className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5 block">Resource URL *</label>
+                  <input
+                    type="url"
+                    value={form.url}
+                    onChange={(e) => {
+                      onClearUploadFeedback();
+                      setForm((p) => ({ ...p, url: e.target.value }));
+                    }}
+                    placeholder="https://example.com/resource.pdf"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm"
+                    required={inputMode === 'url'}
+                  />
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5 block">Upload Resource File *</label>
+                  <input
+                    type="file"
+                    accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv,.zip,.rar"
+                    onChange={(e) => {
+                      onClearUploadFeedback();
+                      const file = e.target.files?.[0] || null;
+                      setSelectedFile(file);
+                    }}
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none text-sm"
+                  />
+                  <p className="text-[11px] text-slate-500">
+                    Supported files: PDF, DOC/DOCX, PPT/PPTX, XLS/XLSX, TXT, CSV, ZIP, RAR (max 50MB).
+                  </p>
+                  {selectedFile && (
+                    <div className="flex items-center justify-between rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2">
+                      <p className="text-xs text-indigo-700 font-semibold truncate pr-3">Selected: {selectedFile.name}</p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClearUploadFeedback();
+                          setSelectedFile(null);
+                        }}
+                        className="text-xs font-bold text-indigo-700 hover:text-indigo-900"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  )}
+                  {!selectedFile && editingId && form.url.startsWith('/uploads/') && (
+                    <p className="text-[11px] text-slate-500 break-all">
+                      Current file path: {form.url}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {uploadStatus !== 'idle' && (
+                <div
+                  className={`rounded-xl border px-4 py-3 ${
+                    uploadStatus === 'error'
+                      ? 'bg-rose-50 border-rose-200'
+                      : uploadStatus === 'uploaded'
+                        ? 'bg-emerald-50 border-emerald-200'
+                        : 'bg-indigo-50 border-indigo-200'
+                  }`}
+                >
+                  <p
+                    className={`text-xs font-semibold ${
+                      uploadStatus === 'error'
+                        ? 'text-rose-700'
+                        : uploadStatus === 'uploaded'
+                          ? 'text-emerald-700'
+                          : 'text-indigo-700'
+                    }`}
+                  >
+                    {uploadStatusMessage ||
+                      (uploadStatus === 'uploading'
+                        ? 'Uploading resource file...'
+                        : uploadStatus === 'uploaded'
+                          ? 'Upload completed successfully.'
+                          : 'Upload failed.')}
+                  </p>
+                  {uploadStatus === 'uploading' && (
+                    <>
+                      <div className="mt-2 h-2 w-full rounded-full bg-indigo-100 overflow-hidden">
+                        <div
+                          className="h-full bg-indigo-500 transition-all duration-300"
+                          style={{ width: `${Math.max(6, Math.min(100, uploadProgress))}%` }}
+                        />
+                      </div>
+                      <p className="mt-1 text-[11px] font-semibold text-indigo-600">{uploadProgress}%</p>
+                    </>
+                  )}
+                </div>
+              )}
 
               <div>
                 <label className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5 block">Description</label>
@@ -216,7 +393,7 @@ const UploadModal: React.FC<{
                   className="px-6 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 disabled:opacity-60 transition-all shadow-sm shadow-indigo-200 flex items-center gap-2"
                 >
                   {isSaving && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
-                  {isSaving ? 'Saving...' : editingId ? 'Update' : 'Upload'}
+                  {isSaving ? (isUploadingFile ? 'Uploading file...' : 'Saving...') : editingId ? 'Update' : 'Upload'}
                 </button>
               </div>
             </form>
@@ -336,6 +513,15 @@ export const TutorResourceManagePage: React.FC<TutorResourceManagePageProps> = (
   setResourceForm,
   editingResourceId,
   isSavingResource,
+  isUploadingResourceFile,
+  resourceUploadStatus,
+  resourceUploadProgress,
+  resourceUploadStatusMessage,
+  onClearResourceUploadFeedback,
+  resourceInputMode,
+  setResourceInputMode,
+  resourceUploadFile,
+  setResourceUploadFile,
   isLoading,
   stemSubjects,
   onSaveResource,
@@ -450,7 +636,12 @@ export const TutorResourceManagePage: React.FC<TutorResourceManagePageProps> = (
       alert('Resource link is not available yet.');
       return;
     }
-    window.open(resource.url, '_blank', 'noopener,noreferrer');
+    const resolvedUrl = resolveResourcePreviewUrl(resource.url);
+    if (!resolvedUrl) {
+      alert('Resource link is not available yet.');
+      return;
+    }
+    window.open(resolvedUrl, '_blank', 'noopener,noreferrer');
   };
 
   // Reset page on filter change
@@ -621,6 +812,15 @@ export const TutorResourceManagePage: React.FC<TutorResourceManagePageProps> = (
         setForm={setResourceForm}
         editingId={editingResourceId}
         isSaving={isSavingResource}
+        isUploadingFile={isUploadingResourceFile}
+        uploadStatus={resourceUploadStatus}
+        uploadProgress={resourceUploadProgress}
+        uploadStatusMessage={resourceUploadStatusMessage}
+        onClearUploadFeedback={onClearResourceUploadFeedback}
+        inputMode={resourceInputMode}
+        setInputMode={setResourceInputMode}
+        selectedFile={resourceUploadFile}
+        setSelectedFile={setResourceUploadFile}
         stemSubjects={stemSubjects}
         onSave={handleSave}
         onClose={handleCloseModal}

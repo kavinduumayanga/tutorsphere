@@ -164,6 +164,15 @@ const handleCourseResourceUpload = createSingleFileUploadMiddleware({
   isAllowedFile: isResourceUpload,
 });
 
+const handleTutorResourceUpload = createSingleFileUploadMiddleware({
+  fieldName: 'resource',
+  maxFileSizeMB: 50,
+  invalidTypeMessage: 'Unsupported resource file type. Upload PDF, DOC/DOCX, PPT/PPTX, XLS/XLSX, TXT, CSV, ZIP, or RAR files.',
+  sizeExceededMessage: 'Resource file must be less than 50MB.',
+  genericErrorMessage: 'Tutor resource upload failed.',
+  isAllowedFile: isResourceUpload,
+});
+
 const toUploadPublicPath = (filePath: string): string => {
   return `/uploads/${path.basename(filePath)}`;
 };
@@ -667,6 +676,24 @@ async function startServer() {
     } catch (error) {
       console.error('Course resource upload error:', error);
       res.status(500).json({ error: 'Failed to upload course resource file.' });
+    }
+  });
+
+  app.post('/api/uploads/tutor-resource', handleTutorResourceUpload, async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No resource file was uploaded.' });
+      }
+
+      res.json({
+        path: toUploadPublicPath(req.file.path),
+        originalName: req.file.originalname,
+        size: req.file.size,
+        mimeType: req.file.mimetype,
+      });
+    } catch (error) {
+      console.error('Tutor resource upload error:', error);
+      res.status(500).json({ error: 'Failed to upload tutor resource file.' });
     }
   });
 
@@ -1411,9 +1438,31 @@ async function startServer() {
   app.post("/api/resources", async (req, res) => {
     try {
       const resourceData = req.body;
+      const normalizedTitle = typeof resourceData?.title === 'string' ? resourceData.title.trim() : '';
+      const normalizedSubject = typeof resourceData?.subject === 'string' ? resourceData.subject.trim() : '';
+      const normalizedType = typeof resourceData?.type === 'string' ? resourceData.type.trim() : '';
+      const normalizedResourceUrl = typeof resourceData?.url === 'string' ? resourceData.url.trim() : '';
+      const normalizedDescription =
+        typeof resourceData?.description === 'string' ? resourceData.description.trim() : '';
 
       if (!resourceData?.tutorId) {
         return res.status(400).json({ error: "tutorId is required to create a resource" });
+      }
+
+      if (!normalizedTitle) {
+        return res.status(400).json({ error: "Resource title is required." });
+      }
+
+      if (!normalizedSubject) {
+        return res.status(400).json({ error: "Resource subject is required." });
+      }
+
+      if (!['Paper', 'Article', 'Note'].includes(normalizedType)) {
+        return res.status(400).json({ error: "Resource type must be Paper, Article, or Note." });
+      }
+
+      if (!normalizedResourceUrl || !isLikelyResourceUrl(normalizedResourceUrl)) {
+        return res.status(400).json({ error: "Resource URL must be a valid URL or uploaded file path." });
       }
 
       const tutorUser = await User.findOne({ id: resourceData.tutorId, role: 'tutor' });
@@ -1422,7 +1471,16 @@ async function startServer() {
       }
 
       const id = createEntityId();
-      const resource = new Resource({ ...resourceData, id, isFree: true });
+      const resource = new Resource({
+        ...resourceData,
+        id,
+        title: normalizedTitle,
+        subject: normalizedSubject,
+        type: normalizedType,
+        url: normalizedResourceUrl,
+        description: normalizedDescription,
+        isFree: true,
+      });
       await resource.save();
       res.json(resource);
     } catch (error) {
@@ -1449,6 +1507,49 @@ async function startServer() {
 
       const updatePayload = { ...req.body };
       delete updatePayload.actorId;
+
+      if (updatePayload.url !== undefined) {
+        if (typeof updatePayload.url !== 'string') {
+          return res.status(400).json({ error: "Resource URL must be a string." });
+        }
+
+        updatePayload.url = updatePayload.url.trim();
+        if (!updatePayload.url || !isLikelyResourceUrl(updatePayload.url)) {
+          return res.status(400).json({ error: "Resource URL must be a valid URL or uploaded file path." });
+        }
+      }
+
+      if (updatePayload.title !== undefined) {
+        if (typeof updatePayload.title !== 'string') {
+          return res.status(400).json({ error: "Resource title must be a string." });
+        }
+
+        updatePayload.title = updatePayload.title.trim();
+        if (!updatePayload.title) {
+          return res.status(400).json({ error: "Resource title cannot be empty." });
+        }
+      }
+
+      if (updatePayload.subject !== undefined) {
+        if (typeof updatePayload.subject !== 'string') {
+          return res.status(400).json({ error: "Resource subject must be a string." });
+        }
+
+        updatePayload.subject = updatePayload.subject.trim();
+        if (!updatePayload.subject) {
+          return res.status(400).json({ error: "Resource subject cannot be empty." });
+        }
+      }
+
+      if (updatePayload.type !== undefined) {
+        if (typeof updatePayload.type !== 'string' || !['Paper', 'Article', 'Note'].includes(updatePayload.type)) {
+          return res.status(400).json({ error: "Resource type must be Paper, Article, or Note." });
+        }
+      }
+
+      if (updatePayload.description !== undefined && typeof updatePayload.description === 'string') {
+        updatePayload.description = updatePayload.description.trim();
+      }
 
       if (updatePayload.tutorId && updatePayload.tutorId !== existingResource.tutorId) {
         return res.status(400).json({ error: "Resource owner cannot be changed." });

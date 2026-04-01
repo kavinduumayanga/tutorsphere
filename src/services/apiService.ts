@@ -13,7 +13,11 @@ import {
   CourseModuleResource,
 } from '../types';
 
-const API_BASE_URL = `${window.location.origin}/api`;
+const API_BASE_URL =
+  ((window as any).__TUTORSPHERE_API_BASE_URL__ as string | undefined)?.trim() ||
+  `${window.location.origin}/api`;
+const LOCALHOST_API_BASE_URL = 'http://localhost:3000/api';
+const LOOPBACK_API_BASE_URL = 'http://127.0.0.1:3000/api';
 
 const getDownloadFileName = (contentDisposition: string | null): string | null => {
   if (!contentDisposition) {
@@ -34,6 +38,90 @@ type UploadedCourseAsset = {
   originalName: string;
   size: number;
   mimeType: string;
+};
+
+const getApiBaseCandidates = (): string[] => {
+  const candidates = [API_BASE_URL];
+  const hostname = window.location.hostname;
+
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    candidates.push(LOCALHOST_API_BASE_URL, LOOPBACK_API_BASE_URL);
+  }
+
+  return Array.from(new Set(candidates.filter(Boolean)));
+};
+
+const shouldRetryUploadRequest = (error: unknown): boolean => {
+  const message = String(error instanceof Error ? error.message : error || '').toLowerCase();
+  return (
+    message.includes('not found') ||
+    message.includes('404') ||
+    message.includes('load failed') ||
+    message.includes('failed to fetch') ||
+    message.includes('network') ||
+    message.includes('cors')
+  );
+};
+
+const uploadResourceWithProgress = (
+  fullUrl: string,
+  file: File,
+  onProgress?: (progress: number) => void
+): Promise<UploadedCourseAsset> => {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append('resource', file);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', fullUrl, true);
+
+    xhr.upload.onprogress = (event) => {
+      if (!onProgress || !event.lengthComputable) {
+        return;
+      }
+
+      const progress = Math.min(100, Math.max(0, Math.round((event.loaded / event.total) * 100)));
+      onProgress(progress);
+    };
+
+    xhr.onerror = () => {
+      reject(new Error('Load failed while uploading resource file. Please check your server connection and try again.'));
+    };
+
+    xhr.onabort = () => {
+      reject(new Error('Resource upload was cancelled.'));
+    };
+
+    xhr.onload = () => {
+      const raw = xhr.responseText || '';
+      let parsed: any = null;
+
+      try {
+        parsed = raw ? JSON.parse(raw) : null;
+      } catch {
+        parsed = null;
+      }
+
+      if (xhr.status >= 200 && xhr.status < 300) {
+        if (!parsed || typeof parsed.path !== 'string') {
+          reject(new Error('Upload succeeded but response format was invalid.'));
+          return;
+        }
+
+        onProgress?.(100);
+        resolve(parsed as UploadedCourseAsset);
+        return;
+      }
+
+      const errorMessage =
+        (parsed && typeof parsed.error === 'string' && parsed.error) ||
+        `API request failed: ${xhr.statusText || `HTTP ${xhr.status}`}`;
+
+      reject(new Error(errorMessage));
+    };
+
+    xhr.send(formData);
+  });
 };
 
 type QuizChatSessionStage =
@@ -319,6 +407,34 @@ class ApiService {
       method: 'POST',
       body: formData,
     });
+  }
+
+  async uploadTutorResource(
+    file: File,
+    onProgress?: (progress: number) => void
+  ): Promise<UploadedCourseAsset> {
+    const baseCandidates = getApiBaseCandidates();
+    const uploadEndpoints = ['/uploads/tutor-resource', '/uploads/course-resource'];
+    let lastError: unknown;
+
+    for (const endpoint of uploadEndpoints) {
+      for (const baseUrl of baseCandidates) {
+        try {
+          return await uploadResourceWithProgress(`${baseUrl}${endpoint}`, file, onProgress);
+        } catch (error) {
+          lastError = error;
+          if (!shouldRetryUploadRequest(error)) {
+            throw error;
+          }
+        }
+      }
+    }
+
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+
+    throw new Error('Failed to upload resource file.');
   }
 
   async deleteCourse(id: string, actorId?: string): Promise<void> {

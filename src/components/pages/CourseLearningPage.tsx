@@ -892,7 +892,7 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
               </div>
             </div>
 
-            {/* Certificate Preview */}
+            {/* Certificate Status */}
             {isComplete && (
               <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
@@ -903,8 +903,8 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
                   <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center mx-auto">
                     <Award className="w-6 h-6 text-amber-600" />
                   </div>
-                  <p className="text-xs font-extrabold text-amber-800">Certificate of Completion</p>
-                  <p className="text-[10px] text-amber-600">{course.title}</p>
+                  <p className="text-xs font-extrabold text-amber-800">Certificate Unlocked</p>
+                  <p className="text-[10px] text-amber-600">Open the latest certificate preview design</p>
                 </div>
               </motion.div>
             )}
@@ -922,7 +922,7 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
               >
                 {isComplete ? (
                   <>
-                    <Download className="w-4 h-4" /> Download Certificate
+                    <Download className="w-4 h-4" /> View Certificate
                   </>
                 ) : (
                   <>

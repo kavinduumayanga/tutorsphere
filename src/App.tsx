@@ -64,6 +64,8 @@ import { TutorResourceManagePage } from './components/pages/TutorResourceManageP
 import { StudentResourceLibraryPage } from './components/pages/StudentResourceLibraryPage';
 import { ToastProvider } from './components/common/Toast';
 import { QuizChatbotPage } from './components/pages/QuizChatbotPage';
+import { FindTutorsPage } from './components/pages/FindTutorsPage';
+import { CertificateModal } from './components/common/CertificateModal';
 
 const STEM_SUBJECTS = ['Maths', 'Science', 'Engineering', 'Tech', 'ICT'];
 
@@ -231,6 +233,11 @@ const createInitialResourceForm = () => ({
   description: '',
 });
 
+type ResourceInputMode = 'url' | 'file';
+type ResourceUploadStatus = 'idle' | 'uploading' | 'uploaded' | 'error';
+
+const isUploadedResourcePath = (value: string): boolean => value.trim().startsWith('/uploads/');
+
 export default function App() {
   const [selectedTutor, setSelectedTutor] = useState<Tutor | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('home');
@@ -368,6 +375,12 @@ export default function App() {
   const [resourceForm, setResourceForm] = useState(createInitialResourceForm);
   const [editingResourceId, setEditingResourceId] = useState<string | null>(null);
   const [isSavingResource, setIsSavingResource] = useState(false);
+  const [resourceInputMode, setResourceInputMode] = useState<ResourceInputMode>('url');
+  const [resourceUploadFile, setResourceUploadFile] = useState<File | null>(null);
+  const [isUploadingResourceFile, setIsUploadingResourceFile] = useState(false);
+  const [resourceUploadStatus, setResourceUploadStatus] = useState<ResourceUploadStatus>('idle');
+  const [resourceUploadProgress, setResourceUploadProgress] = useState(0);
+  const [resourceUploadStatusMessage, setResourceUploadStatusMessage] = useState('');
   const [activeLearningCourseId, setActiveLearningCourseId] = useState<string | null>(null);
   const [activeVideoModuleId, setActiveVideoModuleId] = useState<string | null>(null);
   const [learningContentTab, setLearningContentTab] = useState<'overview' | 'notes' | 'resources' | 'qa'>('overview');
@@ -1517,13 +1530,26 @@ export default function App() {
     }
   };
 
+  const clearResourceUploadFeedback = () => {
+    setResourceUploadStatus('idle');
+    setResourceUploadProgress(0);
+    setResourceUploadStatusMessage('');
+  };
+
   const handleResetResourceForm = () => {
     setResourceForm(createInitialResourceForm());
     setEditingResourceId(null);
+    setResourceInputMode('url');
+    setResourceUploadFile(null);
+    setIsUploadingResourceFile(false);
+    clearResourceUploadFeedback();
   };
 
   const handleEditResource = (resource: Resource) => {
     setEditingResourceId(resource.id);
+    setResourceInputMode(isUploadedResourcePath(resource.url) ? 'file' : 'url');
+    setResourceUploadFile(null);
+    clearResourceUploadFeedback();
     setResourceForm({
       title: resource.title,
       subject: resource.subject,
@@ -1547,24 +1573,63 @@ export default function App() {
       return;
     }
 
-    if (!resourceForm.title.trim() || !resourceForm.url.trim()) {
-      alert('Resource title and URL are required.');
+    if (!resourceForm.title.trim()) {
+      alert('Resource title is required.');
+      setResourceUploadStatus('error');
+      setResourceUploadStatusMessage('Resource title is required.');
       return;
     }
 
     setIsSavingResource(true);
-
-    const payload: Omit<Resource, 'id'> = {
-      tutorId,
-      title: resourceForm.title.trim(),
-      type: resourceForm.type,
-      subject: resourceForm.subject,
-      url: resourceForm.url.trim(),
-      description: resourceForm.description.trim(),
-      isFree: true,
-    };
+    setResourceUploadStatus('idle');
+    setResourceUploadProgress(0);
+    setResourceUploadStatusMessage('');
 
     try {
+      let resourceUrl = resourceForm.url.trim();
+
+      if (resourceInputMode === 'file') {
+        const canReuseExistingUploadedPath =
+          Boolean(editingResourceId) && isUploadedResourcePath(resourceUrl);
+
+        if (resourceUploadFile) {
+          setIsUploadingResourceFile(true);
+          setResourceUploadStatus('uploading');
+          setResourceUploadStatusMessage('Uploading resource file...');
+          const uploadedResource = await apiService.uploadTutorResource(resourceUploadFile, (progress) => {
+            setResourceUploadProgress(progress);
+          });
+          resourceUrl = uploadedResource.path;
+          setResourceUploadProgress(100);
+          setResourceUploadStatusMessage(`Uploaded ${uploadedResource.originalName}. Saving resource details...`);
+        } else if (!canReuseExistingUploadedPath) {
+          const validationMessage = 'Please choose a file to upload.';
+          alert(validationMessage);
+          setResourceUploadStatus('error');
+          setResourceUploadStatusMessage(validationMessage);
+          return;
+        } else {
+          setResourceUploadProgress(100);
+          setResourceUploadStatusMessage('Using previously uploaded file path.');
+        }
+      } else if (!resourceUrl) {
+        const validationMessage = 'Resource URL is required when using URL mode.';
+        alert(validationMessage);
+        setResourceUploadStatus('error');
+        setResourceUploadStatusMessage(validationMessage);
+        return;
+      }
+
+      const payload: Omit<Resource, 'id'> = {
+        tutorId,
+        title: resourceForm.title.trim(),
+        type: resourceForm.type,
+        subject: resourceForm.subject,
+        url: resourceUrl,
+        description: resourceForm.description.trim(),
+        isFree: true,
+      };
+
       if (editingResourceId) {
         const updatedResource = await apiService.updateResource(editingResourceId, payload, tutorId);
         setResources((prev) =>
@@ -1577,13 +1642,23 @@ export default function App() {
         alert('Resource uploaded successfully.');
       }
 
-      handleResetResourceForm();
+      setResourceUploadFile(null);
+      setResourceForm((prev) => ({ ...prev, url: resourceUrl }));
+      setResourceUploadStatus('uploaded');
+      setResourceUploadStatusMessage(
+        resourceInputMode === 'file'
+          ? 'File uploaded and resource saved successfully.'
+          : 'Resource saved successfully.'
+      );
     } catch (error) {
       console.error('Failed to save resource:', error);
       const message = error instanceof Error ? error.message : 'Failed to save resource.';
+      setResourceUploadStatus('error');
+      setResourceUploadStatusMessage(message);
       alert(message);
     } finally {
       setIsSavingResource(false);
+      setIsUploadingResourceFile(false);
     }
   };
 
@@ -2658,32 +2733,24 @@ export default function App() {
                     Complete all {activeLearningCourse.modules.length} modules to earn your TutorSphere certificate.
                   </p>
 
-                  {/* Certificate Preview */}
                   {isActiveLearningComplete && (
-                    <div className="p-3 bg-white rounded-lg border-2 border-amber-300 space-y-2">
-                      <div className="aspect-video bg-gradient-to-br from-amber-50 to-orange-50 rounded flex items-center justify-center">
-                        <div className="text-center">
-                          <svg className="w-8 h-8 text-amber-600 mx-auto mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
-                          </svg>
-                          <p className="text-[9px] font-bold text-amber-700">Certificate Ready</p>
-                        </div>
-                      </div>
-                    </div>
+                    <p className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                      Your certificate now opens in the updated preview modal.
+                    </p>
                   )}
 
                   {/* Download Button */}
                   <div>
                     {activeLearningEnrollment ? (
                       <button
-                        onClick={() => handleDownloadCertificate(activeLearningEnrollment, activeLearningCourse.title)}
+                        onClick={() => handleShowCertificateModal(activeLearningEnrollment, activeLearningCourse.title)}
                         disabled={!isActiveLearningComplete}
                         className={`w-full py-3 rounded-lg border-2 font-bold uppercase tracking-widest text-sm transition-all ${isActiveLearningComplete
                             ? 'bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700 shadow-lg shadow-emerald-200'
                             : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
                           }`}
                       >
-                        {isActiveLearningComplete ? '⬇ Download' : 'Complete First'}
+                        {isActiveLearningComplete ? 'View Certificate' : 'Complete First'}
                       </button>
                     ) : (
                       <p className="text-[10px] text-rose-600 font-bold text-center">Error loading certificate</p>
@@ -3032,148 +3099,15 @@ export default function App() {
           )}
 
           {activeTab === 'tutors' && (
-            <div className="space-y-12">
-              <div className="flex flex-col md:flex-row justify-between items-end gap-6">
-                <div className="space-y-2">
-                  <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-black uppercase tracking-widest">
-                    <Star className="w-3 h-3 fill-emerald-700" />
-                    <span>Top Rated Experts</span>
-                  </div>
-                  <h2 className="text-4xl font-black text-slate-900 tracking-tight">Find Your Perfect Tutor</h2>
-                  <p className="text-slate-600">Browse verified experts in STEM and ICT subjects ready to guide you.</p>
-                </div>
-                <div className="flex gap-3 w-full md:w-auto">
-                  <div className="relative flex-1 md:w-80">
-                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                    <input
-                      type="text"
-                      placeholder="Search by subject or name..."
-                      className="w-full pl-12 pr-4 py-4 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all font-medium"
-                    />
-                  </div>
-                  <button
-                    onClick={() => alert('Searching for tutors...')}
-                    className="bg-indigo-600 text-white p-4 rounded-2xl shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
-                  >
-                    <Search className="w-6 h-6" />
-                  </button>
-                </div>
-              </div>
-
-              {isLoadingTutors ? (
-                <div className="flex justify-center items-center py-12">
-                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
-                </div>
-              ) : (
-                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-                  {tutorsWithLiveStats.map(tutor => (
-                    <motion.div
-                      layout
-                      whileHover={{ y: -10 }}
-                      key={tutor.id}
-                      className="bg-white rounded-[2.5rem] border border-slate-100 overflow-hidden shadow-sm hover:shadow-2xl transition-all group relative"
-                    >
-                      <div className="absolute top-0 left-0 w-full h-24 bg-gradient-to-r from-indigo-600 to-violet-600 opacity-10" />
-                      <div className="p-8 relative z-10">
-                        <div className="flex items-start gap-5">
-                          <div className="relative">
-                            <img
-                              src={tutor.avatar}
-                              alt={getTutorDisplayName(tutor)}
-                              className="w-20 h-20 rounded-2xl object-cover border-4 border-white shadow-xl"
-                              referrerPolicy="no-referrer"
-                            />
-                            {tutor.isVerified && (
-                              <div className="absolute -bottom-1 -right-1 bg-indigo-600 p-1 rounded-lg border-2 border-white">
-                                <CheckCircle className="w-3 h-3 text-white" />
-                              </div>
-                            )}
-                          </div>
-                          <div className="flex-1 pt-1">
-                            <h3 className="font-black text-xl text-slate-900 leading-tight mb-1">{getTutorDisplayName(tutor)}</h3>
-                            <p className="text-xs font-bold text-indigo-600 uppercase tracking-widest">{tutor.qualifications}</p>
-                            <div className="flex items-center gap-1.5 mt-2">
-                              <div className="flex items-center gap-1 bg-amber-50 px-2 py-0.5 rounded-lg">
-                                <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
-                                <span className="text-xs font-black text-amber-700">{tutor.rating}</span>
-                              </div>
-                              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">({tutor.reviewCount} reviews)</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-6 flex flex-wrap gap-2">
-                          {tutor.subjects.map(s => (
-                            <span key={s} className="px-3 py-1.5 bg-slate-50 text-slate-600 text-[10px] font-black uppercase tracking-widest rounded-xl border border-slate-100">
-                              {s}
-                            </span>
-                          ))}
-                        </div>
-
-                        <p className="mt-5 text-sm text-slate-500 leading-relaxed line-clamp-2 font-medium italic">"{tutor.bio}"</p>
-
-                        <div className="mt-8 pt-6 border-t border-slate-50 flex items-center justify-between">
-                          <div>
-                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Hourly Rate</span>
-                            <p className="text-2xl font-black text-slate-900">LKR {tutor.pricePerHour}</p>
-                          </div>
-                          <div className="flex gap-3">
-                            <button
-                              onClick={() => {
-                                setViewingTutorId(tutor.id);
-                                setActiveTab('tutorProfile');
-                              }}
-                              className="px-4 py-3 bg-slate-100 text-slate-700 rounded-2xl font-black text-sm hover:bg-slate-200 transition-all"
-                            >
-                              View Profile
-                            </button>
-                            {(isStudent || !currentUser) && (
-                              <button
-                                onClick={() => setSelectedTutor(selectedTutor?.id === tutor.id ? null : tutor)}
-                                className={`px-6 py-3 rounded-2xl font-black text-sm transition-all ${selectedTutor?.id === tutor.id
-                                    ? 'bg-slate-900 text-white'
-                                    : 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700'
-                                  }`}
-                              >
-                                {selectedTutor?.id === tutor.id ? 'Close' : 'Book Session'}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        <AnimatePresence>
-                          {selectedTutor?.id === tutor.id && (isStudent || !currentUser) && (
-                            <motion.div
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              className="mt-6 pt-6 border-t border-slate-50 space-y-4 overflow-hidden"
-                            >
-                              <div className="flex justify-between items-center">
-                                <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">Available Slots</h4>
-                                <Calendar className="w-4 h-4 text-slate-400" />
-                              </div>
-                              <div className="grid grid-cols-2 gap-3">
-                                {tutor.availability.map(slot => (
-                                  <button
-                                    key={slot.id}
-                                    onClick={() => handleBookSession(tutor, slot.id)}
-                                    className="p-3 rounded-2xl border-2 border-slate-50 hover:border-indigo-200 hover:bg-indigo-50 transition-all text-left group"
-                                  >
-                                    <p className="font-black text-xs text-slate-700 group-hover:text-indigo-700">{slot.day}</p>
-                                    <p className="text-[10px] font-bold text-slate-400 mt-0.5">{slot.startTime} - {slot.endTime}</p>
-                                  </button>
-                                ))}
-                              </div>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                      </div>
-                    </motion.div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <FindTutorsPage
+              tutors={tutorsWithLiveStats}
+              isLoading={isLoadingTutors}
+              stemSubjects={STEM_SUBJECTS}
+              onViewProfile={(tutorId) => {
+                setViewingTutorId(tutorId);
+                setActiveTab('tutorProfile');
+              }}
+            />
           )}
 
           {activeTab === 'courses' && (
@@ -3243,6 +3177,15 @@ export default function App() {
                 setResourceForm={setResourceForm}
                 editingResourceId={editingResourceId}
                 isSavingResource={isSavingResource}
+                isUploadingResourceFile={isUploadingResourceFile}
+                resourceUploadStatus={resourceUploadStatus}
+                resourceUploadProgress={resourceUploadProgress}
+                resourceUploadStatusMessage={resourceUploadStatusMessage}
+                onClearResourceUploadFeedback={clearResourceUploadFeedback}
+                resourceInputMode={resourceInputMode}
+                setResourceInputMode={setResourceInputMode}
+                resourceUploadFile={resourceUploadFile}
+                setResourceUploadFile={setResourceUploadFile}
                 isLoading={isLoadingResources}
                 stemSubjects={STEM_SUBJECTS}
                 onSaveResource={handleSaveResource}
@@ -4201,7 +4144,7 @@ export default function App() {
                                             alert('Complete all modules to unlock your certificate.');
                                             return;
                                           }
-                                          handleDownloadCertificate(enrollment, course.title);
+                                          handleShowCertificateModal(enrollment, course.title);
                                         }}
                                         className={`py-3.5 px-4 rounded-xl text-[11px] sm:text-xs lg:text-sm font-black uppercase tracking-wide transition-all flex items-center justify-center gap-2 w-full ${isCompleted
                                             ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white border border-amber-600 hover:shadow-lg hover:shadow-amber-200'
@@ -4209,7 +4152,7 @@ export default function App() {
                                           }`}
                                       >
                                         <Award className="w-4 sm:w-5 h-4 sm:h-5 flex-shrink-0" />
-                                        <span className="truncate">Download Certificate</span>
+                                        <span className="truncate">View Certificate</span>
                                       </button>
                                     </div>
                                   </div>
@@ -5132,51 +5075,14 @@ export default function App() {
       </footer>
 
       {/* CERTIFICATE MODAL */}
-      <AnimatePresence>
-        {certificateModalData && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden relative"
-            >
-              <button
-                onClick={() => setCertificateModalData(null)}
-                className="absolute top-4 right-4 p-2 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 z-10 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-              <div className="relative h-48 bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 p-8 flex flex-col justify-center items-center text-center overflow-hidden">
-                <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10" />
-                <Award className="w-16 h-16 text-emerald-400 mb-3 relative z-10 animate-bounce" />
-                <h2 className="text-2xl sm:text-3xl font-extrabold text-white relative z-10">Certificate of Completion</h2>
-              </div>
-              <div className="p-8 sm:p-12 text-center bg-slate-50/50">
-                <p className="text-slate-500 font-medium mb-2 uppercase tracking-widest text-sm">This certifies that</p>
-                <h3 className="text-3xl font-black text-slate-900 mb-6">{currentUser?.firstName} {currentUser?.lastName}</h3>
-                <p className="text-slate-500 font-medium mb-2 uppercase tracking-widest text-sm">has successfully completed the course</p>
-                <h4 className="text-2xl font-bold text-indigo-700 italic mb-8 leading-tight max-w-lg mx-auto">"{certificateModalData.courseTitle}"</h4>
-
-                <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mt-8 pt-8 border-t border-slate-200">
-                  <button
-                    onClick={() => setCertificateModalData(null)}
-                    className="w-full sm:w-auto px-6 py-3 rounded-xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-all text-sm"
-                  >
-                    Close
-                  </button>
-                  <button
-                    onClick={() => handleDownloadCertificate(certificateModalData.enrollment, certificateModalData.courseTitle)}
-                    className="w-full sm:w-auto px-6 py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20"
-                  >
-                    <Download className="w-4 h-4" /> Download PDF
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <CertificateModal
+        isOpen={!!certificateModalData}
+        onClose={() => setCertificateModalData(null)}
+        onDownload={handleDownloadCertificate}
+        enrollment={certificateModalData?.enrollment || null}
+        courseTitle={certificateModalData?.courseTitle || ''}
+        studentName={`${currentUser?.firstName || ''} ${currentUser?.lastName || ''}`.trim()}
+      />
     </div>
   );
 }

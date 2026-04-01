@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Send,
@@ -8,8 +8,13 @@ import {
   Sparkles,
   MessageSquarePlus,
   HelpCircle,
-  Loader2,
   Lock,
+  ArrowDown,
+  Copy,
+  Check,
+  BarChart3,
+  RotateCcw,
+  Zap,
 } from 'lucide-react';
 import { apiService } from '../../services/apiService';
 import { User as AppUser } from '../../types';
@@ -40,37 +45,48 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
   const [isTyping, setIsTyping] = useState(false);
   const [isSessionClosed, setIsSessionClosed] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const canChat = Boolean(currentUser && (currentUser.role === 'student' || currentUser.role === 'tutor'));
 
+  const questionCount = useMemo(
+    () => messages.filter((m) => m.role === 'user').length,
+    [messages]
+  );
+
   const inputPlaceholder = useMemo(() => {
-    if (!currentUser) {
-      return 'Log in as a student or tutor to chat with Quiz Assistant.';
-    }
-
-    if (!canChat) {
-      return 'Only student and tutor accounts can use this chatbot.';
-    }
-
-    if (isSessionClosed) {
-      return 'Session ended. Start a new session to continue.';
-    }
-
+    if (!currentUser) return 'Log in as a student or tutor to chat with Quiz Assistant.';
+    if (!canChat) return 'Only student and tutor accounts can use this chatbot.';
+    if (isSessionClosed) return 'Session ended. Start a new session to continue.';
     return 'Type your answer or request...';
   }, [canChat, currentUser, isSessionClosed]);
 
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, isTyping]);
+  }, [messages, isTyping, scrollToBottom]);
+
+  // Track scroll for scroll-to-bottom button
+  useEffect(() => {
+    const container = chatContainerRef.current;
+    if (!container) return;
+    const handleScroll = () => {
+      const fromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      setShowScrollBtn(fromBottom > 120);
+    };
+    container.addEventListener('scroll', handleScroll);
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, []);
 
   useEffect(() => {
     let isCancelled = false;
-
     const syncSession = async () => {
       if (!canChat || !currentUser) {
         setMessages([createMessage('bot', OPENING_MESSAGE)]);
@@ -78,60 +94,47 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
         setErrorText(null);
         return;
       }
-
       try {
         const reset = await apiService.resetQuizChatSession({
           id: currentUser.id,
           role: currentUser.role,
         });
-
-        if (isCancelled) {
-          return;
-        }
-
+        if (isCancelled) return;
         setMessages([createMessage('bot', reset.reply || OPENING_MESSAGE)]);
         setIsSessionClosed(false);
         setErrorText(null);
       } catch (error) {
-        if (isCancelled) {
-          return;
-        }
-
+        if (isCancelled) return;
         const message =
-          error instanceof Error
-            ? error.message
-            : 'Failed to initialize quiz chatbot session.';
+          error instanceof Error ? error.message : 'Failed to initialize quiz chatbot session.';
         setErrorText(message);
         setMessages([createMessage('bot', OPENING_MESSAGE)]);
       }
     };
-
     syncSession();
-
-    return () => {
-      isCancelled = true;
-    };
+    return () => { isCancelled = true; };
   }, [canChat, currentUser?.id, currentUser?.role]);
 
   const handleSend = async () => {
     const trimmedInput = input.trim();
-    if (!trimmedInput || isTyping || !canChat || !currentUser || isSessionClosed) {
-      return;
-    }
+    if (!trimmedInput || isTyping || !canChat || !currentUser || isSessionClosed) return;
 
     const userMessage = createMessage('user', trimmedInput);
-
     setMessages((prev) => [...prev, userMessage]);
     setInput('');
     setIsTyping(true);
     setErrorText(null);
+
+    // Reset textarea height
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
 
     try {
       const result = await apiService.sendQuizChatMessage(trimmedInput, {
         id: currentUser.id,
         role: currentUser.role,
       });
-
       setMessages((prev) => [...prev, createMessage('bot', result.reply)]);
       setIsSessionClosed(Boolean(result.sessionEnded));
     } catch (error) {
@@ -147,10 +150,17 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
       handleSend();
     }
+  };
+
+  const handleCopy = (id: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
   };
 
   const clearChat = () => {
@@ -163,11 +173,7 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
 
   const startNewSession = async () => {
     clearChat();
-
-    if (!canChat || !currentUser) {
-      return;
-    }
-
+    if (!canChat || !currentUser) return;
     setIsTyping(true);
     try {
       const reset = await apiService.resetQuizChatSession({
@@ -186,159 +192,238 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
   return (
     <div className="flex flex-col h-[calc(100vh-80px)] max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
       
-      {/* Header Area */}
-      <div className="flex-none bg-white rounded-t-3xl border border-slate-200 p-6 flex items-center justify-between shadow-sm">
+      {/* ─── Header ─── */}
+      <div className="flex-none glass-panel rounded-t-3xl p-5 sm:p-6 flex items-center justify-between shadow-sm border border-slate-200/60">
         <div className="flex items-center gap-4">
-          <div className="bg-indigo-100 p-3 rounded-2xl">
-            <Bot className="w-8 h-8 text-indigo-600" />
+          <div className="relative">
+            <div className="bg-gradient-to-br from-indigo-500 to-violet-600 p-3 rounded-2xl shadow-lg shadow-indigo-200/50">
+              <Bot className="w-7 h-7 text-white" />
+            </div>
+            <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full" />
           </div>
           <div>
-            <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2">
+            <h1 className="text-xl sm:text-2xl font-black text-slate-900 flex items-center gap-2">
               Quiz Assistant <Sparkles className="w-5 h-5 text-amber-500" />
             </h1>
-            <p className="text-sm font-medium text-slate-500 flex items-center gap-2">
-              <span className="relative flex h-2.5 w-2.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-              </span>
-              {canChat ? 'Azure AI Core Online' : 'Read-Only Mode'}
+            <p className="text-xs sm:text-sm font-medium text-slate-500 flex items-center gap-2">
+              {canChat ? 'Azure AI Core • Online' : 'Read-Only Mode'}
             </p>
           </div>
         </div>
-        
-        <div className="flex items-center gap-3">
-          <button 
+
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* Stats Badge */}
+          {questionCount > 0 && (
+            <div className="hidden sm:flex items-center gap-2 px-3 py-2 bg-indigo-50 rounded-xl border border-indigo-100">
+              <BarChart3 className="w-4 h-4 text-indigo-500" />
+              <span className="text-xs font-bold text-indigo-700">{questionCount} answered</span>
+            </div>
+          )}
+          <button
             onClick={clearChat}
-            className="flex items-center gap-2 px-4 py-2 border border-slate-200 rounded-xl text-slate-600 font-semibold hover:bg-slate-50 hover:text-slate-900 transition-colors"
+            className="flex items-center gap-2 p-2.5 sm:px-4 sm:py-2.5 border border-slate-200 rounded-xl text-slate-500 font-semibold hover:bg-slate-50 hover:text-slate-900 transition-colors"
+            title="Clear Chat"
           >
             <Trash2 className="w-4 h-4" />
-            <span className="hidden sm:inline">Clear Chat</span>
+            <span className="hidden sm:inline text-sm">Clear</span>
           </button>
-          <button 
+          <button
             onClick={startNewSession}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 rounded-xl font-bold hover:bg-indigo-100 transition-colors"
+            className="flex items-center gap-2 p-2.5 sm:px-4 sm:py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-colors shadow-sm shadow-indigo-200"
+            title="Start New Session"
           >
-            <MessageSquarePlus className="w-4 h-4" />
-            <span className="hidden sm:inline">New Session</span>
+            <RotateCcw className="w-4 h-4" />
+            <span className="hidden sm:inline text-sm">New Session</span>
           </button>
         </div>
       </div>
 
-      {/* Chat Conversation Area */}
-      <div className="flex-1 overflow-y-auto bg-slate-50/50 border-x border-slate-200 p-4 sm:p-6 space-y-6">
+      {/* ─── Chat Conversation Area ─── */}
+      <div
+        ref={chatContainerRef}
+        className="flex-1 overflow-y-auto bg-gradient-to-b from-slate-50/80 to-white border-x border-slate-200/60 p-4 sm:p-6 space-y-5 relative custom-scrollbar"
+      >
         <AnimatePresence initial={false}>
           {messages.map((msg) => (
             <motion.div
               key={msg.id}
-              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+              initial={{ opacity: 0, y: 12, scale: 0.97 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={{ duration: 0.3 }}
-              className={`flex items-end gap-3 max-w-[85%] ${msg.role === 'user' ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
+              className={`flex items-end gap-3 max-w-[85%] ${
+                msg.role === 'user' ? 'ml-auto flex-row-reverse' : 'mr-auto'
+              }`}
             >
-              <div className={`shrink-0 w-10 h-10 rounded-full flex items-center justify-center shadow-sm ${msg.role === 'user' ? 'bg-indigo-600' : 'bg-white border border-slate-200'}`}>
+              {/* Avatar */}
+              <div
+                className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center shadow-sm ${
+                  msg.role === 'user'
+                    ? 'bg-gradient-to-br from-indigo-500 to-violet-600'
+                    : 'bg-white border border-slate-200'
+                }`}
+              >
                 {msg.role === 'user' ? (
-                  <User className="w-5 h-5 text-white" />
+                  <User className="w-4 h-4 text-white" />
                 ) : (
-                  <Bot className="w-5 h-5 text-indigo-600" />
+                  <Bot className="w-4 h-4 text-indigo-600" />
                 )}
               </div>
-              
-              <div 
-                className={`flex flex-col gap-1 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
-              >
-                <div 
-                  className={`px-5 py-4 shadow-sm text-[15px] leading-relaxed ${
-                    msg.role === 'user' 
-                      ? 'bg-indigo-600 text-white rounded-[2rem] rounded-br-[0.5rem]' 
-                      : 'bg-white border border-slate-100 text-slate-800 rounded-[2rem] rounded-bl-[0.5rem]'
-                  }`}
-                  style={{ whiteSpace: 'pre-wrap' }}
-                >
-                  {msg.text}
+
+              {/* Message Bubble */}
+              <div className={`flex flex-col gap-1 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                <div className="relative group">
+                  <div
+                    className={`px-5 py-3.5 shadow-sm text-[15px] leading-relaxed ${
+                      msg.role === 'user'
+                        ? 'bg-gradient-to-br from-indigo-600 to-violet-600 text-white rounded-[1.5rem] rounded-br-[0.4rem]'
+                        : 'bg-white border border-slate-100 text-slate-800 rounded-[1.5rem] rounded-bl-[0.4rem]'
+                    }`}
+                    style={{ whiteSpace: 'pre-wrap' }}
+                  >
+                    {msg.text}
+                  </div>
+                  {/* Copy button (bot messages only) */}
+                  {msg.role === 'bot' && (
+                    <button
+                      onClick={() => handleCopy(msg.id, msg.text)}
+                      className="absolute -right-2 -top-2 p-1.5 rounded-lg bg-white border border-slate-100 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-indigo-600"
+                    >
+                      {copiedId === msg.id ? (
+                        <Check className="w-3 h-3 text-emerald-500" />
+                      ) : (
+                        <Copy className="w-3 h-3" />
+                      )}
+                    </button>
+                  )}
                 </div>
-                <span className="text-xs font-medium text-slate-400 px-2">
+                <span className="text-[10px] font-medium text-slate-400 px-2">
                   {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>
               </div>
             </motion.div>
           ))}
-          
+
+          {/* Typing Indicator */}
           {isTyping && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -5 }}
               className="flex items-end gap-3 max-w-[85%] mr-auto"
             >
-              <div className="shrink-0 w-10 h-10 rounded-full bg-white border border-slate-200 flex items-center justify-center shadow-sm">
-                <Bot className="w-5 h-5 text-indigo-600" />
+              <div className="shrink-0 w-9 h-9 rounded-full bg-white border border-slate-200 flex items-center justify-center shadow-sm">
+                <Bot className="w-4 h-4 text-indigo-600" />
               </div>
-              <div className="px-5 py-4 shadow-sm bg-white border border-slate-100 rounded-[2rem] rounded-bl-[0.5rem] flex items-center gap-2">
-                <Loader2 className="w-4 h-4 text-indigo-500 animate-spin" />
-                <span className="text-sm font-medium text-slate-500">AI is thinking...</span>
+              <div className="px-5 py-4 shadow-sm bg-white border border-slate-100 rounded-[1.5rem] rounded-bl-[0.4rem] flex items-center gap-2">
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+                <span className="typing-dot" />
               </div>
             </motion.div>
           )}
         </AnimatePresence>
         <div ref={messagesEndRef} />
+
+        {/* Scroll to Bottom Button */}
+        <AnimatePresence>
+          {showScrollBtn && (
+            <motion.button
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.8 }}
+              onClick={scrollToBottom}
+              className="sticky bottom-4 mx-auto flex items-center gap-1.5 px-4 py-2 bg-white/90 backdrop-blur border border-slate-200 rounded-full shadow-lg text-xs font-bold text-slate-600 hover:text-indigo-600 hover:border-indigo-200 transition-colors z-10"
+            >
+              <ArrowDown className="w-3.5 h-3.5" />
+              Scroll to bottom
+            </motion.button>
+          )}
+        </AnimatePresence>
       </div>
 
-      {/* Input Area */}
-      <div className="flex-none bg-white border border-slate-200 rounded-b-3xl p-4 sm:p-6 shadow-sm">
+      {/* ─── Input Area ─── */}
+      <div className="flex-none bg-white border border-slate-200/60 rounded-b-3xl p-4 sm:p-6 shadow-sm">
+        {/* Unauthorized Warning */}
         {!canChat && (
           <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 flex items-start gap-3">
-            <Lock className="w-4 h-4 mt-0.5" />
+            <Lock className="w-4 h-4 mt-0.5 shrink-0" />
             <span>Unregistered users can view this page, but only logged-in student or tutor accounts can chat.</span>
           </div>
         )}
 
+        {/* Error Alert */}
         {errorText && (
           <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
             {errorText}
           </div>
         )}
-        
-        {/* Quick Actions / Suggestions */}
-        {messages.length === 1 && canChat && !isSessionClosed && (
+
+        {/* Quick Actions — only show at start */}
+        {messages.length <= 2 && canChat && !isSessionClosed && (
           <div className="flex flex-wrap gap-2 mb-4">
             {['Mathematics', 'Physics', 'ICT', 'How does this quiz work?'].map((suggestion, idx) => (
               <button
                 key={idx}
                 onClick={() => setInput(suggestion)}
-                className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-full text-sm font-semibold text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 transition-colors flex items-center gap-2"
+                className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-full text-sm font-semibold text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 transition-all flex items-center gap-2"
               >
-                {suggestion === 'How does this quiz work?' ? <HelpCircle className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />}
+                {suggestion === 'How does this quiz work?' ? (
+                  <HelpCircle className="w-4 h-4" />
+                ) : (
+                  <Zap className="w-3.5 h-3.5" />
+                )}
                 {suggestion}
               </button>
             ))}
           </div>
         )}
 
+        {/* Session Ended Actions */}
+        {isSessionClosed && canChat && (
+          <div className="mb-4 flex flex-col sm:flex-row items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-2xl">
+            <div className="flex items-center gap-2 text-emerald-700 font-bold text-sm">
+              <Check className="w-5 h-5" />
+              Quiz session completed!
+            </div>
+            <button
+              onClick={startNewSession}
+              className="px-4 py-2 bg-emerald-600 text-white rounded-xl font-bold text-sm hover:bg-emerald-700 transition-colors flex items-center gap-2"
+            >
+              <MessageSquarePlus className="w-4 h-4" />
+              Start New Quiz
+            </button>
+          </div>
+        )}
+
         {/* Input Bar */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-end gap-3">
           <div className="flex-1 relative">
-            <input
-              type="text"
+            <textarea
+              ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={inputPlaceholder}
-              className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-base font-medium rounded-2xl px-6 py-4 outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all placeholder:text-slate-400"
+              rows={1}
+              className="auto-resize-textarea w-full bg-slate-50 border border-slate-200 text-slate-900 text-[15px] font-medium rounded-2xl px-5 py-4 outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all placeholder:text-slate-400 resize-none"
               disabled={isTyping || !canChat || isSessionClosed}
             />
           </div>
-          <button
+          <motion.button
+            whileHover={input.trim() && !isTyping ? { scale: 1.05 } : {}}
+            whileTap={input.trim() && !isTyping ? { scale: 0.95 } : {}}
             onClick={handleSend}
             disabled={!input.trim() || isTyping || !canChat || isSessionClosed}
-            className="flex-none w-14 h-14 bg-indigo-600 text-white rounded-2xl flex items-center justify-center hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm shadow-indigo-200"
+            className="flex-none w-13 h-13 bg-gradient-to-br from-indigo-600 to-violet-600 text-white rounded-2xl flex items-center justify-center hover:shadow-lg hover:shadow-indigo-200 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:shadow-none transition-all"
           >
-            <Send className="w-6 h-6 ml-1" />
-          </button>
+            <Send className="w-5 h-5 ml-0.5" />
+          </motion.button>
         </div>
-        <p className="text-center text-xs font-medium text-slate-400 mt-4">
+
+        <p className="text-center text-[11px] font-medium text-slate-400 mt-3">
           The AI might make mistakes. Consider verifying important academic information.
         </p>
       </div>
-
     </div>
   );
 };

@@ -57,17 +57,34 @@ export interface Course {
   title: string;
   subject: string;
   description: string;
+  isFree: boolean;
   price: number;
   thumbnail: string;
   modules: CourseModule[];
   enrolledStudents: string[];
 }
 
+export interface CourseModuleResource {
+  name: string;
+  url: string;
+}
+
 export interface CourseModule {
   id: string;
   title: string;
   videoUrl: string;
-  resources: string[];
+  resources: CourseModuleResource[];
+}
+
+export interface CourseEnrollment {
+  id: string;
+  courseId: string;
+  studentId: string;
+  completedModuleIds: string[];
+  progress: number;
+  enrolledAt: string;
+  completedAt?: string;
+  certificateId?: string;
 }
 
 export interface Quiz {
@@ -99,10 +116,12 @@ export interface StudyPlan {
 
 export interface Resource {
   id: string;
+  tutorId?: string;
   title: string;
   type: 'Paper' | 'Article' | 'Note';
   subject: string;
   url: string;
+  description?: string;
   isFree: boolean;
 }
 

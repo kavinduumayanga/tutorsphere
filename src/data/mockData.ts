@@ -8,7 +8,7 @@ export const MOCK_TUTORS: Tutor[] = [
     email: 'aruni@example.com',
     role: 'tutor',
     qualifications: 'PhD in Computer Science',
-    subjects: ['ICT', 'Software Engineering'],
+    subjects: ['Tech', 'Engineering'],
     teachingLevel: 'University',
     pricePerHour: 2500,
     rating: 4.9,
@@ -28,7 +28,7 @@ export const MOCK_TUTORS: Tutor[] = [
     email: 'kamal@example.com',
     role: 'tutor',
     qualifications: 'BSc in Mathematics',
-    subjects: ['Mathematics', 'Physics'],
+    subjects: ['Maths', 'Science'],
     teachingLevel: 'School',
     pricePerHour: 1500,
     rating: 4.7,
@@ -47,7 +47,7 @@ export const MOCK_TUTORS: Tutor[] = [
     email: 'dilini@example.com',
     role: 'tutor',
     qualifications: 'MSc in Applied Physics',
-    subjects: ['Physics', 'Mathematics'],
+    subjects: ['Science', 'Maths'],
     teachingLevel: 'Both',
     pricePerHour: 1800,
     rating: 4.8,
@@ -66,7 +66,7 @@ export const MOCK_TUTORS: Tutor[] = [
     email: 'sameera@example.com',
     role: 'tutor',
     qualifications: 'PhD in Organic Chemistry',
-    subjects: ['Chemistry'],
+    subjects: ['Science'],
     teachingLevel: 'University',
     pricePerHour: 3000,
     rating: 5.0,
@@ -92,11 +92,34 @@ export const MOCK_COURSES: Course[] = [
     title: 'Advanced Web Development with React',
     subject: 'ICT',
     description: 'Master modern frontend development with React, TypeScript, and Tailwind CSS.',
-    price: 5000,
+    isFree: true,
+    price: 0,
     thumbnail: 'https://picsum.photos/seed/react/400/250',
     modules: [
-      { id: 'm1', title: 'Introduction to React', videoUrl: '#', resources: ['Notes.pdf'] },
-      { id: 'm2', title: 'State Management', videoUrl: '#', resources: ['State.pdf'] }
+      {
+        id: 'm1',
+        title: 'Introduction to React',
+        videoUrl: '#',
+        resources: [{ name: 'Notes.pdf', url: '#' }],
+      },
+      {
+        id: 'm2',
+        title: 'State Management',
+        videoUrl: '#',
+        resources: [{ name: 'State.pdf', url: '#' }],
+      },
+      {
+        id: 'm3',
+        title: 'Advanced Hooks and Context API',
+        videoUrl: '#',
+        resources: [{ name: 'Hooks.pdf', url: '#' }],
+      },
+      {
+        id: 'm4',
+        title: 'Testing React Applications',
+        videoUrl: '#',
+        resources: [{ name: 'Testing.pdf', url: '#' }],
+      },
     ],
     enrolledStudents: ['s1']
   },
@@ -106,20 +129,44 @@ export const MOCK_COURSES: Course[] = [
     title: 'Pure Mathematics for A/L',
     subject: 'Mathematics',
     description: 'Complete guide to A/L Pure Mathematics with past paper discussions.',
-    price: 3500,
+    isFree: true,
+    price: 0,
     thumbnail: 'https://picsum.photos/seed/math/400/250',
     modules: [
-      { id: 'm1', title: 'Calculus Basics', videoUrl: '#', resources: ['Calculus.pdf'] }
+      {
+        id: 'm1',
+        title: 'Calculus Basics',
+        videoUrl: '#',
+        resources: [{ name: 'Calculus.pdf', url: '#' }],
+      },
     ],
     enrolledStudents: []
   }
 ];
 
 export const MOCK_RESOURCES: Resource[] = [
-  { id: 'r1', title: 'A/L ICT Past Paper 2023', type: 'Paper', subject: 'ICT', url: '#', isFree: true },
-  { id: 'r2', title: 'Physics Mechanics Notes', type: 'Note', subject: 'Physics', url: '#', isFree: true }
+  {
+    id: 'r1',
+    tutorId: 't1',
+    title: 'A/L ICT Past Paper 2023',
+    type: 'Paper',
+    subject: 'ICT',
+    url: '#',
+    description: 'Solved past paper with marking scheme and model answers.',
+    isFree: true,
+  },
+  {
+    id: 'r2',
+    tutorId: 't3',
+    title: 'Physics Mechanics Notes',
+    type: 'Note',
+    subject: 'Physics',
+    url: '#',
+    description: 'Concise theory notes and worked examples for mechanics.',
+    isFree: true,
+  }
 ];
 
-export const STEM_SUBJECTS = ['Mathematics', 'Physics', 'Chemistry', 'Biology', 'ICT', 'Computer Science', 'Software Engineering'];
+export const STEM_SUBJECTS = ['Maths', 'Science', 'Engineering', 'Tech', 'ICT'];
 
-export type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'register' | 'dashboard';
+export type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'register' | 'dashboard' | 'about';

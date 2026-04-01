@@ -84,6 +84,10 @@ Use `.env.example` as a template.
 Required:
 
 - `MONGODB_URI`: MongoDB connection string
+- `AZURE_OPENAI_ENDPOINT`: Azure OpenAI resource endpoint
+- `AZURE_OPENAI_API_KEY`: Azure OpenAI API key
+- `AZURE_OPENAI_DEPLOYMENT`: Azure OpenAI chat deployment name
+- `AZURE_OPENAI_API_VERSION`: Azure OpenAI API version for chat completions
 
 Common:
 

@@ -6,13 +6,17 @@ export interface ICourse extends Document {
   title: string;
   subject: string;
   description: string;
+  isFree: boolean;
   price: number;
   thumbnail: string;
   modules: {
     id: string;
     title: string;
     videoUrl: string;
-    resources: string[];
+    resources: {
+      name: string;
+      url: string;
+    }[];
   }[];
   enrolledStudents: string[];
 }
@@ -23,13 +27,15 @@ const CourseSchema: Schema = new Schema({
   title: { type: String, required: true },
   subject: { type: String, required: true },
   description: { type: String, required: true },
+  isFree: { type: Boolean, required: true, default: false },
   price: { type: Number, required: true },
   thumbnail: { type: String, required: true },
   modules: [{
     id: { type: String, required: true },
     title: { type: String, required: true },
     videoUrl: { type: String, required: true },
-    resources: [{ type: String }]
+    // Keep mixed for backward compatibility with legacy string[] data.
+    resources: [{ type: Schema.Types.Mixed }]
   }],
   enrolledStudents: [{ type: String }]
 }, {

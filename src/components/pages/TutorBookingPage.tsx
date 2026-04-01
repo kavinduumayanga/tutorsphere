@@ -2,6 +2,8 @@ import React, { useState, useMemo, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
   Calendar,
   Clock,
   Globe,
@@ -15,8 +17,6 @@ import {
   PartyPopper,
   CalendarCheck,
   User as UserIcon,
-  Lock,
-  Info,
 } from "lucide-react";
 import { formatLkr } from "../../utils/currency";
 
@@ -26,78 +26,172 @@ interface TutorBookingPageProps {
   onConfirmBooking: (slotId: string) => void;
 }
 
-// Generate the next 7 days
-const today = new Date();
-const next7Days = Array.from({ length: 7 }, (_, i) => {
-  const d = new Date(today);
-  d.setDate(today.getDate() + i);
-  return d;
-});
+const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const MONTH_LABEL_FORMATTER = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" });
+const DAY_KEYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
-const CONSTANT_SLOTS = [
-  "09:00 AM", "09:30 AM", "10:00 AM", "10:30 AM",
-  "11:00 AM", "11:30 AM", "02:00 PM", "02:30 PM",
-  "03:00 PM", "04:00 PM", "05:00 PM"
-];
-
-const SESSION_DURATION_MINUTES = 60;
-
-/**
- * Parse a 12-hour time string like "09:30 AM" into total minutes since midnight.
- */
-const parseTimeToMinutes = (time: string): number => {
-  const match = time.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-  if (!match) return 0;
-  let hours = parseInt(match[1], 10);
-  const minutes = parseInt(match[2], 10);
-  const period = match[3].toUpperCase();
-  if (period === "AM" && hours === 12) hours = 0;
-  if (period === "PM" && hours !== 12) hours += 12;
-  return hours * 60 + minutes;
+type CalendarDayCell = {
+  date: Date;
+  isCurrentMonth: boolean;
 };
 
-/**
- * Return the set of slot strings that overlap with a 1-hour window starting at `selectedTime`.
- *
- * Two slots conflict if their 1-hour windows overlap:
- *   slotStart < selectedStart + SESSION_DURATION  AND
- *   selectedStart < slotStart + SESSION_DURATION
- *
- * We exclude the selected slot itself from the result.
- */
-const getConflictingSlots = (selectedTime: string, allSlots: string[]): Set<string> => {
-  const selectedStart = parseTimeToMinutes(selectedTime);
-  const selectedEnd = selectedStart + SESSION_DURATION_MINUTES;
-  const conflicts = new Set<string>();
+type TutorAvailabilitySlot = {
+  id?: string;
+  day?: string;
+  startTime?: string;
+  endTime?: string;
+  isBooked?: boolean;
+};
 
-  for (const slot of allSlots) {
-    if (slot === selectedTime) continue;
-    const slotStart = parseTimeToMinutes(slot);
-    const slotEnd = slotStart + SESSION_DURATION_MINUTES;
-    // Two intervals [a, a+dur) and [b, b+dur) overlap when a < b+dur AND b < a+dur
-    if (selectedStart < slotEnd && slotStart < selectedEnd) {
-      conflicts.add(slot);
-    }
+type BookingSlotOption = {
+  id: string;
+  startTime: string;
+  endTime: string;
+  label: string;
+};
+
+const startOfDay = (date: Date): Date => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+const startOfMonth = (date: Date): Date => new Date(date.getFullYear(), date.getMonth(), 1);
+
+const addDays = (date: Date, days: number): Date => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return startOfDay(next);
+};
+
+const isSameDay = (a: Date, b: Date): boolean => (
+  a.getFullYear() === b.getFullYear() &&
+  a.getMonth() === b.getMonth() &&
+  a.getDate() === b.getDate()
+);
+
+const buildCalendarDays = (month: Date): CalendarDayCell[] => {
+  const year = month.getFullYear();
+  const monthIndex = month.getMonth();
+  const firstDay = new Date(year, monthIndex, 1);
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+
+  // Convert Sunday-first (0..6) into Monday-first (0..6)
+  const leadingDays = (firstDay.getDay() + 6) % 7;
+  const cells: CalendarDayCell[] = [];
+
+  for (let i = leadingDays; i > 0; i--) {
+    cells.push({
+      date: new Date(year, monthIndex, 1 - i),
+      isCurrentMonth: false,
+    });
   }
 
-  return conflicts;
+  for (let day = 1; day <= daysInMonth; day++) {
+    cells.push({
+      date: new Date(year, monthIndex, day),
+      isCurrentMonth: true,
+    });
+  }
+
+  while (cells.length % 7 !== 0) {
+    const lastDate = cells[cells.length - 1].date;
+    cells.push({
+      date: addDays(lastDate, 1),
+      isCurrentMonth: false,
+    });
+  }
+
+  return cells;
 };
 
-const groupSlotsByPeriod = (slots: string[]) => {
-  const morning: string[] = [];
-  const afternoon: string[] = [];
-  const evening: string[] = [];
+const BOOKING_MIN_DATE = startOfDay(new Date());
+const BOOKING_MAX_DATE = addDays(BOOKING_MIN_DATE, 59);
+
+const normalizeDayKey = (value: string | undefined): string | null => {
+  const cleaned = String(value || '').trim().toLowerCase();
+  if (!cleaned) {
+    return null;
+  }
+
+  if (cleaned.startsWith('mon')) return 'Mon';
+  if (cleaned.startsWith('tue')) return 'Tue';
+  if (cleaned.startsWith('wed')) return 'Wed';
+  if (cleaned.startsWith('thu')) return 'Thu';
+  if (cleaned.startsWith('fri')) return 'Fri';
+  if (cleaned.startsWith('sat')) return 'Sat';
+  if (cleaned.startsWith('sun')) return 'Sun';
+
+  return null;
+};
+
+const parseTimeToMinutes = (value: string | undefined): number | null => {
+  const match = String(value || '').trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    return null;
+  }
+
+  return (hours * 60) + minutes;
+};
+
+const formatTimeLabel = (value: string | undefined): string => {
+  const minutes = parseTimeToMinutes(value);
+  if (minutes === null) {
+    return String(value || '').trim();
+  }
+
+  const hour24 = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  const period = hour24 >= 12 ? 'PM' : 'AM';
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return `${String(hour12).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${period}`;
+};
+
+const getDayKeyForDate = (date: Date): string => DAY_KEYS[date.getDay()];
+
+const buildAvailabilityForDate = (availability: TutorAvailabilitySlot[], date: Date): BookingSlotOption[] => {
+  const targetDayKey = getDayKeyForDate(date);
+
+  return availability
+    .filter((slot) => {
+      const dayKey = normalizeDayKey(slot.day);
+      return Boolean(dayKey) && dayKey === targetDayKey && !slot.isBooked;
+    })
+    .map((slot, index) => ({
+      id: slot.id || `${targetDayKey}-${slot.startTime || 'start'}-${slot.endTime || 'end'}-${index}`,
+      startTime: String(slot.startTime || ''),
+      endTime: String(slot.endTime || ''),
+      label: `${formatTimeLabel(slot.startTime)} - ${formatTimeLabel(slot.endTime)}`,
+    }))
+    .filter((slot) => {
+      const start = parseTimeToMinutes(slot.startTime);
+      const end = parseTimeToMinutes(slot.endTime);
+      return start !== null && end !== null && start < end;
+    })
+    .sort((a, b) => {
+      const aStart = parseTimeToMinutes(a.startTime) || 0;
+      const bStart = parseTimeToMinutes(b.startTime) || 0;
+      return aStart - bStart;
+    });
+};
+
+const groupSlotsByPeriod = (slots: BookingSlotOption[]) => {
+  const morning: BookingSlotOption[] = [];
+  const afternoon: BookingSlotOption[] = [];
+  const evening: BookingSlotOption[] = [];
 
   slots.forEach((slot) => {
-    if (slot.includes("AM")) {
+    const startMinutes = parseTimeToMinutes(slot.startTime);
+    const hour = startMinutes === null ? 0 : Math.floor(startMinutes / 60);
+
+    if (hour < 12) {
       morning.push(slot);
+    } else if (hour < 17) {
+      afternoon.push(slot);
     } else {
-      const hour = parseInt(slot.split(":")[0]);
-      if (hour < 5 || hour === 12) {
-        afternoon.push(slot);
-      } else {
-        evening.push(slot);
-      }
+      evening.push(slot);
     }
   });
 
@@ -105,8 +199,9 @@ const groupSlotsByPeriod = (slots: string[]) => {
 };
 
 export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBookingPageProps) {
-  const [selectedDate, setSelectedDate] = useState<Date>(next7Days[0]);
-  const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<Date>(() => BOOKING_MIN_DATE);
+  const [calendarMonth, setCalendarMonth] = useState<Date>(() => startOfMonth(BOOKING_MIN_DATE));
+  const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [isConfirming, setIsConfirming] = useState(false);
   const [bookingSuccess, setBookingSuccess] = useState(false);
 
@@ -129,41 +224,63 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
 
   const displayName = tutor.user?.name || tutor.name || `${tutor.firstName || ''} ${tutor.lastName || ''}`.trim() || "Tutor";
   const formattedHourlyRate = formatLkr(tutor.pricePerHour);
+  const tutorAvailability = Array.isArray(tutor.availability) ? tutor.availability : [];
 
-  // Deterministic available slots per date
-  const availableSlots = CONSTANT_SLOTS.filter((_, i) => (selectedDate.getDate() + i) % 3 !== 0);
-  const grouped = useMemo(() => groupSlotsByPeriod(availableSlots), [selectedDate]);
+  const availableSlots = useMemo(
+    () => buildAvailabilityForDate(tutorAvailability, selectedDate),
+    [tutorAvailability, selectedDate]
+  );
+  const grouped = useMemo(() => groupSlotsByPeriod(availableSlots), [availableSlots]);
 
-  // Conflicting slots — recalculated whenever selection changes
-  const conflictingSlots = useMemo(
-    () => (selectedSlot ? getConflictingSlots(selectedSlot, availableSlots) : new Set<string>()),
-    [selectedSlot, selectedDate]
+  const selectedSlot = useMemo(
+    () => availableSlots.find((slot) => slot.id === selectedSlotId) || null,
+    [availableSlots, selectedSlotId]
   );
 
   // Slot count per date for badge
-  const getSlotCount = (date: Date) => CONSTANT_SLOTS.filter((_, i) => (date.getDate() + i) % 3 !== 0).length;
+  const getSlotCount = useCallback((date: Date) => buildAvailabilityForDate(tutorAvailability, date).length, [tutorAvailability]);
+
+  const calendarDays = useMemo(() => buildCalendarDays(calendarMonth), [calendarMonth]);
+  const minMonth = useMemo(() => startOfMonth(BOOKING_MIN_DATE), []);
+  const maxMonth = useMemo(() => startOfMonth(BOOKING_MAX_DATE), []);
+
+  const canGoPrevMonth = calendarMonth.getTime() > minMonth.getTime();
+  const canGoNextMonth = calendarMonth.getTime() < maxMonth.getTime();
+
+  const isDateInBookingRange = useCallback((date: Date) => {
+    const day = startOfDay(date);
+    return day.getTime() >= BOOKING_MIN_DATE.getTime() && day.getTime() <= BOOKING_MAX_DATE.getTime();
+  }, []);
+
+  const handleSelectDate = useCallback((date: Date) => {
+    if (!isDateInBookingRange(date)) {
+      return;
+    }
+
+    setSelectedDate(startOfDay(date));
+    setCalendarMonth(startOfMonth(date));
+    setSelectedSlotId(null);
+  }, [isDateInBookingRange]);
 
   const handleSlotClick = useCallback(
-    (time: string) => {
+    (slotId: string) => {
       // If already selected, deselect
-      if (selectedSlot === time) {
-        setSelectedSlot(null);
+      if (selectedSlotId === slotId) {
+        setSelectedSlotId(null);
         return;
       }
-      // Don't allow selecting a conflicting (locked) slot
-      if (conflictingSlots.has(time)) return;
-      setSelectedSlot(time);
+      setSelectedSlotId(slotId);
     },
-    [selectedSlot, conflictingSlots]
+    [selectedSlotId]
   );
 
   const handleConfirm = async () => {
-    if (selectedSlot) {
+    if (selectedSlotId) {
       setIsConfirming(true);
       await new Promise((r) => setTimeout(r, 1200));
       setIsConfirming(false);
       setBookingSuccess(true);
-      onConfirmBooking(`${selectedDate.toISOString().split('T')[0]}-${selectedSlot}`);
+      onConfirmBooking(selectedSlotId);
     }
   };
 
@@ -264,7 +381,7 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
                   </div>
                   <div>
                     <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Time</div>
-                    <div className="font-bold text-slate-900 text-sm">{selectedSlot} — 1 Hour Session</div>
+                    <div className="font-bold text-slate-900 text-sm">{selectedSlot?.label || 'Selected session time'}</div>
                   </div>
                 </div>
 
@@ -302,11 +419,11 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
     );
   }
 
-  // ─── Slot rendering with conflict awareness ───
+  // ─── Slot rendering by tutor-defined availability ───
   const renderTimeSection = (
     title: string,
     icon: React.ReactNode,
-    slots: string[],
+    slots: BookingSlotOption[],
     bgColor: string,
     _iconColor: string
   ) => {
@@ -321,29 +438,24 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
           <span className="text-xs font-bold text-slate-400">({slots.length} slots)</span>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
-          {slots.map((time) => {
-            const isSelected = selectedSlot === time;
-            const isLocked = conflictingSlots.has(time);
+          {slots.map((slot) => {
+            const isSelected = selectedSlotId === slot.id;
 
             return (
               <motion.button
-                key={time}
-                whileHover={!isLocked ? { y: -2 } : {}}
-                whileTap={!isLocked ? { scale: 0.95 } : {}}
-                onClick={() => handleSlotClick(time)}
-                disabled={isLocked}
+                key={slot.id}
+                whileHover={{ y: -2 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => handleSlotClick(slot.id)}
                 className={`py-3 px-3 rounded-xl border-2 font-bold transition-all text-sm flex items-center justify-center gap-2 relative ${
                   isSelected
                     ? "border-indigo-600 bg-indigo-600 text-white shadow-md shadow-indigo-200"
-                    : isLocked
-                      ? "border-slate-100 bg-slate-50 text-slate-300 cursor-not-allowed line-through"
-                      : "border-slate-100 bg-white text-slate-700 hover:border-indigo-300 hover:text-indigo-700 shadow-sm"
+                    : "border-slate-100 bg-white text-slate-700 hover:border-indigo-300 hover:text-indigo-700 shadow-sm"
                 }`}
-                title={isLocked ? `Overlaps with ${selectedSlot} booking window` : ""}
+                title={slot.label}
               >
                 {isSelected && <CheckCircle className="w-3.5 h-3.5 shrink-0" />}
-                {isLocked && <Lock className="w-3 h-3 shrink-0 text-slate-300" />}
-                {time}
+                {slot.label}
               </motion.button>
             );
           })}
@@ -420,47 +532,102 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
                     Which day works best?
                   </h3>
 
-                  <div className="flex gap-3 overflow-x-auto pb-4 custom-scrollbar scroll-snap-x">
-                    {next7Days.map((date, idx) => {
-                      const isSelected = date.toDateString() === selectedDate.toDateString();
-                      const dayName = date.toLocaleDateString("en-US", { weekday: "short" });
-                      const dayNum = date.getDate();
-                      const monthName = date.toLocaleDateString("en-US", { month: "short" });
-                      const slotCount = getSlotCount(date);
+                  <div className="rounded-3xl border border-slate-200 bg-gradient-to-br from-white to-slate-50/80 p-4 sm:p-5 shadow-sm">
+                    <div className="flex items-center justify-between mb-4 gap-3">
+                      <div>
+                        <p className="text-sm font-extrabold text-slate-900">Pick Your Session Date</p>
+                        <p className="text-xs font-medium text-slate-500 mt-0.5">Book up to 60 days in advance</p>
+                      </div>
 
-                      return (
-                        <motion.button
-                          key={idx}
-                          whileHover={{ y: -2 }}
-                          whileTap={{ scale: 0.95 }}
-                          onClick={() => { setSelectedDate(date); setSelectedSlot(null); }}
-                          className={`shrink-0 snap-start w-[90px] py-4 rounded-2xl border-2 transition-all flex flex-col items-center gap-1 relative ${
-                            isSelected
-                              ? "border-indigo-600 bg-indigo-50 text-indigo-700 shadow-md shadow-indigo-100"
-                              : "border-slate-100 bg-white text-slate-600 hover:border-indigo-200 hover:bg-slate-50"
-                          }`}
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => canGoPrevMonth && setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}
+                          disabled={!canGoPrevMonth}
+                          className="w-9 h-9 rounded-xl border border-slate-200 bg-white text-slate-600 hover:text-indigo-600 hover:border-indigo-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
+                          aria-label="Previous month"
                         >
-                          <span className={`text-xs font-bold uppercase tracking-wider ${isSelected ? "text-indigo-500" : "text-slate-400"}`}>
-                            {dayName}
-                          </span>
-                          <span className={`text-2xl font-black ${isSelected ? "text-indigo-700" : "text-slate-900"}`}>
-                            {dayNum}
-                          </span>
-                          <span className={`text-[10px] font-bold uppercase tracking-wider ${isSelected ? "text-indigo-500" : "text-slate-400"}`}>
-                            {monthName}
-                          </span>
-                          <span className={`mt-1 text-[9px] font-black px-2 py-0.5 rounded-full ${
-                            isSelected
-                              ? 'bg-indigo-600 text-white'
-                              : slotCount > 0
-                                ? 'bg-emerald-50 text-emerald-600'
-                                : 'bg-slate-50 text-slate-400'
-                          }`}>
-                            {slotCount} slot{slotCount !== 1 ? 's' : ''}
-                          </span>
-                        </motion.button>
-                      );
-                    })}
+                          <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <div className="min-w-[140px] text-center text-sm font-black text-slate-800 px-2">
+                          {MONTH_LABEL_FORMATTER.format(calendarMonth)}
+                        </div>
+                        <button
+                          onClick={() => canGoNextMonth && setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))}
+                          disabled={!canGoNextMonth}
+                          className="w-9 h-9 rounded-xl border border-slate-200 bg-white text-slate-600 hover:text-indigo-600 hover:border-indigo-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
+                          aria-label="Next month"
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-7 gap-1.5 mb-1.5">
+                      {WEEKDAY_LABELS.map((day) => (
+                        <div key={day} className="text-center text-[11px] font-black uppercase tracking-wider text-slate-400 py-1">
+                          {day}
+                        </div>
+                      ))}
+                    </div>
+
+                    <AnimatePresence mode="wait" initial={false}>
+                      <motion.div
+                        key={calendarMonth.toISOString()}
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -6 }}
+                        transition={{ duration: 0.18 }}
+                        className="grid grid-cols-7 gap-1.5"
+                      >
+                        {calendarDays.map(({ date, isCurrentMonth }) => {
+                          const disabled = !isDateInBookingRange(date);
+                          const isSelected = isSameDay(date, selectedDate);
+                          const isToday = isSameDay(date, BOOKING_MIN_DATE);
+                          const slotCount = disabled ? 0 : getSlotCount(date);
+
+                          return (
+                            <motion.button
+                              key={date.toISOString()}
+                              whileHover={!disabled ? { y: -1.5 } : {}}
+                              whileTap={!disabled ? { scale: 0.96 } : {}}
+                              onClick={() => handleSelectDate(date)}
+                              disabled={disabled}
+                              className={`h-14 sm:h-16 rounded-xl border text-sm font-bold relative transition-all ${
+                                isSelected
+                                  ? "border-indigo-600 bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-200"
+                                  : !isCurrentMonth
+                                    ? "border-transparent bg-slate-50 text-slate-400"
+                                    : "border-slate-200 bg-white text-slate-700 hover:border-indigo-300 hover:shadow-sm"
+                              } ${disabled ? "opacity-35 cursor-not-allowed" : ""}`}
+                            >
+                              <span className="relative z-10">{date.getDate()}</span>
+
+                              {isToday && !isSelected && !disabled && (
+                                <span className="absolute inset-1 rounded-lg border border-indigo-200 pointer-events-none" />
+                              )}
+
+                              {!disabled && slotCount > 0 && (
+                                <span className={`absolute bottom-1.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full ${
+                                  isSelected ? "bg-white" : "bg-emerald-500"
+                                }`} />
+                              )}
+                            </motion.button>
+                          );
+                        })}
+                      </motion.div>
+                    </AnimatePresence>
+
+                    <div className="mt-4 p-3 rounded-2xl bg-indigo-50/70 border border-indigo-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-wider text-indigo-500">Selected Date</p>
+                        <p className="text-sm font-bold text-indigo-900">
+                          {selectedDate.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
+                        </p>
+                      </div>
+                      <span className="inline-flex items-center self-start sm:self-center text-[11px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full bg-white text-indigo-700 border border-indigo-100">
+                        {getSlotCount(selectedDate)} slot{getSlotCount(selectedDate) !== 1 ? "s" : ""} available
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -471,12 +638,6 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
                       <Clock className="w-5 h-5 text-indigo-500" />
                       Available Times
                     </h3>
-                    {selectedSlot && conflictingSlots.size > 0 && (
-                      <div className="flex items-center gap-1.5 text-xs font-bold text-amber-600 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-100">
-                        <Info className="w-3.5 h-3.5" />
-                        {conflictingSlots.size} overlapping slot{conflictingSlots.size !== 1 ? 's' : ''} locked
-                      </div>
-                    )}
                   </div>
 
                   <AnimatePresence mode="wait">
@@ -500,7 +661,7 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
                             <Clock className="w-7 h-7 text-slate-400" />
                           </div>
                           <p className="text-slate-600 font-bold text-lg">No slots available</p>
-                          <p className="text-sm text-slate-500 mt-1 font-medium">Please select another day.</p>
+                          <p className="text-sm text-slate-500 mt-1 font-medium">This tutor has not opened slots for this date yet.</p>
                         </div>
                       )}
                     </motion.div>
@@ -515,12 +676,6 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
                     <div className="flex items-center gap-1.5">
                       <div className="w-4 h-4 rounded bg-indigo-600 border-2 border-indigo-600" />
                       Selected
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-4 h-4 rounded bg-slate-50 border-2 border-slate-100 flex items-center justify-center">
-                        <Lock className="w-2.5 h-2.5 text-slate-300" />
-                      </div>
-                      Locked (overlapping)
                     </div>
                   </div>
                 </div>
@@ -572,13 +727,13 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
                     <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-0.5">Time</div>
                     <AnimatePresence mode="wait">
                       <motion.div
-                        key={selectedSlot || 'empty'}
+                        key={selectedSlot?.id || 'empty'}
                         initial={{ opacity: 0, y: 4 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -4 }}
                         className={`font-bold leading-tight text-sm ${selectedSlot ? "text-indigo-600" : "text-slate-400"}`}
                       >
-                        {selectedSlot ? `${selectedSlot} — 1 Hour` : "Select a time slot"}
+                        {selectedSlot ? selectedSlot.label : "Select a time slot"}
                       </motion.div>
                     </AnimatePresence>
                   </div>
@@ -616,9 +771,9 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
                 whileHover={{ scale: selectedSlot && !isConfirming ? 1.02 : 1 }}
                 whileTap={{ scale: selectedSlot && !isConfirming ? 0.98 : 1 }}
                 onClick={handleConfirm}
-                disabled={!selectedSlot || isConfirming}
+                disabled={!selectedSlotId || isConfirming}
                 className={`w-full py-4 rounded-2xl font-bold text-lg flex items-center justify-center gap-2 transition-all duration-300 ${
-                  selectedSlot && !isConfirming
+                  selectedSlotId && !isConfirming
                     ? "bg-indigo-600 hover:bg-indigo-700 text-white shadow-xl shadow-indigo-200"
                     : isConfirming
                       ? "bg-indigo-600 text-white shadow-xl shadow-indigo-200"
@@ -630,7 +785,7 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
                     <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                     Confirming...
                   </>
-                ) : selectedSlot ? (
+                ) : selectedSlotId ? (
                   <>
                     <CheckCircle className="w-5 h-5" />
                     Confirm Booking

@@ -6,7 +6,7 @@ import { localService } from '../../services/localService';
 import { User, Tutor } from '../../types';
 
 interface GetStartedSectionProps {
-  onAccountCreated: (user: User) => void;
+  onAccountCreated: (user: User, tutorProfile?: Tutor) => void;
   STEM_SUBJECTS: string[];
   initialRole?: 'student' | 'tutor';
   showRoleSelector?: boolean;
@@ -82,8 +82,10 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
       // Real auth submission
       const user = await apiService.signup(formData.firstName, formData.lastName, formData.email, formData.password, role);
       
+      let createdTutorProfile: Tutor | undefined;
+
       if (role === 'tutor') {
-        await apiService.createTutor({
+        createdTutorProfile = await apiService.createTutor({
           id: user.id,
           name: `${user.firstName} ${user.lastName}`,
           email: user.email,
@@ -100,7 +102,7 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
         } as any);
       }
 
-      onAccountCreated(user);
+      onAccountCreated(user, createdTutorProfile);
     } catch (err: any) {
       setError(err.message || 'Failed to create account');
     } finally {

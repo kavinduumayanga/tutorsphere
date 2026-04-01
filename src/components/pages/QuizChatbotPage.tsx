@@ -7,14 +7,12 @@ import {
   Trash2,
   Sparkles,
   MessageSquarePlus,
-  HelpCircle,
   Lock,
   ArrowDown,
   Copy,
   Check,
   BarChart3,
   RotateCcw,
-  Zap,
 } from 'lucide-react';
 import { apiService } from '../../services/apiService';
 import { User as AppUser } from '../../types';
@@ -355,26 +353,6 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
         {errorText && (
           <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
             {errorText}
-          </div>
-        )}
-
-        {/* Quick Actions — only show at start */}
-        {messages.length <= 2 && canChat && !isSessionClosed && (
-          <div className="flex flex-wrap gap-2 mb-4">
-            {['Mathematics', 'Physics', 'ICT', 'How does this quiz work?'].map((suggestion, idx) => (
-              <button
-                key={idx}
-                onClick={() => setInput(suggestion)}
-                className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-full text-sm font-semibold text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 transition-all flex items-center gap-2"
-              >
-                {suggestion === 'How does this quiz work?' ? (
-                  <HelpCircle className="w-4 h-4" />
-                ) : (
-                  <Zap className="w-3.5 h-3.5" />
-                )}
-                {suggestion}
-              </button>
-            ))}
           </div>
         )}
 

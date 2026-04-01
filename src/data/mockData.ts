@@ -97,7 +97,9 @@ export const MOCK_COURSES: Course[] = [
     thumbnail: 'https://picsum.photos/seed/react/400/250',
     modules: [
       { id: 'm1', title: 'Introduction to React', videoUrl: '#', resources: ['Notes.pdf'] },
-      { id: 'm2', title: 'State Management', videoUrl: '#', resources: ['State.pdf'] }
+      { id: 'm2', title: 'State Management', videoUrl: '#', resources: ['State.pdf'] },
+      { id: 'm3', title: 'Advanced Hooks and Context API', videoUrl: '#', resources: ['Hooks.pdf'] },
+      { id: 'm4', title: 'Testing React Applications', videoUrl: '#', resources: ['Testing.pdf'] }
     ],
     enrolledStudents: ['s1']
   },

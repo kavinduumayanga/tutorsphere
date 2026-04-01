@@ -4322,67 +4322,189 @@ export default function App() {
                   )}
                 </AnimatePresence>
 
-                {/* Courses & Certificates */}
-                <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-sm">
-                  <div className="flex items-center justify-between mb-8">
-                    <h3 className="font-black text-xl text-slate-900">My Enrolled Courses</h3>
-                    <button onClick={() => setActiveTab('courses')} className="text-indigo-600 text-sm font-black uppercase tracking-widest hover:underline">Browse More</button>
-                  </div>
-                  <div className="grid md:grid-cols-2 gap-6">
-                    {studentEnrolledCourses.length === 0 ? (
-                      <div className="col-span-2 text-center py-12 bg-slate-50 rounded-[2rem] border border-dashed border-slate-200">
-                        <BookMarked className="w-10 h-10 text-slate-300 mx-auto mb-4" />
-                        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">No courses enrolled yet</p>
-                      </div>
-                    ) : (
-                      studentEnrolledCourses.map(({ course, enrollment }) => (
-                        <div key={course.id} className="p-6 bg-slate-50 rounded-3xl border border-slate-100 hover:border-indigo-200 transition-all group">
-                          <div className="flex items-center gap-4 mb-6">
-                            <div className="bg-white p-3 rounded-2xl shadow-sm group-hover:shadow-md transition-all">
-                              <BookMarked className="text-indigo-600 w-6 h-6" />
-                            </div>
-                            <div>
-                              <h4 className="font-black text-slate-900 leading-tight">{course.title}</h4>
-                              <p className="text-[10px] text-emerald-600 font-black uppercase tracking-widest mt-1">
-                                Progress: {enrollment.progress}% Complete
-                              </p>
-                              <p className={`text-[10px] font-black uppercase tracking-widest mt-1 ${(course.isFree || course.price <= 0) ? 'text-emerald-500' : 'text-amber-500'}`}>
-                                {(course.isFree || course.price <= 0) ? 'Free Course' : `Paid • LKR ${course.price}`}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="h-2 rounded-full bg-slate-200 overflow-hidden mb-4">
-                            <div className="h-full bg-emerald-500" style={{ width: `${enrollment.progress}%` }} />
-                          </div>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <button
-                              type="button"
-                              onClick={() => handleOpenCourseLearning(course.id)}
-                              className="w-full border py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 bg-white text-slate-900 border-slate-200 hover:bg-slate-900 hover:text-white"
-                            >
-                              <Video className="w-4 h-4 text-indigo-500" /> Continue Learning
-                            </button>
-                            <button
-                              onClick={() => {
-                                if (enrollment.progress < 100) {
-                                  alert('Complete all modules to unlock your certificate.');
-                                  return;
-                                }
-                                handleDownloadCertificate(enrollment, course.title);
-                              }}
-                              className={`w-full border py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${
-                                enrollment.progress >= 100
-                                  ? 'bg-white text-slate-900 border-slate-200 hover:bg-slate-900 hover:text-white'
-                                  : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                              }`}
-                            >
-                              <Award className="w-4 h-4 text-amber-500" />
-                              {enrollment.progress >= 100 ? 'Download Certificate' : 'Certificate Locked'}
-                            </button>
-                          </div>
+                {/* My Enrolled Courses - Full Width Premium Design */}
+                <div className="relative w-full max-w-[1400px] mx-auto">
+                  <div className="bg-white rounded-[3rem] border border-slate-100 shadow-sm overflow-hidden w-full">
+                    {/* Header Section */}
+                    <div className="px-5 sm:px-7 lg:px-10 xl:px-12 py-6">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                        <div>
+                          <h3 className="font-black text-2xl sm:text-3xl text-slate-900 mb-2">
+                            My Enrolled Courses
+                          </h3>
+                          <p className="text-sm text-slate-500 font-medium">
+                            Continue learning and track your progress
+                          </p>
                         </div>
-                      ))
-                    )}
+                        <button 
+                          onClick={() => setActiveTab('courses')} 
+                          className="self-start lg:self-auto px-5 sm:px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-black text-xs sm:text-sm uppercase tracking-wide rounded-xl hover:shadow-lg hover:shadow-indigo-200 transition-all flex items-center gap-2 whitespace-nowrap"
+                        >
+                          <BookOpen className="w-5 h-5" />
+                          <span className="hidden sm:inline">Browse More Courses</span>
+                          <span className="sm:hidden">Browse More</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Course Cards Grid */}
+                    <div className="px-5 sm:px-7 lg:px-10 xl:px-12 py-5 sm:py-7">
+                      {studentEnrolledCourses.length === 0 ? (
+                        <div className="text-center py-16 sm:py-20 bg-gradient-to-br from-slate-50 to-slate-100 rounded-[2rem] border border-dashed border-slate-200">
+                          <BookMarked className="w-12 sm:w-16 h-12 sm:h-16 text-slate-300 mx-auto mb-6" />
+                          <p className="text-slate-600 font-bold text-base sm:text-lg mb-2">
+                            No courses enrolled yet
+                          </p>
+                          <p className="text-slate-400 text-sm">
+                            Start learning by browsing our course catalog
+                          </p>
+                          <button 
+                            onClick={() => setActiveTab('courses')} 
+                            className="mt-6 px-6 sm:px-8 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-black text-sm uppercase tracking-widest rounded-xl hover:shadow-lg hover:shadow-indigo-200 transition-all flex items-center gap-2"
+                          >
+                            <BookOpen className="w-5 h-5" />
+                            Explore Courses
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="grid [grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr))] gap-6 lg:gap-7 2xl:gap-8">
+                          {studentEnrolledCourses.map(({ course, enrollment }) => {
+                            const tutor = MOCK_TUTORS.find(t => t.id === course.tutorId);
+                            const isCompleted = enrollment.progress >= 100;
+                            
+                            return (
+                              <motion.div
+                                key={course.id}
+                                initial={{ opacity: 0, y: 20 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className="group bg-white rounded-[2rem] border border-slate-100 overflow-hidden hover:border-indigo-200 hover:shadow-2xl hover:shadow-indigo-50/70 transition-all duration-300 flex flex-col min-h-[460px] sm:min-h-[480px] w-full min-w-0"
+                              >
+                                {/* Thumbnail Section */}
+                                <div className="relative h-48 sm:h-56 bg-gradient-to-br from-indigo-500 to-violet-600 overflow-hidden">
+                                  {course.thumbnail ? (
+                                    <img
+                                      src={course.thumbnail}
+                                      alt={course.title}
+                                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                                    />
+                                  ) : (
+                                    <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-indigo-500 via-purple-500 to-violet-600">
+                                      <BookOpen className="w-12 sm:w-16 h-12 sm:h-16 text-white opacity-50" />
+                                    </div>
+                                  )}
+                                  
+                                  {/* Completion Badge */}
+                                  {isCompleted && (
+                                    <div className="absolute top-4 right-4 bg-emerald-500 text-white rounded-full p-2 sm:p-3 shadow-lg">
+                                      <CheckCircle className="w-5 sm:w-6 h-5 sm:h-6" />
+                                    </div>
+                                  )}
+                                  
+                                  {/* Course Type Badge */}
+                                  <div className="absolute top-4 left-4">
+                                    <span className={`inline-block px-3 sm:px-4 py-1 sm:py-2 font-black text-xs uppercase tracking-widest rounded-full ${
+                                      course.isFree || course.price <= 0 
+                                        ? 'bg-emerald-500 text-white' 
+                                        : 'bg-amber-500 text-white'
+                                    }`}>
+                                      {course.isFree || course.price <= 0 ? 'Free' : 'Paid'}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Content Section */}
+                                <div className="p-6 sm:p-8 flex-1 flex flex-col w-full">
+                                  {/* Course Title */}
+                                  <h4 className="font-black text-lg xl:text-xl text-slate-900 leading-tight mb-4 line-clamp-2 min-h-[3.25rem]">
+                                    {course.title}
+                                  </h4>
+
+                                  {/* Instructor Info */}
+                                  {tutor && (
+                                    <div className="flex items-center gap-3 sm:gap-4 mb-4 sm:mb-6 pb-4 sm:pb-6 border-b border-slate-100">
+                                      <img
+                                        src={tutor.avatar}
+                                        alt={tutor.firstName}
+                                        className="w-8 sm:w-10 h-8 sm:h-10 rounded-full object-cover"
+                                        onError={(e) => {
+                                          e.currentTarget.style.display = 'none';
+                                        }}
+                                      />
+                                      <div className="flex-1 min-w-0">
+                                        <p className="text-sm font-black text-slate-700 truncate">
+                                          {tutor.firstName} {tutor.lastName}
+                                        </p>
+                                        <p className="text-xs text-slate-400 font-bold">
+                                          {tutor.rating} ⭐
+                                        </p>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Progress Section */}
+                                  <div className="mb-6 sm:mb-8">
+                                    <div className="flex items-center justify-between mb-2 sm:mb-3">
+                                      <span className="text-sm font-black text-slate-700">
+                                        Progress
+                                      </span>
+                                      <span className={`text-base sm:text-lg font-black ${
+                                        isCompleted 
+                                          ? 'text-emerald-600' 
+                                          : 'text-indigo-600'
+                                      }`}>
+                                        {enrollment.progress}%
+                                      </span>
+                                    </div>
+                                    <div className="h-2.5 sm:h-3 rounded-full bg-slate-100 overflow-hidden">
+                                      <motion.div
+                                        initial={{ width: 0 }}
+                                        animate={{ width: `${enrollment.progress}%` }}
+                                        transition={{ duration: 0.6, ease: 'easeOut' }}
+                                        className={`h-full rounded-full transition-colors ${
+                                          isCompleted
+                                            ? 'bg-gradient-to-r from-emerald-500 to-emerald-600'
+                                            : 'bg-gradient-to-r from-indigo-500 to-violet-600'
+                                        }`}
+                                      />
+                                    </div>
+                                  </div>
+
+                                  {/* Action Buttons */}
+                                  <div className="mt-auto grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenCourseLearning(course.id)}
+                                      className="py-3.5 px-4 rounded-xl text-[11px] sm:text-xs lg:text-sm font-black uppercase tracking-wide transition-all flex items-center justify-center gap-2 bg-indigo-50 text-indigo-600 border border-indigo-100 hover:bg-indigo-600 hover:text-white w-full"
+                                    >
+                                      <Play className="w-4 sm:w-5 h-4 sm:h-5 flex-shrink-0" />
+                                      <span className="truncate">Continue Learning</span>
+                                    </button>
+                                    
+                                    <button
+                                      onClick={() => {
+                                        if (!isCompleted) {
+                                          alert('Complete all modules to unlock your certificate.');
+                                          return;
+                                        }
+                                        handleDownloadCertificate(enrollment, course.title);
+                                      }}
+                                      className={`py-3.5 px-4 rounded-xl text-[11px] sm:text-xs lg:text-sm font-black uppercase tracking-wide transition-all flex items-center justify-center gap-2 w-full ${
+                                        isCompleted
+                                          ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white border border-amber-600 hover:shadow-lg hover:shadow-amber-200'
+                                          : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                                      }`}
+                                    >
+                                      <Award className="w-4 sm:w-5 h-4 sm:h-5 flex-shrink-0" />
+                                      <span className="truncate">Download Certificate</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              </motion.div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 

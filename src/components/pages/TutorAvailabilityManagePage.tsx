@@ -1,6 +1,108 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { TimeSlot, Tutor } from '../../types';
 import { Plus, Trash2, Calendar, Clock, AlertCircle, Save, ArrowLeft } from 'lucide-react';
+
+type DurationOption = {
+  value: number;
+  label: string;
+};
+
+type TimeOption = {
+  value: string;
+  label: string;
+};
+
+const TIME_STEP_MINUTES = 30;
+const DEFAULT_SLOT_DURATION = 60;
+const MAX_TIME_MINUTES = (24 * 60) - TIME_STEP_MINUTES;
+
+const DURATION_OPTIONS: DurationOption[] = [
+  { value: 30, label: '30 min' },
+  { value: 60, label: '1 hour' },
+  { value: 90, label: '1 hour 30 min' },
+  { value: 120, label: '2 hours' },
+  { value: 150, label: '2 hours 30 min' },
+  { value: 180, label: '3 hours' },
+];
+
+const minutesToTimeString = (minutes: number): string => {
+  const clamped = Math.max(0, Math.min((24 * 60) - 1, minutes));
+  const hours = Math.floor(clamped / 60);
+  const mins = clamped % 60;
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+};
+
+const timeStringToMinutes = (value: string): number | null => {
+  const match = value.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    return null;
+  }
+
+  return (hours * 60) + minutes;
+};
+
+const to12HourLabel = (value: string): string => {
+  const minutes = timeStringToMinutes(value);
+  if (minutes === null) {
+    return value;
+  }
+
+  const hour24 = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  const period = hour24 >= 12 ? 'PM' : 'AM';
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return `${String(hour12).padStart(2, '0')}:${String(mins).padStart(2, '0')} ${period}`;
+};
+
+const createTimeOptions = (): TimeOption[] => {
+  const options: TimeOption[] = [];
+  for (let minutes = 0; minutes <= MAX_TIME_MINUTES; minutes += TIME_STEP_MINUTES) {
+    const value = minutesToTimeString(minutes);
+    options.push({ value, label: to12HourLabel(value) });
+  }
+  return options;
+};
+
+const TIME_OPTIONS = createTimeOptions();
+const START_TIME_OPTIONS = TIME_OPTIONS.slice(0, -1);
+
+const getSlotDurationMinutes = (startTime: string, endTime: string): number | null => {
+  const start = timeStringToMinutes(startTime);
+  const end = timeStringToMinutes(endTime);
+  if (start === null || end === null || end <= start) {
+    return null;
+  }
+  return end - start;
+};
+
+const getEndTimeForDuration = (startTime: string, durationMinutes: number): string => {
+  const start = timeStringToMinutes(startTime);
+  if (start === null) {
+    return startTime;
+  }
+
+  const minEnd = start + TIME_STEP_MINUTES;
+  const nextEnd = Math.max(minEnd, Math.min(start + durationMinutes, MAX_TIME_MINUTES));
+  return minutesToTimeString(nextEnd);
+};
+
+const adjustEndTimeByStep = (startTime: string, endTime: string, deltaMinutes: number): string => {
+  const start = timeStringToMinutes(startTime);
+  const end = timeStringToMinutes(endTime);
+  if (start === null || end === null) {
+    return endTime;
+  }
+
+  const minEnd = start + TIME_STEP_MINUTES;
+  const adjusted = Math.max(minEnd, Math.min(end + deltaMinutes, MAX_TIME_MINUTES));
+  return minutesToTimeString(adjusted);
+};
 
 interface Props {
   tutor?: Tutor;
@@ -11,6 +113,13 @@ interface Props {
 export const TutorAvailabilityManagePage: React.FC<Props> = ({ tutor, onSaveAvailability, onBack }) => {
   const [slots, setSlots] = useState<TimeSlot[]>(tutor?.availability || []);
   const [saving, setSaving] = useState(false);
+  const timeOptionsByValue = useMemo(() => {
+    const map = new Map<string, string>();
+    TIME_OPTIONS.forEach((option) => {
+      map.set(option.value, option.label);
+    });
+    return map;
+  }, []);
 
   useEffect(() => {
     setSlots(tutor?.availability || []);
@@ -50,6 +159,53 @@ export const TutorAvailabilityManagePage: React.FC<Props> = ({ tutor, onSaveAvai
 
   const updateSlot = (id: string, field: keyof TimeSlot, value: string) => {
     setSlots(slots.map(s => s.id === id ? { ...s, [field]: value } : s));
+  };
+
+  const updateSlotStartTime = (id: string, nextStartTime: string) => {
+    setSlots((prev) => prev.map((slot) => {
+      if (slot.id !== id) {
+        return slot;
+      }
+
+      const startMinutes = timeStringToMinutes(nextStartTime);
+      const endMinutes = timeStringToMinutes(slot.endTime);
+
+      if (startMinutes === null || endMinutes === null || endMinutes > startMinutes) {
+        return { ...slot, startTime: nextStartTime };
+      }
+
+      return {
+        ...slot,
+        startTime: nextStartTime,
+        endTime: getEndTimeForDuration(nextStartTime, DEFAULT_SLOT_DURATION),
+      };
+    }));
+  };
+
+  const updateSlotDuration = (id: string, durationMinutes: number) => {
+    setSlots((prev) => prev.map((slot) => {
+      if (slot.id !== id) {
+        return slot;
+      }
+
+      return {
+        ...slot,
+        endTime: getEndTimeForDuration(slot.startTime, durationMinutes),
+      };
+    }));
+  };
+
+  const adjustSlotDuration = (id: string, deltaMinutes: number) => {
+    setSlots((prev) => prev.map((slot) => {
+      if (slot.id !== id) {
+        return slot;
+      }
+
+      return {
+        ...slot,
+        endTime: adjustEndTimeByStep(slot.startTime, slot.endTime, deltaMinutes),
+      };
+    }));
   };
 
   const validateSlots = (): string | null => {
@@ -148,39 +304,126 @@ export const TutorAvailabilityManagePage: React.FC<Props> = ({ tutor, onSaveAvai
                 ) : (
                   <div className="space-y-3">
                     {daySlots.map(slot => (
-                      <div key={slot.id} className="flex flex-wrap sm:flex-nowrap items-center gap-3 bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
-                        <div className="flex items-center gap-2 text-slate-500">
-                          <Clock className="w-4 h-4" />
+                      <div key={slot.id} className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm space-y-3">
+                        {(() => {
+                          const startOptions = START_TIME_OPTIONS.some((option) => option.value === slot.startTime)
+                            ? START_TIME_OPTIONS
+                            : [{ value: slot.startTime, label: `${to12HourLabel(slot.startTime)} (current)` }, ...START_TIME_OPTIONS];
+
+                          const defaultEndOptions = TIME_OPTIONS.filter((option) => option.value > slot.startTime);
+                          const endOptions = defaultEndOptions.some((option) => option.value === slot.endTime)
+                            ? defaultEndOptions
+                            : [
+                              ...defaultEndOptions,
+                              ...(slot.endTime > slot.startTime
+                                ? [{ value: slot.endTime, label: `${to12HourLabel(slot.endTime)} (current)` }]
+                                : []),
+                            ];
+
+                          return (
+                            <>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 text-slate-500">
+                            <Clock className="w-4 h-4" />
+                            <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Time Range</span>
+                          </div>
+                          {slot.isBooked && (
+                            <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md shrink-0">Booked</span>
+                          )}
                         </div>
-                        <input
-                          type="time"
-                          value={slot.startTime}
-                          onChange={(e) => updateSlot(slot.id, 'startTime', e.target.value)}
-                          className="flex-1 min-w-[120px] px-4 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium text-slate-700 transition-all shrink-0"
-                          disabled={slot.isBooked}
-                        />
-                        <span className="text-slate-400 font-medium px-2">to</span>
-                        <input
-                          type="time"
-                          value={slot.endTime}
-                          onChange={(e) => updateSlot(slot.id, 'endTime', e.target.value)}
-                          className="flex-1 min-w-[120px] px-4 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium text-slate-700 transition-all shrink-0"
-                          disabled={slot.isBooked}
-                        />
-                        <button
-                          onClick={() => !slot.isBooked && removeSlot(slot.id)}
-                          disabled={slot.isBooked}
-                          className={`p-3 rounded-xl shrink-0 transition-colors flex items-center justify-center
-                            ${slot.isBooked 
-                              ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
-                              : 'bg-red-50 text-red-500 hover:bg-red-100'}`}
-                          title={slot.isBooked ? "Cannot remove booked slot" : "Remove slot"}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                        {slot.isBooked && (
-                          <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md shrink-0">Booked</span>
-                        )}
+
+                        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+                          <div className="md:col-span-4 space-y-1">
+                            <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Start</label>
+                            <select
+                              value={slot.startTime}
+                              onChange={(e) => updateSlotStartTime(slot.id, e.target.value)}
+                              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-semibold text-slate-700 transition-all bg-white"
+                              disabled={slot.isBooked}
+                            >
+                              {startOptions.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="md:col-span-4 space-y-1">
+                            <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Duration</label>
+                            <select
+                              value={(() => {
+                                const duration = getSlotDurationMinutes(slot.startTime, slot.endTime);
+                                if (duration === null) return 'custom';
+                                return DURATION_OPTIONS.some((item) => item.value === duration) ? String(duration) : 'custom';
+                              })()}
+                              onChange={(e) => {
+                                if (e.target.value === 'custom') return;
+                                updateSlotDuration(slot.id, Number(e.target.value));
+                              }}
+                              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-semibold text-slate-700 transition-all bg-white"
+                              disabled={slot.isBooked}
+                            >
+                              {DURATION_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                              <option value="custom">Custom range</option>
+                            </select>
+                          </div>
+
+                          <div className="md:col-span-4 space-y-1">
+                            <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">End</label>
+                            <select
+                              value={slot.endTime}
+                              onChange={(e) => updateSlot(slot.id, 'endTime', e.target.value)}
+                              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-semibold text-slate-700 transition-all bg-white"
+                              disabled={slot.isBooked}
+                            >
+                              {endOptions.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => adjustSlotDuration(slot.id, -TIME_STEP_MINUTES)}
+                              disabled={slot.isBooked}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${slot.isBooked ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}
+                            >
+                              -30 min
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => adjustSlotDuration(slot.id, TIME_STEP_MINUTES)}
+                              disabled={slot.isBooked}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${slot.isBooked ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}
+                            >
+                              +30 min
+                            </button>
+                          </div>
+
+                          <div className="flex items-center gap-3 ml-auto">
+                            <span className="text-xs font-semibold text-slate-500">
+                              {timeOptionsByValue.get(slot.startTime) || slot.startTime} - {timeOptionsByValue.get(slot.endTime) || slot.endTime}
+                            </span>
+                            <button
+                              onClick={() => !slot.isBooked && removeSlot(slot.id)}
+                              disabled={slot.isBooked}
+                              className={`p-3 rounded-xl shrink-0 transition-colors flex items-center justify-center
+                                ${slot.isBooked 
+                                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
+                                  : 'bg-red-50 text-red-500 hover:bg-red-100'}`}
+                              title={slot.isBooked ? "Cannot remove booked slot" : "Remove slot"}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                            </>
+                          );
+                        })()}
                       </div>
                     ))}
                   </div>

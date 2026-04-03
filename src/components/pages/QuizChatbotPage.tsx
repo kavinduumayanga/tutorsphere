@@ -315,7 +315,7 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
                   Quiz Assistant <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 text-amber-500" />
                 </h1>
                 <p className="text-xs sm:text-sm font-semibold text-slate-500 mt-1">
-                  {canChat ? 'Azure AI Core • Personalized quiz coaching' : 'Read-only mode • Sign in to chat'}
+                  {canChat ? 'Personalized AI quiz coaching' : 'Read-only mode • Sign in to chat'}
                 </p>
               </div>
             </div>

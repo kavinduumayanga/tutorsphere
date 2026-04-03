@@ -416,14 +416,14 @@ export default function App() {
   const [activeQuiz, setActiveQuiz] = useState<Quiz | null>(null);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, string>>({});
   const [quizScore, setQuizScore] = useState<number | null>(null);
-  const [isQuizLoading, setIsQuizLoading] = useState(false);
 
   // Chatbot State
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'bot', text: string, audio?: string }[]>([
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'bot', text: string, audio?: string, meta?: 'typing' | 'error' }[]>([
     { role: 'bot', text: 'Hello! I am your TutorSphere assistant. How can I help you today? You can ask me to find a tutor, suggest a course, or even start a quiz!' }
   ]);
   const [chatInput, setChatInput] = useState('');
+  const [isChatTyping, setIsChatTyping] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState<string | null>(null);
 
   useEffect(() => {
@@ -930,21 +930,77 @@ export default function App() {
 
   const handleChatSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInput.trim()) return;
-    const userMsg = chatInput;
-    setChatMessages(prev => [...prev, { role: 'user', text: userMsg }]);
+    if (!chatInput.trim() || isChatTyping) return;
+
+    const userMsg = chatInput.trim();
+    setChatMessages(prev => [
+      ...prev,
+      { role: 'user', text: userMsg },
+      { role: 'bot', text: 'TutorSphere Assistant is typing...', meta: 'typing' },
+    ]);
     setChatInput('');
+    setIsChatTyping(true);
 
-    // Check for quiz trigger in user message
-    if (userMsg.toLowerCase().includes('quiz') || userMsg.toLowerCase().includes('test')) {
-      const subject = STEM_SUBJECTS.find(s => userMsg.toLowerCase().includes(s.toLowerCase())) || 'Mathematics';
-      setChatMessages(prev => [...prev, { role: 'bot', text: `Sure! I can help you start a ${subject} quiz. Let me generate it for you...` }]);
-      handleStartQuiz(subject);
-      return;
+    try {
+      const userName = currentUser
+        ? `${currentUser.firstName} ${currentUser.lastName}`.trim() || 'Guest'
+        : 'Guest';
+
+      const response = await apiService.sendFaqChatMessage(userMsg, {
+        currentTab: activeTab,
+        userRole: currentUser?.role || 'guest',
+        userName,
+      });
+
+      const botReply = String(response?.reply || '').trim() ||
+        'I can help with TutorSphere platform features like courses, tutors, bookings, resources, and certificates.';
+
+      setChatMessages((prev) => {
+        let typingIndex = -1;
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].meta === 'typing') {
+            typingIndex = i;
+            break;
+          }
+        }
+
+        if (typingIndex === -1) {
+          return [...prev, { role: 'bot', text: botReply }];
+        }
+
+        return prev.map((message, index) =>
+          index === typingIndex
+            ? { role: 'bot', text: botReply }
+            : message
+        );
+      });
+    } catch (error) {
+      console.error('Failed to fetch TutorSphere Assistant reply:', error);
+
+      setChatMessages((prev) => {
+        let typingIndex = -1;
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].meta === 'typing') {
+            typingIndex = i;
+            break;
+          }
+        }
+
+        const fallbackReply = 'I hit a temporary issue. Please try again in a moment.';
+
+        if (typingIndex === -1) {
+          return [...prev, { role: 'bot', text: fallbackReply, meta: 'error' }];
+        }
+
+        return prev.map((message, index) =>
+          index === typingIndex
+            ? { role: 'bot', text: fallbackReply, meta: 'error' }
+            : message
+        );
+      });
+    } finally {
+      setIsChatTyping(false);
     }
-
-    const botResponse = await localService.getChatbotResponse(userMsg, `User is currently on ${activeTab} tab. User name: ${currentUser?.firstName + ' ' + currentUser?.lastName || 'Guest'}`);
-    setChatMessages(prev => [...prev, { role: 'bot', text: botResponse }]);
   };
 
   const handleSpeak = async (text: string, index: number) => {
@@ -957,27 +1013,6 @@ export default function App() {
       audio.play();
     } else {
       setIsSpeaking(null);
-    }
-  };
-
-  const handleStartQuiz = async (subject: string) => {
-    setIsQuizLoading(true);
-    setActiveTab('quizzes');
-    try {
-      const quizData = await localService.generateQuiz(subject, 'Intermediate');
-      if (quizData) {
-        const quiz = await apiService.createQuiz({
-          subject,
-          questions: quizData.questions
-        });
-        setActiveQuiz(quiz);
-        setQuizScore(null);
-      }
-    } catch (error) {
-      console.error('Failed to start quiz:', error);
-      alert('Failed to start quiz. Please try again.');
-    } finally {
-      setIsQuizLoading(false);
     }
   };
 
@@ -5183,8 +5218,8 @@ export default function App() {
                           ? 'bg-indigo-600 text-white rounded-tr-none'
                           : 'bg-slate-100 text-slate-700 rounded-tl-none'
                         }`}>
-                        {msg.text}
-                        {msg.role === 'bot' && (
+                        <div className="whitespace-pre-line break-words">{msg.text}</div>
+                        {msg.role === 'bot' && msg.meta !== 'typing' && (
                           <button
                             onClick={() => handleSpeak(msg.text, i)}
                             className={`absolute -right-8 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-white border border-slate-100 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity ${isSpeaking === i.toString() ? 'text-indigo-600 animate-pulse' : 'text-slate-400 hover:text-indigo-600'}`}
@@ -5202,9 +5237,10 @@ export default function App() {
                     value={chatInput}
                     onChange={e => setChatInput(e.target.value)}
                     placeholder="Ask me anything..."
+                    disabled={isChatTyping}
                     className="flex-1 px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
                   />
-                  <button type="submit" className="bg-indigo-600 text-white p-2 rounded-xl">
+                  <button type="submit" disabled={isChatTyping} className="bg-indigo-600 text-white p-2 rounded-xl disabled:opacity-60">
                     <Send className="w-4 h-4" />
                   </button>
                 </form>

@@ -20,6 +20,7 @@ import { StudyPlan } from "./src/models/StudyPlan.js";
 import { SkillLevel } from "./src/models/SkillLevel.js";
 import { CourseEnrollment } from "./src/models/CourseEnrollment.js";
 import { quizChatbotRouter } from "./src/server/quiz-chatbot/chatController.js";
+import { faqChatbotRouter } from "./src/server/faq-chatbot/chatController.js";
 
 // Load environment variables
 dotenv.config();
@@ -655,6 +656,7 @@ async function startServer() {
   app.use(cors());
   app.use('/uploads', express.static(UPLOADS_DIR));
   app.use('/api/quiz-chatbot', quizChatbotRouter);
+  app.use('/api/faq-chatbot', faqChatbotRouter);
 
   app.post('/api/uploads/course-thumbnail', handleCourseThumbnailUpload, async (req, res) => {
     try {

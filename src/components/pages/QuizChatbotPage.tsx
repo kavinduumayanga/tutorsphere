@@ -49,6 +49,7 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const sendButtonRef = useRef<HTMLButtonElement>(null);
   const shouldStickToBottomRef = useRef(true);
   const hasInitializedScrollRef = useRef(false);
 
@@ -139,9 +140,15 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
     if (!textarea) return;
     textarea.style.height = 'auto';
     const maxHeight = 176;
-    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+    const minHeight = 48;
+    const nextHeight = Math.max(minHeight, Math.min(textarea.scrollHeight, maxHeight));
     textarea.style.height = `${nextHeight}px`;
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
+
+    const sendButton = sendButtonRef.current;
+    if (sendButton) {
+      sendButton.style.height = `${nextHeight}px`;
+    }
   }, []);
 
   useEffect(() => {
@@ -226,6 +233,9 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
       textareaRef.current.style.overflowY = 'hidden';
+    }
+    if (sendButtonRef.current) {
+      sendButtonRef.current.style.height = '48px';
     }
 
     try {
@@ -479,7 +489,7 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
           )}
 
           <div className="rounded-3xl border border-slate-200 bg-slate-50/75 p-2.5 sm:p-3">
-            <div className="flex items-stretch gap-2.5 sm:gap-3">
+            <div className="flex items-center gap-2.5 sm:gap-3">
               <div className="flex-1">
                 <textarea
                   ref={textareaRef}
@@ -495,11 +505,12 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
               </div>
 
               <motion.button
+                ref={sendButtonRef}
                 whileHover={canSubmit ? { scale: 1.04 } : {}}
                 whileTap={canSubmit ? { scale: 0.96 } : {}}
                 onClick={handleSend}
                 disabled={!canSubmit}
-                className="flex-none w-12 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-sm shadow-indigo-200 hover:shadow-lg hover:shadow-indigo-300/40 disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:shadow-none transition-all"
+                className="flex-none w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-sm shadow-indigo-200 hover:shadow-lg hover:shadow-indigo-300/40 disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:shadow-none transition-all"
                 title="Send message"
               >
                 {isTyping

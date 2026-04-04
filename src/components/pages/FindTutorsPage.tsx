@@ -154,7 +154,7 @@ export const FindTutorsPage: React.FC<FindTutorsPageProps> = ({
           </div>
 
           <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-white tracking-tight mb-3">
-            Find Your Perfect Tutor
+            Browse Tutors
           </h1>
           <p className="text-indigo-100/80 text-base sm:text-lg max-w-xl font-medium mb-8">
             Browse verified experts ready to guide you through personalized learning paths.

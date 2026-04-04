@@ -3620,7 +3620,7 @@ export default function App() {
                         value={profileData.lastName}
                         onChange={e => setProfileData({ ...profileData, lastName: e.target.value })}
                         className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
-                        placeholder="Doe"
+                        placeholder="Enter last name"
                       />
                     </div>
                   </div>
@@ -4608,7 +4608,7 @@ export default function App() {
                         value={profileData.lastName}
                         onChange={e => setProfileData({ ...profileData, lastName: e.target.value })}
                         className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
-                        placeholder="Doe"
+                        placeholder="Enter last name"
                       />
                     </div>
                   </div>
@@ -4994,7 +4994,7 @@ export default function App() {
                                 value={authData.firstName || ''}
                                 onChange={e => setAuthData({ ...authData, firstName: e.target.value })}
                                 className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all bg-slate-50/50 font-medium"
-                                placeholder="John"
+                                placeholder="Enter first name"
                               />
                             </div>
                           </div>
@@ -5008,7 +5008,7 @@ export default function App() {
                                 value={authData.lastName || ''}
                                 onChange={e => setAuthData({ ...authData, lastName: e.target.value })}
                                 className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all bg-slate-50/50 font-medium"
-                                placeholder="Doe"
+                                placeholder="Enter last name"
                               />
                             </div>
                           </div>
@@ -5025,7 +5025,7 @@ export default function App() {
                           value={authData.email}
                           onChange={e => setAuthData({ ...authData, email: e.target.value })}
                           className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all bg-slate-50/50 font-medium"
-                          placeholder="name@example.com"
+                          placeholder="Enter email address"
                         />
                       </div>
                     </div>

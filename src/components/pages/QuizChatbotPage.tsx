@@ -479,7 +479,7 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
           )}
 
           <div className="rounded-3xl border border-slate-200 bg-slate-50/75 p-2.5 sm:p-3">
-            <div className="flex items-end gap-2.5 sm:gap-3">
+            <div className="flex items-stretch gap-2.5 sm:gap-3">
               <div className="flex-1">
                 <textarea
                   ref={textareaRef}
@@ -490,6 +490,7 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
                   rows={1}
                   className="auto-resize-textarea w-full bg-white border border-slate-200 text-slate-900 text-[15px] leading-relaxed font-medium rounded-2xl px-4 py-3.5 outline-none focus:ring-2 focus:ring-indigo-500/25 focus:border-indigo-500 transition-all placeholder:text-slate-400 resize-none"
                   disabled={isTyping || !canChat || isSessionClosed}
+                  style={{ minHeight: '48px' }}
                 />
               </div>
 
@@ -498,7 +499,7 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
                 whileTap={canSubmit ? { scale: 0.96 } : {}}
                 onClick={handleSend}
                 disabled={!canSubmit}
-                className="flex-none w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-sm shadow-indigo-200 hover:shadow-lg hover:shadow-indigo-300/40 disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:shadow-none transition-all"
+                className="flex-none w-12 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-sm shadow-indigo-200 hover:shadow-lg hover:shadow-indigo-300/40 disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:shadow-none transition-all"
                 title="Send message"
               >
                 {isTyping

@@ -177,7 +177,7 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
                   value={formData.firstName}
                   onChange={e => setFormData({...formData, firstName: e.target.value})}
                   className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50 focus:bg-white transition-colors"
-                  placeholder="John"
+                  placeholder="Enter first name"
                 />
               </div>
             </div>
@@ -191,7 +191,7 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
                   value={formData.lastName}
                   onChange={e => setFormData({...formData, lastName: e.target.value})}
                   className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50 focus:bg-white transition-colors"
-                  placeholder="Doe"
+                  placeholder="Enter last name"
                 />
               </div>
             </div>
@@ -207,7 +207,7 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
                 value={formData.email}
                 onChange={e => setFormData({...formData, email: e.target.value})}
                 className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50 focus:bg-white transition-colors"
-                placeholder="john@example.com"
+                placeholder="Enter email address"
               />
             </div>
           </div>

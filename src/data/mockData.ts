@@ -48,7 +48,7 @@ export const MOCK_TUTORS: Tutor[] = [
     role: 'tutor',
     qualifications: 'MSc in Applied Physics',
     subjects: ['Science', 'Maths'],
-    teachingLevel: 'Both',
+    teachingLevel: 'School and University',
     pricePerHour: 1800,
     rating: 4.8,
     reviewCount: 56,
@@ -154,6 +154,7 @@ export const MOCK_RESOURCES: Resource[] = [
     url: '#',
     description: 'Solved past paper with marking scheme and model answers.',
     isFree: true,
+    downloadCount: 128,
   },
   {
     id: 'r2',
@@ -164,6 +165,7 @@ export const MOCK_RESOURCES: Resource[] = [
     url: '#',
     description: 'Concise theory notes and worked examples for mechanics.',
     isFree: true,
+    downloadCount: 74,
   }
 ];
 

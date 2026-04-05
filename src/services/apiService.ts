@@ -156,9 +156,47 @@ export type QuizChatResponse = {
   sessionEnded: boolean;
 };
 
+export type FaqChatResponse = {
+  reply: string;
+};
+
+export type ForgotPasswordResponse = {
+  message: string;
+  cooldownSeconds: number;
+  otpExpiryMinutes: number;
+};
+
+export type VerifyPasswordOtpResponse = {
+  message: string;
+  resetToken: string;
+  resetTokenExpiryMinutes: number;
+};
+
+export type ResetPasswordResponse = {
+  message: string;
+};
+
+export type ChangePasswordResponse = {
+  message: string;
+};
+
 class ApiService {
   private sanitizeTutorName(value: string): string {
     return value.replace(/\s+updated\s*$/i, '').trim();
+  }
+
+  private normalizeTeachingLevel(value: unknown): Tutor['teachingLevel'] {
+    const raw = String(value || '').trim();
+    if (raw === 'Both' || raw === 'School & University') {
+      return 'School and University';
+    }
+    if (raw === 'School and University') {
+      return raw;
+    }
+    if (raw === 'School' || raw === 'University') {
+      return raw;
+    }
+    return 'School';
   }
 
   private normalizeTutor(tutor: any): Tutor {
@@ -167,7 +205,10 @@ class ApiService {
     const fullName = this.sanitizeTutorName((tutor?.name || '').trim());
 
     if (firstName || lastName) {
-      return tutor as Tutor;
+      return {
+        ...tutor,
+        teachingLevel: this.normalizeTeachingLevel(tutor?.teachingLevel),
+      } as Tutor;
     }
 
     if (fullName) {
@@ -176,6 +217,7 @@ class ApiService {
         ...tutor,
         firstName: parsedFirstName || 'Tutor',
         lastName: rest.join(' '),
+        teachingLevel: this.normalizeTeachingLevel(tutor?.teachingLevel),
       } as Tutor;
     }
 
@@ -183,6 +225,7 @@ class ApiService {
       ...tutor,
       firstName: 'Tutor',
       lastName: '',
+      teachingLevel: this.normalizeTeachingLevel(tutor?.teachingLevel),
     } as Tutor;
   }
 
@@ -241,6 +284,17 @@ class ApiService {
       ...course,
       modules,
     } as Course;
+  }
+
+  private normalizeResource(resource: any): Resource {
+    const normalizedId = String(resource?.id ?? resource?._id ?? '').trim();
+    const parsedDownloadCount = Number(resource?.downloadCount);
+
+    return {
+      ...resource,
+      id: normalizedId,
+      downloadCount: Number.isFinite(parsedDownloadCount) ? Math.max(0, parsedDownloadCount) : 0,
+    } as Resource;
   }
 
   private async fetchWithApiFallback(endpoint: string, options?: RequestInit): Promise<Response> {
@@ -323,6 +377,51 @@ class ApiService {
     });
   }
 
+  async requestPasswordReset(email: string): Promise<ForgotPasswordResponse> {
+    return this.request('/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  async resendPasswordResetOtp(email: string): Promise<ForgotPasswordResponse> {
+    return this.request('/auth/resend-otp', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  async verifyPasswordResetOtp(email: string, otp: string): Promise<VerifyPasswordOtpResponse> {
+    return this.request('/auth/verify-otp', {
+      method: 'POST',
+      body: JSON.stringify({ email, otp }),
+    });
+  }
+
+  async resetPassword(
+    email: string,
+    resetToken: string,
+    newPassword: string,
+    confirmPassword: string
+  ): Promise<ResetPasswordResponse> {
+    return this.request('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ email, resetToken, newPassword, confirmPassword }),
+    });
+  }
+
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+    confirmPassword: string
+  ): Promise<ChangePasswordResponse> {
+    return this.request('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ userId, currentPassword, newPassword, confirmPassword }),
+    });
+  }
+
   async updateUser(id: string, data: FormData | { firstName?: string; lastName?: string; phone?: string }): Promise<User> {
     const isFormData = data instanceof FormData;
     if (isFormData) {
@@ -339,6 +438,12 @@ class ApiService {
     });
   }
 
+  async deleteUser(id: string): Promise<{ message: string }> {
+    return this.request(`/auth/user/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
   // Tutor methods
   async getTutors(): Promise<Tutor[]> {
     const tutors = await this.request<any[]>('/tutors');
@@ -351,17 +456,19 @@ class ApiService {
   }
 
   async createTutor(tutor: Omit<Tutor, 'id'>): Promise<Tutor> {
-    return this.request('/tutors', {
+    const createdTutor = await this.request<any>('/tutors', {
       method: 'POST',
       body: JSON.stringify(tutor),
     });
+    return this.normalizeTutor(createdTutor);
   }
 
   async updateTutor(id: string, tutor: Partial<Tutor>): Promise<Tutor> {
-    return this.request(`/tutors/${id}`, {
+    const updatedTutor = await this.request<any>(`/tutors/${id}`, {
       method: 'PUT',
       body: JSON.stringify(tutor),
     });
+    return this.normalizeTutor(updatedTutor);
   }
 
   async deleteTutor(id: string): Promise<void> {
@@ -579,14 +686,23 @@ class ApiService {
       params.set('freeOnly', 'true');
     }
     const query = params.toString();
-    return this.request(`/resources${query ? `?${query}` : ''}`);
+    const resources = await this.request<any[]>(`/resources${query ? `?${query}` : ''}`);
+    return resources.map((resource) => this.normalizeResource(resource));
   }
 
-  async createResource(resource: Omit<Resource, 'id'>): Promise<Resource> {
-    return this.request('/resources', {
+  async createResource(resource: Omit<Resource, 'id' | 'downloadCount'>): Promise<Resource> {
+    const createdResource = await this.request<any>('/resources', {
       method: 'POST',
       body: JSON.stringify(resource),
     });
+    return this.normalizeResource(createdResource);
+  }
+
+  async incrementResourceDownload(id: string): Promise<Resource> {
+    const updatedResource = await this.request<any>(`/resources/${id}/download`, {
+      method: 'POST',
+    });
+    return this.normalizeResource(updatedResource);
   }
 
   async updateResource(id: string, resource: Partial<Resource>, actorId?: string): Promise<Resource> {
@@ -595,10 +711,11 @@ class ApiService {
       params.set('actorId', actorId);
     }
     const query = params.toString();
-    return this.request(`/resources/${id}${query ? `?${query}` : ''}`, {
+    const updatedResource = await this.request<any>(`/resources/${id}${query ? `?${query}` : ''}`, {
       method: 'PUT',
       body: JSON.stringify({ ...resource, actorId }),
     });
+    return this.normalizeResource(updatedResource);
   }
 
   async deleteResource(id: string, actorId?: string): Promise<void> {
@@ -754,6 +871,23 @@ class ApiService {
       body: JSON.stringify({
         userId: user.id,
         role: user.role,
+      }),
+    });
+  }
+
+  async sendFaqChatMessage(
+    message: string,
+    context?: {
+      currentTab?: string;
+      userRole?: string;
+      userName?: string;
+    }
+  ): Promise<FaqChatResponse> {
+    return this.request('/faq-chatbot/chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        message,
+        context,
       }),
     });
   }

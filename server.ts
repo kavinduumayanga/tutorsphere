@@ -20,6 +20,14 @@ import { StudyPlan } from "./src/models/StudyPlan.js";
 import { SkillLevel } from "./src/models/SkillLevel.js";
 import { CourseEnrollment } from "./src/models/CourseEnrollment.js";
 import { quizChatbotRouter } from "./src/server/quiz-chatbot/chatController.js";
+import { faqChatbotRouter } from "./src/server/faq-chatbot/chatController.js";
+import { authRouter } from "./src/server/auth/authRoutes.js";
+import {
+  hashPassword,
+  shouldUpgradePasswordHash,
+  validatePasswordStrength,
+  verifyPassword,
+} from "./src/server/auth/passwordUtils.js";
 
 // Load environment variables
 dotenv.config();
@@ -224,6 +232,17 @@ const formatCertificateDate = (dateValue: Date | string): string => {
     month: 'long',
     day: 'numeric',
   });
+};
+
+const normalizeTeachingLevel = (value: unknown): 'School' | 'University' | 'School and University' => {
+  const normalized = String(value || '').trim();
+  if (normalized === 'Both' || normalized === 'School & University' || normalized === 'School and University') {
+    return 'School and University';
+  }
+  if (normalized === 'University') {
+    return 'University';
+  }
+  return 'School';
 };
 
 type CertificatePdfInput = {
@@ -506,7 +525,7 @@ async function migrateUsers() {
       console.log(`Migrated ${migratedCount} users from JSON to MongoDB`);
     }
   } catch (error) {
-    console.log('Migration skipped or failed:', error.message);
+    console.log('Migration skipped or failed:', (error as Error).message);
   }
 }
 
@@ -558,7 +577,7 @@ async function migrateMockData() {
     console.log(`Migrated ${MOCK_RESOURCES.length} resources`);
 
   } catch (error) {
-    console.log('Mock data migration failed:', error.message);
+    console.log('Mock data migration failed:', (error as Error).message);
   }
 }
 
@@ -601,6 +620,23 @@ async function normalizeCourseAccessData() {
   }
 }
 
+async function normalizeResourceDownloadCounts() {
+  try {
+    await Resource.updateMany(
+      {
+        $or: [
+          { downloadCount: { $exists: false } },
+          { downloadCount: null },
+          { downloadCount: { $lt: 0 } },
+        ],
+      },
+      { $set: { downloadCount: 0 } }
+    );
+  } catch (error) {
+    console.log('Resource download count normalization skipped or failed:', (error as Error).message);
+  }
+}
+
 async function startServer() {
   // Connect to MongoDB
   await connectDB();
@@ -614,16 +650,25 @@ async function startServer() {
   // Keep legacy courses compatible with free/paid access rules.
   await normalizeCourseAccessData();
 
+  // Ensure every resource has a persisted, non-negative download count.
+  await normalizeResourceDownloadCounts();
+
   // Ensure uploads directory exists before handling multipart avatar uploads
   await fs.mkdir(path.join(__dirname, 'uploads'), { recursive: true });
 
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  // Honor reverse-proxy headers (App Service / load balancers) for protocol and host awareness.
+  app.set('trust proxy', 1);
 
   app.use(express.json());
   app.use(cors());
   app.use('/uploads', express.static(UPLOADS_DIR));
   app.use('/api/quiz-chatbot', quizChatbotRouter);
+  app.use('/api/faq-chatbot', faqChatbotRouter);
+  app.use('/api/auth', authRouter);
 
   app.post('/api/uploads/course-thumbnail', handleCourseThumbnailUpload, async (req, res) => {
     try {
@@ -702,7 +747,12 @@ async function startServer() {
     try {
       const { firstName, lastName, email, password, role } = req.body;
       const normalizedEmail = email ? email.trim() : '';
+      const normalizedPassword = String(password || '');
       const escapedEmail = normalizedEmail.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+
+      if (!firstName || !lastName || !normalizedEmail || !normalizedPassword) {
+        return res.status(400).json({ error: "First name, last name, email, and password are required" });
+      }
 
       // Check if user already exists
       const existingUser = await User.findOne({ email: { $regex: new RegExp(`^${escapedEmail}$`, 'i') } });
@@ -711,11 +761,25 @@ async function startServer() {
       }
 
       const id = Math.random().toString(36).substr(2, 9);
-      const newUser = new User({ id, firstName, lastName, email: normalizedEmail, password, role: role || 'student' });
+      const hashedPassword = await hashPassword(normalizedPassword);
+      const newUser = new User({
+        id,
+        firstName,
+        lastName,
+        email: normalizedEmail,
+        password: hashedPassword,
+        role: role || 'student',
+      });
 
       await newUser.save();
 
-      res.json({ id, firstName: newUser.firstName, lastName: newUser.lastName, email, role: newUser.role });
+      res.json({
+        id,
+        firstName: newUser.firstName,
+        lastName: newUser.lastName,
+        email: newUser.email,
+        role: newUser.role,
+      });
     } catch (error) {
       console.error("Signup error:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -734,32 +798,102 @@ async function startServer() {
       const escapedEmail = normalizedEmail.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
       const user = await User.findOne({
         email: { $regex: new RegExp(`^${escapedEmail}$`, 'i') },
-        password
       });
 
-      if (user) {
-        let avatarUrl: string | undefined;
-        try {
-          avatarUrl = await buildAvatarResponseUrl(req, user as { id: string; avatar?: string });
-        } catch (avatarError) {
-          console.warn('Failed to build avatar URL during login:', avatarError);
-          avatarUrl = undefined;
-        }
-        // Fallback to splitting name for old users if firstName is missing
-        let fName = user.firstName;
-        let lName = user.lastName;
-        if (!fName && !lName && (user as any).name) {
-          const parts = (user as any).name.split(' ');
-          fName = parts[0] || 'User';
-          lName = parts.slice(1).join(' ') || '';
-        }
-        res.json({ id: user.id, firstName: fName || 'User', lastName: lName || '', email: user.email, role: user.role, avatar: avatarUrl, phone: user.phone });
-      } else {
-        res.status(401).json({ error: "Invalid credentials" });
+      if (!user) {
+        return res.status(401).json({ error: "Invalid credentials" });
       }
+
+      const isPasswordValid = await verifyPassword(password, user.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+
+      if (shouldUpgradePasswordHash(user.password)) {
+        try {
+          user.password = await hashPassword(password);
+          await user.save();
+        } catch (upgradeError) {
+          console.warn('Failed to upgrade legacy password hash during login:', upgradeError);
+        }
+      }
+
+      let avatarUrl: string | undefined;
+      try {
+        avatarUrl = await buildAvatarResponseUrl(req, user as { id: string; avatar?: string });
+      } catch (avatarError) {
+        console.warn('Failed to build avatar URL during login:', avatarError);
+        avatarUrl = undefined;
+      }
+
+      // Fallback to splitting name for old users if firstName is missing
+      let fName = user.firstName;
+      let lName = user.lastName;
+      if (!fName && !lName && (user as any).name) {
+        const parts = (user as any).name.split(' ');
+        fName = parts[0] || 'User';
+        lName = parts.slice(1).join(' ') || '';
+      }
+
+      res.json({
+        id: user.id,
+        firstName: fName || 'User',
+        lastName: lName || '',
+        email: user.email,
+        role: user.role,
+        avatar: avatarUrl,
+        phone: user.phone,
+      });
     } catch (error) {
       console.error("Login error:", error);
       res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.post('/api/auth/change-password', async (req, res) => {
+    try {
+      const { userId, currentPassword, newPassword, confirmPassword } = req.body || {};
+
+      const normalizedUserId = String(userId || '').trim();
+      const currentPasswordValue = String(currentPassword || '');
+      const newPasswordValue = String(newPassword || '');
+      const confirmPasswordValue = String(confirmPassword || '');
+
+      if (!normalizedUserId || !currentPasswordValue || !newPasswordValue || !confirmPasswordValue) {
+        return res.status(400).json({ error: 'User ID, current password, new password, and confirm password are required.' });
+      }
+
+      if (newPasswordValue !== confirmPasswordValue) {
+        return res.status(400).json({ error: 'New password and confirm password do not match.' });
+      }
+
+      const strengthError = validatePasswordStrength(newPasswordValue);
+      if (strengthError) {
+        return res.status(400).json({ error: strengthError });
+      }
+
+      const user = await User.findOne({ id: normalizedUserId });
+      if (!user) {
+        return res.status(404).json({ error: 'User not found.' });
+      }
+
+      const isCurrentPasswordValid = await verifyPassword(currentPasswordValue, user.password);
+      if (!isCurrentPasswordValid) {
+        return res.status(400).json({ error: 'Current password is incorrect.' });
+      }
+
+      const isSameAsCurrentPassword = await verifyPassword(newPasswordValue, user.password);
+      if (isSameAsCurrentPassword) {
+        return res.status(400).json({ error: 'New password must be different from your current password.' });
+      }
+
+      user.password = await hashPassword(newPasswordValue);
+      await user.save();
+
+      return res.json({ message: 'Password changed successfully.' });
+    } catch (error) {
+      console.error('Change password error:', error);
+      return res.status(500).json({ error: 'Failed to change password. Please try again.' });
     }
   });
 
@@ -810,6 +944,65 @@ async function startServer() {
       console.error("Update user error:", error);
       const message = error instanceof Error ? error.message : "Internal server error";
       res.status(500).json({ error: message });
+    }
+  });
+
+  app.delete("/api/auth/user/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const user = await User.findOne({ id });
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const avatarPath = resolveStoredAvatarPath(user.avatar);
+
+      // Remove role-specific data first to keep dangling references out of the app.
+      if (user.role === 'tutor') {
+        const tutorCourses = await Course.find({ tutorId: id }, { id: 1 });
+        const tutorCourseIds = tutorCourses.map((course) => course.id);
+
+        if (tutorCourseIds.length > 0) {
+          await CourseEnrollment.deleteMany({ courseId: { $in: tutorCourseIds } });
+        }
+
+        await Course.deleteMany({ tutorId: id });
+        await Resource.deleteMany({ tutorId: id });
+        await Booking.deleteMany({ tutorId: id });
+        await Review.deleteMany({ tutorId: id });
+      } else {
+        await Booking.deleteMany({ studentId: id });
+        await Review.deleteMany({ studentId: id });
+        await Question.deleteMany({ studentId: id });
+        await CourseEnrollment.deleteMany({ studentId: id });
+        await Course.updateMany(
+          { enrolledStudents: id },
+          { $pull: { enrolledStudents: id } }
+        );
+        await StudyPlan.deleteMany({ studentId: id });
+        await SkillLevel.deleteMany({ studentId: id });
+      }
+
+      // Remove tutor profile if one exists (safe no-op for students).
+      await Tutor.deleteMany({ id });
+      await User.deleteOne({ id });
+
+      if (avatarPath) {
+        try {
+          await fs.unlink(avatarPath);
+        } catch (deleteError) {
+          const err = deleteError as NodeJS.ErrnoException;
+          if (err.code !== 'ENOENT') {
+            console.warn('Failed to remove avatar during account deletion:', avatarPath, deleteError);
+          }
+        }
+      }
+
+      res.json({ message: "Account deleted successfully" });
+    } catch (error) {
+      console.error("Delete user account error:", error);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -894,7 +1087,11 @@ async function startServer() {
     try {
       const tutorData = req.body;
       const id = tutorData.id || Math.random().toString(36).substr(2, 9);
-      const tutor = new Tutor({ ...tutorData, id });
+      const tutor = new Tutor({
+        ...tutorData,
+        teachingLevel: normalizeTeachingLevel(tutorData.teachingLevel),
+        id,
+      });
       await tutor.save();
       res.json(tutor);
     } catch (error) {
@@ -906,11 +1103,19 @@ async function startServer() {
   app.put("/api/tutors/:id", async (req, res) => {
     try {
       let tutor = await Tutor.findOne({ id: req.params.id });
+      const { teachingLevel: requestedTeachingLevel, ...incomingTutorData } = req.body || {};
 
       if (tutor) {
+        const nextTutorPayload = {
+          ...incomingTutorData,
+          ...(requestedTeachingLevel !== undefined
+            ? { teachingLevel: normalizeTeachingLevel(requestedTeachingLevel) }
+            : {}),
+        };
+
         tutor = await Tutor.findOneAndUpdate(
           { id: req.params.id },
-          req.body,
+          nextTutorPayload,
           { new: true }
         );
         res.json(tutor);
@@ -921,20 +1126,20 @@ async function startServer() {
         }
 
         tutor = new Tutor({
+          ...incomingTutorData,
           id: user.id,
-          name: `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}`,
-          email: user.email,
+          name: incomingTutorData.name || `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}`,
+          email: incomingTutorData.email || user.email,
           role: 'tutor',
-          qualifications: req.body.qualifications || 'Not specified',
-          subjects: req.body.subjects || [],
-          teachingLevel: req.body.teachingLevel || 'School',
-          pricePerHour: req.body.pricePerHour || 0,
-          rating: 0,
-          reviewCount: 0,
-          bio: req.body.bio || 'New tutor on TutorSphere',
-          availability: req.body.availability || [],
-          isVerified: false,
-          ...req.body
+          qualifications: incomingTutorData.qualifications || 'Not specified',
+          subjects: incomingTutorData.subjects || [],
+          teachingLevel: normalizeTeachingLevel(requestedTeachingLevel || 'School'),
+          pricePerHour: incomingTutorData.pricePerHour || 0,
+          rating: incomingTutorData.rating ?? 0,
+          reviewCount: incomingTutorData.reviewCount ?? 0,
+          bio: incomingTutorData.bio || 'New tutor on TutorSphere',
+          availability: incomingTutorData.availability || [],
+          isVerified: incomingTutorData.isVerified ?? false,
         });
 
         await tutor.save();
@@ -1104,12 +1309,21 @@ async function startServer() {
         (typeof req.query.actorId === 'string' && req.query.actorId.trim()) ||
         '';
 
+      if (!actorId) {
+        return res.status(401).json({ error: "actorId is required to update a course." });
+      }
+
+      const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
+      if (!actorUser) {
+        return res.status(403).json({ error: "Only tutor accounts can manage courses." });
+      }
+
       const existingCourse = await Course.findOne({ id: req.params.id });
       if (!existingCourse) {
         return res.status(404).json({ error: "Course not found" });
       }
 
-      if (actorId && existingCourse.tutorId !== actorId) {
+      if (existingCourse.tutorId !== actorId) {
         return res.status(403).json({ error: "You can only manage your own courses." });
       }
 
@@ -1167,12 +1381,21 @@ async function startServer() {
         (typeof req.query.actorId === 'string' && req.query.actorId.trim()) ||
         '';
 
+      if (!actorId) {
+        return res.status(401).json({ error: "actorId is required to delete a course." });
+      }
+
+      const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
+      if (!actorUser) {
+        return res.status(403).json({ error: "Only tutor accounts can delete courses." });
+      }
+
       const existingCourse = await Course.findOne({ id: req.params.id });
       if (!existingCourse) {
         return res.status(404).json({ error: "Course not found" });
       }
 
-      if (actorId && existingCourse.tutorId !== actorId) {
+      if (existingCourse.tutorId !== actorId) {
         return res.status(403).json({ error: "You can only delete your own courses." });
       }
 
@@ -1368,7 +1591,11 @@ async function startServer() {
       }
 
       const requestStudentId = typeof req.query.studentId === 'string' ? req.query.studentId.trim() : '';
-      if (requestStudentId && requestStudentId !== enrollment.studentId) {
+      if (!requestStudentId) {
+        return res.status(400).json({ error: "studentId query parameter is required." });
+      }
+
+      if (requestStudentId !== enrollment.studentId) {
         return res.status(403).json({ error: "You can only access your own certificate." });
       }
 
@@ -1480,6 +1707,7 @@ async function startServer() {
         url: normalizedResourceUrl,
         description: normalizedDescription,
         isFree: true,
+        downloadCount: 0,
       });
       await resource.save();
       res.json(resource);
@@ -1496,17 +1724,27 @@ async function startServer() {
         (typeof req.query.actorId === 'string' && req.query.actorId.trim()) ||
         '';
 
+      if (!actorId) {
+        return res.status(401).json({ error: "actorId is required to update a resource." });
+      }
+
+      const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
+      if (!actorUser) {
+        return res.status(403).json({ error: "Only tutor accounts can manage resources." });
+      }
+
       const existingResource = await Resource.findOne({ id: req.params.id });
       if (!existingResource) {
         return res.status(404).json({ error: "Resource not found" });
       }
 
-      if (actorId && existingResource.tutorId !== actorId) {
+      if (existingResource.tutorId !== actorId) {
         return res.status(403).json({ error: "You can only manage your own resources." });
       }
 
       const updatePayload = { ...req.body };
       delete updatePayload.actorId;
+      delete updatePayload.downloadCount;
 
       if (updatePayload.url !== undefined) {
         if (typeof updatePayload.url !== 'string') {
@@ -1571,6 +1809,40 @@ async function startServer() {
     }
   });
 
+  app.post("/api/resources/:id/download", async (req, res) => {
+    try {
+      const resourceKey = String(req.params.id || '').trim();
+      if (!resourceKey) {
+        return res.status(400).json({ error: "Resource id is required" });
+      }
+
+      const canMatchObjectId = /^[a-fA-F0-9]{24}$/.test(resourceKey);
+      const lookup = canMatchObjectId
+        ? { $or: [{ id: resourceKey }, { _id: resourceKey }] }
+        : { id: resourceKey };
+
+      const resource = await Resource.findOneAndUpdate(
+        lookup,
+        { $inc: { downloadCount: 1 } },
+        { new: true }
+      );
+
+      if (resource) {
+        // Backfill legacy entries missing a stable id so future lookups are consistent.
+        if (!resource.id || !String(resource.id).trim()) {
+          resource.id = String(resource._id);
+          await resource.save();
+        }
+        res.json(resource);
+      } else {
+        res.status(404).json({ error: "Resource not found" });
+      }
+    } catch (error) {
+      console.error("Increment resource download error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   app.delete("/api/resources/:id", async (req, res) => {
     try {
       const actorId =
@@ -1578,12 +1850,21 @@ async function startServer() {
         (typeof req.query.actorId === 'string' && req.query.actorId.trim()) ||
         '';
 
+      if (!actorId) {
+        return res.status(401).json({ error: "actorId is required to delete a resource." });
+      }
+
+      const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
+      if (!actorUser) {
+        return res.status(403).json({ error: "Only tutor accounts can delete resources." });
+      }
+
       const existingResource = await Resource.findOne({ id: req.params.id });
       if (!existingResource) {
         return res.status(404).json({ error: "Resource not found" });
       }
 
-      if (actorId && existingResource.tutorId !== actorId) {
+      if (existingResource.tutorId !== actorId) {
         return res.status(403).json({ error: "You can only delete your own resources." });
       }
 
@@ -1884,7 +2165,7 @@ async function startServer() {
   });
 
   // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
+  if (!isProduction) {
     try {
       const vite = await createViteServer({
         server: {
@@ -1897,13 +2178,16 @@ async function startServer() {
       });
       app.use(vite.middlewares);
     } catch (error) {
-      console.error('Failed to start Vite dev server:', error.message);
+      console.error('Failed to start Vite dev server:', (error as Error).message);
       // Continue without Vite middleware - app will still work but without hot reloading
     }
   } else {
-    app.use(express.static(path.join(__dirname, "dist")));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(__dirname, "dist", "index.html"));
+    const distDir = path.join(__dirname, 'dist');
+    app.use(express.static(distDir, { index: false }));
+
+    // Let API and uploads routes return their own responses; serve SPA for all other GET routes.
+    app.get(/^\/(?!api(?:\/|$)|uploads(?:\/|$)).*/, (req, res) => {
+      res.sendFile(path.join(distDir, 'index.html'));
     });
   }
 

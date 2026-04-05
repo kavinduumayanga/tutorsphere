@@ -62,8 +62,8 @@ export interface TutorResourceManagePageProps {
   setResourceUploadFile: React.Dispatch<React.SetStateAction<File | null>>;
   isLoading: boolean;
   stemSubjects: string[];
-  onSaveResource: (event: React.FormEvent) => void;
-  onDeleteResource: (resourceId: string) => void;
+  onSaveResource: (event: React.FormEvent) => Promise<boolean>;
+  onDeleteResource: (resourceId: string) => Promise<boolean>;
   onEditResource: (resource: Resource) => void;
   onResetResourceForm: () => void;
 }
@@ -108,18 +108,25 @@ const resolveResourcePreviewUrl = (rawUrl: string): string => {
   return trimmed;
 };
 
-// Simulated download count from resource id for display purposes
-const getSimulatedDownloadCount = (id: string): number => {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
-  return Math.abs(hash) % 500 + 10;
-};
-
 const getSimulatedFileSize = (id: string): string => {
   let hash = 0;
   for (let i = 0; i < id.length; i++) hash = ((hash << 3) - hash + id.charCodeAt(i)) | 0;
   const sizeKB = (Math.abs(hash) % 4000) + 100;
   return sizeKB > 1000 ? `${(sizeKB / 1024).toFixed(1)} MB` : `${sizeKB} KB`;
+};
+
+const getEntityTimestamp = (item: { id: string }): number => {
+  const createdAt = Date.parse(String((item as any).createdAt || ''));
+  if (!Number.isNaN(createdAt)) {
+    return createdAt;
+  }
+
+  const updatedAt = Date.parse(String((item as any).updatedAt || ''));
+  if (!Number.isNaN(updatedAt)) {
+    return updatedAt;
+  }
+
+  return 0;
 };
 
 const ITEMS_PER_PAGE = 9;
@@ -142,7 +149,7 @@ const UploadModal: React.FC<{
   selectedFile: File | null;
   setSelectedFile: React.Dispatch<React.SetStateAction<File | null>>;
   stemSubjects: string[];
-  onSave: (event: React.FormEvent) => void;
+  onSave: (event: React.FormEvent) => Promise<boolean>;
   onClose: () => void;
 }> = ({
   isOpen,
@@ -416,7 +423,9 @@ const ResourceCard: React.FC<{
 }> = ({ resource, isSelected, onToggleSelect, onEdit, onDelete, onPreview }) => {
   const TypeIcon = getFileTypeIcon(resource.type);
   const badge = getFileTypeBadge(resource.type);
-  const downloadCount = getSimulatedDownloadCount(resource.id);
+  const downloadCount = Number.isFinite(resource.downloadCount)
+    ? Math.max(0, Number(resource.downloadCount))
+    : 0;
   const fileSize = getSimulatedFileSize(resource.id);
 
   return (
@@ -565,7 +574,13 @@ export const TutorResourceManagePage: React.FC<TutorResourceManagePageProps> = (
         break;
       case 'newest':
       default:
-        result.sort((a, b) => b.id.localeCompare(a.id));
+        result.sort((a, b) => {
+          const timeDelta = getEntityTimestamp(b) - getEntityTimestamp(a);
+          if (timeDelta !== 0) {
+            return timeDelta;
+          }
+          return b.id.localeCompare(a.id);
+        });
         break;
     }
 
@@ -612,23 +627,36 @@ export const TutorResourceManagePage: React.FC<TutorResourceManagePageProps> = (
     onResetResourceForm();
   };
 
-  const handleSave = (e: React.FormEvent) => {
-    onSaveResource(e);
-    // Modal close handled by isSavingResource state change
+  const handleSave = async (e: React.FormEvent) => {
+    const didSave = await onSaveResource(e);
+    if (didSave) {
+      handleCloseModal();
+    }
+
+    return didSave;
   };
 
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (deleteTarget) {
-      onDeleteResource(deleteTarget.id);
-      setDeleteTarget(null);
-      setSelectedIds((prev) => { const next = new Set(prev); next.delete(deleteTarget.id); return next; });
+      const didDelete = await onDeleteResource(deleteTarget.id);
+      if (didDelete) {
+        setDeleteTarget(null);
+        setSelectedIds((prev) => { const next = new Set(prev); next.delete(deleteTarget.id); return next; });
+      }
     }
   };
 
-  const handleBulkDelete = () => {
-    selectedIds.forEach((id) => onDeleteResource(id));
-    setSelectedIds(new Set());
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selectedIds);
+    const outcomes = await Promise.all(ids.map((id) => onDeleteResource(id)));
+
+    const failedIds = ids.filter((_, index) => !outcomes[index]);
+    setSelectedIds(new Set(failedIds));
     setBulkDeleteOpen(false);
+
+    if (failedIds.length > 0) {
+      alert(`${failedIds.length} resource(s) could not be deleted. Please retry.`);
+    }
   };
 
   const handlePreview = (resource: Resource) => {

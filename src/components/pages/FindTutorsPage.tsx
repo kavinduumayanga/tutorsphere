@@ -35,7 +35,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
   { value: 'newest', label: 'Newest' },
 ];
 
-const LEVEL_OPTIONS = ['All Levels', 'School', 'University', 'Both'];
+const LEVEL_OPTIONS = ['All Levels', 'School', 'University', 'School and University'];
 
 const ITEMS_PER_PAGE = 9;
 
@@ -82,7 +82,7 @@ export const FindTutorsPage: React.FC<FindTutorsPageProps> = ({
 
     // Level
     if (levelFilter !== 'All Levels') {
-      result = result.filter((t) => t.teachingLevel === levelFilter || t.teachingLevel === 'Both');
+      result = result.filter((t) => t.teachingLevel === levelFilter);
     }
 
     // Rating
@@ -154,7 +154,7 @@ export const FindTutorsPage: React.FC<FindTutorsPageProps> = ({
           </div>
 
           <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-white tracking-tight mb-3">
-            Find Your Perfect Tutor
+            Browse Tutors
           </h1>
           <p className="text-indigo-100/80 text-base sm:text-lg max-w-xl font-medium mb-8">
             Browse verified experts ready to guide you through personalized learning paths.

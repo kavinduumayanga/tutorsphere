@@ -77,8 +77,8 @@ export interface TutorCourseManagePageProps {
   uploadingModuleVideoKey: string | null;
   uploadingModuleResourcesKey: string | null;
   stemSubjects: string[];
-  onSaveCourse: (event: React.FormEvent) => void;
-  onDeleteCourse: (courseId: string) => void;
+  onSaveCourse: (event: React.FormEvent) => Promise<boolean>;
+  onDeleteCourse: (courseId: string) => Promise<boolean>;
   onEditCourse: (course: Course) => void;
   onResetCourseForm: () => void;
   onAddCourseModule: () => void;
@@ -106,6 +106,20 @@ const getCourseLevel = (moduleCount: number): string => {
   if (moduleCount <= 3) return 'Beginner';
   if (moduleCount <= 6) return 'Intermediate';
   return 'Advanced';
+};
+
+const getEntityTimestamp = (item: { id: string }): number => {
+  const createdAt = Date.parse(String((item as any).createdAt || ''));
+  if (!Number.isNaN(createdAt)) {
+    return createdAt;
+  }
+
+  const updatedAt = Date.parse(String((item as any).updatedAt || ''));
+  if (!Number.isNaN(updatedAt)) {
+    return updatedAt;
+  }
+
+  return 0;
 };
 
 const LEVEL_COLORS: Record<string, string> = {
@@ -154,7 +168,7 @@ const CourseEditorPanel: React.FC<{
   uploadingModuleVideoKey: string | null;
   uploadingModuleResourcesKey: string | null;
   stemSubjects: string[];
-  onSave: (event: React.FormEvent) => void;
+  onSave: (event: React.FormEvent) => Promise<boolean>;
   onClose: () => void;
   onAddModule: () => void;
   onRemoveModule: (idx: number) => void;
@@ -321,13 +335,13 @@ const CourseEditorPanel: React.FC<{
                   >
                     <div>
                       <label className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5 block">
-                        Thumbnail URL
+                        Thumbnail URL or Uploaded Path
                       </label>
                       <input
-                        type="url"
+                        type="text"
                         value={courseForm.thumbnail}
                         onChange={(e) => setCourseForm((prev) => ({ ...prev, thumbnail: e.target.value }))}
-                        placeholder="https://example.com/thumbnail.jpg"
+                        placeholder="https://example.com/thumbnail.jpg or /uploads/thumbnail-file.jpg"
                         className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm"
                       />
                     </div>
@@ -491,13 +505,13 @@ const CourseEditorPanel: React.FC<{
 
                           {/* Video Input */}
                           <div className="space-y-2">
-                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Video</label>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Video URL or Uploaded Path</label>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                               <input
-                                type="url"
+                                type="text"
                                 value={module.videoUrl}
                                 onChange={(e) => onUpdateModule(moduleIndex, 'videoUrl', e.target.value)}
-                                placeholder="Video URL (YouTube, Vimeo...)"
+                                placeholder="YouTube/Vimeo URL or /uploads/video-file.mp4"
                                 className="w-full px-3 py-2.5 rounded-lg border border-slate-200 bg-white outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm"
                               />
                               <label className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-600 cursor-pointer hover:border-indigo-300 hover:bg-indigo-50/30 transition-all">
@@ -861,7 +875,13 @@ export const TutorCourseManagePage: React.FC<TutorCourseManagePageProps> = ({
         break;
       case 'newest':
       default:
-        result.sort((a, b) => b.id.localeCompare(a.id));
+        result.sort((a, b) => {
+          const timeDelta = getEntityTimestamp(b) - getEntityTimestamp(a);
+          if (timeDelta !== 0) {
+            return timeDelta;
+          }
+          return b.id.localeCompare(a.id);
+        });
         break;
     }
 
@@ -891,15 +911,21 @@ export const TutorCourseManagePage: React.FC<TutorCourseManagePageProps> = ({
     onResetCourseForm();
   };
 
-  const handleSaveAndClose = (e: React.FormEvent) => {
-    onSaveCourse(e);
-    // Close editor only after save completes — handled via useEffect or isSavingCourse
+  const handleSaveAndClose = async (e: React.FormEvent) => {
+    const didSave = await onSaveCourse(e);
+    if (didSave) {
+      setIsEditorOpen(false);
+    }
+
+    return didSave;
   };
 
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (deleteTarget) {
-      onDeleteCourse(deleteTarget.id);
-      setDeleteTarget(null);
+      const didDelete = await onDeleteCourse(deleteTarget.id);
+      if (didDelete) {
+        setDeleteTarget(null);
+      }
     }
   };
 
@@ -927,7 +953,7 @@ export const TutorCourseManagePage: React.FC<TutorCourseManagePageProps> = ({
             <span>Tutor Content Studio</span>
           </div>
           <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">
-            Manage University Video Courses
+            Manage Courses
           </h2>
           <p className="text-slate-500 text-sm max-w-lg leading-relaxed">
             Create, edit, and publish video-based courses for university learners.

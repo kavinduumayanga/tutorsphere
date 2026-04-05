@@ -92,6 +92,20 @@ const getCourseRating = (courseId: string, enrolledCount: number): number => {
   return Math.round(base * 10) / 10;
 };
 
+const getEntityTimestamp = (item: { id: string }): number => {
+  const createdAt = Date.parse(String((item as any).createdAt || ''));
+  if (!Number.isNaN(createdAt)) {
+    return createdAt;
+  }
+
+  const updatedAt = Date.parse(String((item as any).updatedAt || ''));
+  if (!Number.isNaN(updatedAt)) {
+    return updatedAt;
+  }
+
+  return 0;
+};
+
 // ─── Skeleton Components ──────────────────────────────────────────────────────
 
 const CardSkeleton = () => (
@@ -255,7 +269,7 @@ const QuickPreviewModal: React.FC<QuickPreviewProps> = ({
               <div>
                 <p className="text-sm font-bold text-slate-900">{getTutorDisplayName(tutor)}</p>
                 <p className="text-xs text-slate-500">
-                  {tutor.teachingLevel === 'Both' ? 'School & University' : tutor.teachingLevel} Tutor
+                  {tutor.teachingLevel} Tutor
                   {tutor.rating > 0 && ` · ★ ${tutor.rating}`}
                 </p>
               </div>
@@ -394,7 +408,13 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
         });
         break;
       case 'newest':
-        result.sort((a, b) => b.id.localeCompare(a.id));
+        result.sort((a, b) => {
+          const timeDelta = getEntityTimestamp(b) - getEntityTimestamp(a);
+          if (timeDelta !== 0) {
+            return timeDelta;
+          }
+          return b.id.localeCompare(a.id);
+        });
         break;
       case 'price-low':
         result.sort((a, b) => {

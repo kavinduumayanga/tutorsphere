@@ -667,7 +667,10 @@ Rules:
       '4) Trusted Study Resources',
       ...summary.resources
         .slice(0, 6)
-        .map((resource, index) => `${index + 1}. ${resource.title} (${resource.source}) - ${resource.url}`),
+        .map(
+          (resource, index) =>
+            `${index + 1}. [${resource.title} (${resource.source})](${resource.url})`
+        ),
     ].join('\n');
 
     return [scoreBlock, weakAreaBlock, studyPlanBlock, resourcesBlock].join('\n\n');

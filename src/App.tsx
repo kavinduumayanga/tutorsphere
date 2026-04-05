@@ -67,10 +67,11 @@ import { ToastProvider } from './components/common/Toast';
 import { QuizChatbotPage } from './components/pages/QuizChatbotPage';
 import { FindTutorsPage } from './components/pages/FindTutorsPage';
 import { CertificateModal } from './components/common/CertificateModal';
+import { ForgotPasswordPage } from './components/pages/ForgotPasswordPage';
 
 const STEM_SUBJECTS = ['Maths', 'Science', 'Engineering', 'Tech', 'ICT'];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'about';
+type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'about';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
@@ -84,6 +85,7 @@ const NAV_LABELS: Record<Tab, string> = {
   registerSelect: 'Register',
   registerStudent: 'Register',
   registerTutor: 'Register',
+  forgotPassword: 'Forgot Password',
   register: 'Profile',
   dashboard: 'Dashboard',
   settings: 'Settings',
@@ -105,6 +107,7 @@ const getAllowedTabs = (user: AppUser | null): Tab[] => {
       'registerSelect',
       'registerStudent',
       'registerTutor',
+      'forgotPassword',
       'about'
     ];
   }
@@ -236,8 +239,135 @@ const createInitialResourceForm = () => ({
 
 type ResourceInputMode = 'url' | 'file';
 type ResourceUploadStatus = 'idle' | 'uploading' | 'uploaded' | 'error';
+type SessionPersistenceMode = 'session' | 'remember';
 
 const isUploadedResourcePath = (value: string): boolean => value.trim().startsWith('/uploads/');
+const SESSION_STORAGE_KEY = 'session';
+const REMEMBER_ME_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
+
+type PersistedSession = {
+  user: AppUser;
+  activeTab: Tab;
+  expiresAt?: number;
+};
+
+const parseStoredSession = (rawValue: string | null): PersistedSession | null => {
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    if (!parsed || typeof parsed !== 'object' || !parsed.user) {
+      return null;
+    }
+
+    return {
+      user: parsed.user as AppUser,
+      activeTab: (parsed.activeTab as Tab) || 'home',
+      expiresAt: typeof parsed.expiresAt === 'number' ? parsed.expiresAt : undefined,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const clearStoredSessions = (): void => {
+  localStorage.removeItem(SESSION_STORAGE_KEY);
+  sessionStorage.removeItem(SESSION_STORAGE_KEY);
+};
+
+const loadStoredSession = (): { session: PersistedSession; persistence: SessionPersistenceMode } | null => {
+  const sessionStorageValue = parseStoredSession(sessionStorage.getItem(SESSION_STORAGE_KEY));
+  if (sessionStorageValue) {
+    return { session: sessionStorageValue, persistence: 'session' };
+  }
+
+  if (sessionStorage.getItem(SESSION_STORAGE_KEY)) {
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  }
+
+  const rememberedSession = parseStoredSession(localStorage.getItem(SESSION_STORAGE_KEY));
+  if (!rememberedSession) {
+    if (localStorage.getItem(SESSION_STORAGE_KEY)) {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+    }
+    return null;
+  }
+
+  if (typeof rememberedSession.expiresAt === 'number' && rememberedSession.expiresAt <= Date.now()) {
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+    return null;
+  }
+
+  return { session: rememberedSession, persistence: 'remember' };
+};
+
+const persistSession = (session: PersistedSession, persistence: SessionPersistenceMode): void => {
+  if (persistence === 'remember') {
+    const nextExpiresAt =
+      typeof session.expiresAt === 'number' && session.expiresAt > Date.now()
+        ? session.expiresAt
+        : Date.now() + REMEMBER_ME_DURATION_MS;
+
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({
+        user: session.user,
+        activeTab: session.activeTab,
+        expiresAt: nextExpiresAt,
+      })
+    );
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    return;
+  }
+
+  sessionStorage.setItem(
+    SESSION_STORAGE_KEY,
+    JSON.stringify({
+      user: session.user,
+      activeTab: session.activeTab,
+    })
+  );
+  localStorage.removeItem(SESSION_STORAGE_KEY);
+};
+
+const sanitizePhoneInput = (value: string): string => {
+  const compact = value.replace(/[\s()-]/g, '');
+  if (!compact) {
+    return '';
+  }
+
+  const normalizedCharacters = compact.replace(/[^\d+]/g, '');
+  if (normalizedCharacters.startsWith('+')) {
+    return `+${normalizedCharacters.slice(1).replace(/\+/g, '')}`;
+  }
+
+  return normalizedCharacters.replace(/\+/g, '');
+};
+
+const normalizeSriLankanPhone = (value: string): string | null => {
+  const sanitized = sanitizePhoneInput(value);
+  if (!sanitized) {
+    return null;
+  }
+
+  const digitsOnly = sanitized.replace(/\D/g, '');
+
+  if (digitsOnly.length === 9) {
+    return `+94${digitsOnly}`;
+  }
+
+  if (digitsOnly.length === 10 && digitsOnly.startsWith('0')) {
+    return `+94${digitsOnly.slice(1)}`;
+  }
+
+  if (digitsOnly.length === 11 && digitsOnly.startsWith('94')) {
+    return `+${digitsOnly}`;
+  }
+
+  return null;
+};
 
 export default function App() {
   const [selectedTutor, setSelectedTutor] = useState<Tutor | null>(null);
@@ -249,6 +379,12 @@ export default function App() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [authData, setAuthData] = useState({ email: '', password: '', firstName: '', lastName: '', confirmPassword: '', role: 'student' as 'student' | 'tutor' });
+  const [rememberMe, setRememberMe] = useState(false);
+  const [sessionPersistence, setSessionPersistence] = useState<SessionPersistenceMode>('session');
+  const [hasLoadedSession, setHasLoadedSession] = useState(false);
+  const [showChangePasswordPanel, setShowChangePasswordPanel] = useState(false);
+  const [changePasswordData, setChangePasswordData] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
   // Profile Update State
   const [profileData, setProfileData] = useState({
@@ -262,6 +398,7 @@ export default function App() {
     bio: ''
   });
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [activeBookingActionId, setActiveBookingActionId] = useState<string | null>(null);
 
   // Courses browsing state
@@ -280,27 +417,39 @@ export default function App() {
 
   const [certificateModalData, setCertificateModalData] = useState<{ enrollment: CourseEnrollment, courseTitle: string } | null>(null);
 
-  // Load user and activeTab from localStorage on app start
+  // Load user and activeTab from persisted storage on app start
   useEffect(() => {
-    const storedSession = localStorage.getItem('session');
+    const storedSession = loadStoredSession();
     if (storedSession) {
-      try {
-        const session = JSON.parse(storedSession);
-        setCurrentUser(session.user);
-        const restoredTab: Tab = session.activeTab || 'home';
-        setActiveTab(isInternalTab(restoredTab) ? 'home' : restoredTab);
-      } catch {
-        localStorage.removeItem('session');
-      }
+      setCurrentUser(storedSession.session.user);
+      const restoredTab: Tab = storedSession.session.activeTab || 'home';
+      setActiveTab(isInternalTab(restoredTab) ? 'home' : restoredTab);
+      setSessionPersistence(storedSession.persistence);
     }
+
+    setHasLoadedSession(true);
   }, []);
 
-  // Persist session when user or activeTab changes
+  // Persist session when user, tab, or persistence mode changes
   useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem('session', JSON.stringify({ user: currentUser, activeTab }));
+    if (!hasLoadedSession || !currentUser) {
+      return;
     }
-  }, [currentUser, activeTab]);
+
+    const existingRememberedSession =
+      sessionPersistence === 'remember'
+        ? parseStoredSession(localStorage.getItem(SESSION_STORAGE_KEY))
+        : null;
+
+    persistSession(
+      {
+        user: currentUser,
+        activeTab,
+        expiresAt: existingRememberedSession?.expiresAt,
+      },
+      sessionPersistence
+    );
+  }, [currentUser, activeTab, sessionPersistence, hasLoadedSession]);
 
   useEffect(() => {
     if (activeTab === 'tutorProfile' && !viewingTutorId) {
@@ -326,7 +475,7 @@ export default function App() {
   }, [activeTab, currentUser, viewingTutorId, bookingTutorId]);
 
   useEffect(() => {
-    if (activeTab === 'registerSelect' || activeTab === 'registerStudent' || activeTab === 'registerTutor') {
+    if (activeTab === 'registerSelect' || activeTab === 'registerStudent' || activeTab === 'registerTutor' || activeTab === 'forgotPassword') {
       setShowAuthModal(false);
       setAuthMode('login');
     }
@@ -350,7 +499,7 @@ export default function App() {
     email: '',
     education: '',
     subjects: [] as string[],
-    teachingLevel: 'School' as 'School' | 'University' | 'Both',
+    teachingLevel: 'School' as 'School' | 'University' | 'School and University',
     bio: ''
   });
   const [isValidating, setIsValidating] = useState(false);
@@ -415,14 +564,14 @@ export default function App() {
   const [activeQuiz, setActiveQuiz] = useState<Quiz | null>(null);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, string>>({});
   const [quizScore, setQuizScore] = useState<number | null>(null);
-  const [isQuizLoading, setIsQuizLoading] = useState(false);
 
   // Chatbot State
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'bot', text: string, audio?: string }[]>([
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'bot', text: string, audio?: string, meta?: 'typing' | 'error' }[]>([
     { role: 'bot', text: 'Hello! I am your TutorSphere assistant. How can I help you today? You can ask me to find a tutor, suggest a course, or even start a quiz!' }
   ]);
   const [chatInput, setChatInput] = useState('');
+  const [isChatTyping, setIsChatTyping] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState<string | null>(null);
 
   useEffect(() => {
@@ -808,7 +957,7 @@ export default function App() {
       setProfileData({
         firstName: currentUser.firstName,
         lastName: currentUser.lastName,
-        phone: currentUser.phone || '',
+        phone: currentUser.phone ? normalizeSriLankanPhone(currentUser.phone) || currentUser.phone : '',
         education: tutorDoc?.qualifications || '',
         subjects: tutorDoc?.subjects || [],
         teachingLevel: tutorDoc?.teachingLevel || '',
@@ -862,11 +1011,14 @@ export default function App() {
       let user;
       if (authMode === 'login') {
         user = await apiService.login(authData.email, authData.password);
+        const persistenceMode: SessionPersistenceMode = rememberMe ? 'remember' : 'session';
+        setSessionPersistence(persistenceMode);
         setCurrentUser(user);
         setActiveTab('dashboard');
-        localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
+        persistSession({ user, activeTab: 'dashboard' }, persistenceMode);
         setShowAuthModal(false);
         setAuthData({ email: '', password: '', firstName: '', lastName: '', confirmPassword: '', role: 'student' });
+        setRememberMe(false);
       } else {
         if (!authData.firstName.trim() || !authData.lastName.trim()) {
           alert('First name and last name are required.');
@@ -881,10 +1033,30 @@ export default function App() {
         alert('Account created successfully! Please sign in with your credentials.');
         setAuthMode('login');
         setAuthData({ email: authData.email, password: '', firstName: '', lastName: '', confirmPassword: '', role: 'student' });
+        setRememberMe(false);
       }
     } catch (error: any) {
       alert(error.message || 'Authentication failed');
     }
+  };
+
+  const handleOpenForgotPassword = () => {
+    setShowAuthModal(false);
+    setAuthMode('login');
+    setRememberMe(false);
+    setActiveTab('forgotPassword');
+  };
+
+  const handleOpenLoginFromForgotPassword = () => {
+    setAuthMode('login');
+    setShowAuthModal(true);
+    setRememberMe(false);
+    setActiveTab('home');
+    setAuthData((prev) => ({
+      ...prev,
+      password: '',
+      confirmPassword: '',
+    }));
   };
 
   const handleRegister = async (e: React.FormEvent) => {
@@ -929,21 +1101,77 @@ export default function App() {
 
   const handleChatSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInput.trim()) return;
-    const userMsg = chatInput;
-    setChatMessages(prev => [...prev, { role: 'user', text: userMsg }]);
+    if (!chatInput.trim() || isChatTyping) return;
+
+    const userMsg = chatInput.trim();
+    setChatMessages(prev => [
+      ...prev,
+      { role: 'user', text: userMsg },
+      { role: 'bot', text: 'TutorSphere Assistant is typing...', meta: 'typing' },
+    ]);
     setChatInput('');
+    setIsChatTyping(true);
 
-    // Check for quiz trigger in user message
-    if (userMsg.toLowerCase().includes('quiz') || userMsg.toLowerCase().includes('test')) {
-      const subject = STEM_SUBJECTS.find(s => userMsg.toLowerCase().includes(s.toLowerCase())) || 'Mathematics';
-      setChatMessages(prev => [...prev, { role: 'bot', text: `Sure! I can help you start a ${subject} quiz. Let me generate it for you...` }]);
-      handleStartQuiz(subject);
-      return;
+    try {
+      const userName = currentUser
+        ? `${currentUser.firstName} ${currentUser.lastName}`.trim() || 'Guest'
+        : 'Guest';
+
+      const response = await apiService.sendFaqChatMessage(userMsg, {
+        currentTab: activeTab,
+        userRole: currentUser?.role || 'guest',
+        userName,
+      });
+
+      const botReply = String(response?.reply || '').trim() ||
+        'I can help with TutorSphere platform features like courses, tutors, bookings, resources, and certificates.';
+
+      setChatMessages((prev) => {
+        let typingIndex = -1;
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].meta === 'typing') {
+            typingIndex = i;
+            break;
+          }
+        }
+
+        if (typingIndex === -1) {
+          return [...prev, { role: 'bot', text: botReply }];
+        }
+
+        return prev.map((message, index) =>
+          index === typingIndex
+            ? { role: 'bot', text: botReply }
+            : message
+        );
+      });
+    } catch (error) {
+      console.error('Failed to fetch TutorSphere Assistant reply:', error);
+
+      setChatMessages((prev) => {
+        let typingIndex = -1;
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].meta === 'typing') {
+            typingIndex = i;
+            break;
+          }
+        }
+
+        const fallbackReply = 'I hit a temporary issue. Please try again in a moment.';
+
+        if (typingIndex === -1) {
+          return [...prev, { role: 'bot', text: fallbackReply, meta: 'error' }];
+        }
+
+        return prev.map((message, index) =>
+          index === typingIndex
+            ? { role: 'bot', text: fallbackReply, meta: 'error' }
+            : message
+        );
+      });
+    } finally {
+      setIsChatTyping(false);
     }
-
-    const botResponse = await localService.getChatbotResponse(userMsg, `User is currently on ${activeTab} tab. User name: ${currentUser?.firstName + ' ' + currentUser?.lastName || 'Guest'}`);
-    setChatMessages(prev => [...prev, { role: 'bot', text: botResponse }]);
   };
 
   const handleSpeak = async (text: string, index: number) => {
@@ -956,27 +1184,6 @@ export default function App() {
       audio.play();
     } else {
       setIsSpeaking(null);
-    }
-  };
-
-  const handleStartQuiz = async (subject: string) => {
-    setIsQuizLoading(true);
-    setActiveTab('quizzes');
-    try {
-      const quizData = await localService.generateQuiz(subject, 'Intermediate');
-      if (quizData) {
-        const quiz = await apiService.createQuiz({
-          subject,
-          questions: quizData.questions
-        });
-        setActiveQuiz(quiz);
-        setQuizScore(null);
-      }
-    } catch (error) {
-      console.error('Failed to start quiz:', error);
-      alert('Failed to start quiz. Please try again.');
-    } finally {
-      setIsQuizLoading(false);
     }
   };
 
@@ -1401,18 +1608,18 @@ export default function App() {
     });
   };
 
-  const handleSaveCourse = async (event: React.FormEvent) => {
+  const handleSaveCourse = async (event: React.FormEvent): Promise<boolean> => {
     event.preventDefault();
 
     if (!currentUser || currentUser.role !== 'tutor') {
       alert('Only tutor accounts can manage courses.');
-      return;
+      return false;
     }
 
     const tutorId = currentTutor?.id || currentUser.id;
     if (!tutorId) {
       alert('Tutor profile is required to manage courses.');
-      return;
+      return false;
     }
 
     const normalizedModules = courseForm.modules
@@ -1441,18 +1648,18 @@ export default function App() {
 
     if (!courseForm.title.trim() || !courseForm.description.trim()) {
       alert('Course title and description are required.');
-      return;
+      return false;
     }
 
     if (normalizedModules.length === 0) {
       alert('Please add at least one module with a title and a video URL (or uploaded video).');
-      return;
+      return false;
     }
 
     const normalizedPrice = Number(courseForm.price) || 0;
     if (!courseForm.isFree && normalizedPrice <= 0) {
       alert('Paid courses must have a price greater than zero.');
-      return;
+      return false;
     }
 
     setIsSavingCourse(true);
@@ -1487,30 +1694,27 @@ export default function App() {
       }
 
       handleResetCourseForm();
+      return true;
     } catch (error) {
       console.error('Failed to save course:', error);
       const message = error instanceof Error ? error.message : 'Failed to save course.';
       alert(message);
+      return false;
     } finally {
       setIsSavingCourse(false);
     }
   };
 
-  const handleDeleteCourse = async (courseId: string) => {
+  const handleDeleteCourse = async (courseId: string): Promise<boolean> => {
     if (!currentUser || currentUser.role !== 'tutor') {
       alert('Only tutor accounts can delete courses.');
-      return;
+      return false;
     }
 
     const tutorId = currentTutor?.id || currentUser.id;
     if (!tutorId) {
       alert('Tutor profile is required to delete courses.');
-      return;
-    }
-
-    const confirmed = confirm('Delete this course? This will also remove associated student enrollments.');
-    if (!confirmed) {
-      return;
+      return false;
     }
 
     try {
@@ -1524,10 +1728,12 @@ export default function App() {
       }
 
       alert('Course deleted successfully.');
+      return true;
     } catch (error) {
       console.error('Failed to delete course:', error);
       const message = error instanceof Error ? error.message : 'Failed to delete course.';
       alert(message);
+      return false;
     }
   };
 
@@ -1560,25 +1766,25 @@ export default function App() {
     });
   };
 
-  const handleSaveResource = async (event: React.FormEvent) => {
+  const handleSaveResource = async (event: React.FormEvent): Promise<boolean> => {
     event.preventDefault();
 
     if (!currentUser || currentUser.role !== 'tutor') {
       alert('Only tutor accounts can manage resources.');
-      return;
+      return false;
     }
 
     const tutorId = currentTutor?.id || currentUser.id;
     if (!tutorId) {
       alert('Tutor profile is required to manage resources.');
-      return;
+      return false;
     }
 
     if (!resourceForm.title.trim()) {
       alert('Resource title is required.');
       setResourceUploadStatus('error');
       setResourceUploadStatusMessage('Resource title is required.');
-      return;
+      return false;
     }
 
     setIsSavingResource(true);
@@ -1608,7 +1814,7 @@ export default function App() {
           alert(validationMessage);
           setResourceUploadStatus('error');
           setResourceUploadStatusMessage(validationMessage);
-          return;
+          return false;
         } else {
           setResourceUploadProgress(100);
           setResourceUploadStatusMessage('Using previously uploaded file path.');
@@ -1618,10 +1824,10 @@ export default function App() {
         alert(validationMessage);
         setResourceUploadStatus('error');
         setResourceUploadStatusMessage(validationMessage);
-        return;
+        return false;
       }
 
-      const payload: Omit<Resource, 'id'> = {
+      const payload: Omit<Resource, 'id' | 'downloadCount'> = {
         tutorId,
         title: resourceForm.title.trim(),
         type: resourceForm.type,
@@ -1651,33 +1857,30 @@ export default function App() {
           ? 'File uploaded and resource saved successfully.'
           : 'Resource saved successfully.'
       );
+      return true;
     } catch (error) {
       console.error('Failed to save resource:', error);
       const message = error instanceof Error ? error.message : 'Failed to save resource.';
       setResourceUploadStatus('error');
       setResourceUploadStatusMessage(message);
       alert(message);
+      return false;
     } finally {
       setIsSavingResource(false);
       setIsUploadingResourceFile(false);
     }
   };
 
-  const handleDeleteResource = async (resourceId: string) => {
+  const handleDeleteResource = async (resourceId: string): Promise<boolean> => {
     if (!currentUser || currentUser.role !== 'tutor') {
       alert('Only tutor accounts can delete resources.');
-      return;
+      return false;
     }
 
     const tutorId = currentTutor?.id || currentUser.id;
     if (!tutorId) {
       alert('Tutor profile is required to delete resources.');
-      return;
-    }
-
-    const confirmed = confirm('Delete this resource?');
-    if (!confirmed) {
-      return;
+      return false;
     }
 
     try {
@@ -1689,10 +1892,12 @@ export default function App() {
       }
 
       alert('Resource deleted successfully.');
+      return true;
     } catch (error) {
       console.error('Failed to delete resource:', error);
       const message = error instanceof Error ? error.message : 'Failed to delete resource.';
       alert(message);
+      return false;
     }
   };
 
@@ -1721,13 +1926,84 @@ export default function App() {
   };
 
   const handleSignOut = () => {
-    localStorage.removeItem('session');
+    clearStoredSessions();
     setCurrentUser(null);
     setActiveLearningCourseId(null);
     setIsUserMenuOpen(false);
+    setSessionPersistence('session');
+    setRememberMe(false);
     setAuthMode('login');
     setShowAuthModal(true);
     setActiveTab('home');
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!currentUser) {
+      return;
+    }
+
+    const confirmed = confirm('Delete your account permanently? This will remove your profile and related data. This action cannot be undone.');
+    if (!confirmed) {
+      return;
+    }
+
+    const confirmationInput = prompt('Type DELETE to confirm account deletion:');
+    if (confirmationInput !== 'DELETE') {
+      alert('Account deletion cancelled.');
+      return;
+    }
+
+    const deletedUser = currentUser;
+    setIsDeletingAccount(true);
+
+    try {
+      await apiService.deleteUser(deletedUser.id);
+
+      setTutors((prevTutors) => prevTutors.filter((tutor) => tutor.id !== deletedUser.id));
+
+      setCourses((prevCourses) =>
+        deletedUser.role === 'tutor'
+          ? prevCourses.filter((course) => course.tutorId !== deletedUser.id)
+          : prevCourses.map((course) => ({
+            ...course,
+            enrolledStudents: course.enrolledStudents.filter((studentId) => studentId !== deletedUser.id),
+          }))
+      );
+
+      if (deletedUser.role === 'tutor') {
+        setResources((prevResources) => prevResources.filter((resource) => resource.tutorId !== deletedUser.id));
+      }
+
+      setAllReviews((prevReviews) =>
+        prevReviews.filter(
+          (review) => review.tutorId !== deletedUser.id && review.studentId !== deletedUser.id
+        )
+      );
+
+      setBookings([]);
+      setReviews([]);
+      setQuestions([]);
+      setCourseEnrollments([]);
+      setUserCourses([]);
+
+      clearStoredSessions();
+      setCurrentUser(null);
+      setActiveLearningCourseId(null);
+      setIsUserMenuOpen(false);
+      setShowAuthModal(false);
+      setAuthMode('login');
+      setSessionPersistence('session');
+      setRememberMe(false);
+      setActiveTab('home');
+
+      alert('Your account was deleted successfully.');
+    } catch (error) {
+      console.error('Failed to delete account:', error);
+      const message = error instanceof Error ? error.message : 'Failed to delete account. Please try again.';
+      alert(message);
+    } finally {
+      setIsDeletingAccount(false);
+    }
   };
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1804,6 +2080,37 @@ export default function App() {
     }
   };
 
+  const formatSriLankanPhoneForInput = (value: string): string => {
+    const sanitized = sanitizePhoneInput(value);
+    if (!sanitized) {
+      return '';
+    }
+
+    const digitsOnly = sanitized.replace(/\D/g, '');
+
+    if (sanitized.startsWith('+')) {
+      if (digitsOnly.startsWith('94')) {
+        return `+${digitsOnly.slice(0, 11)}`;
+      }
+      return '+94';
+    }
+
+    if (digitsOnly.startsWith('0')) {
+      return `+94${digitsOnly.slice(1, 10)}`;
+    }
+
+    if (digitsOnly.startsWith('94')) {
+      return `+94${digitsOnly.slice(2, 11)}`;
+    }
+
+    return `+94${digitsOnly.slice(0, 9)}`;
+  };
+
+  const handleProfilePhoneChange = (value: string) => {
+    const formattedPhone = formatSriLankanPhoneForInput(value);
+    setProfileData((prev) => ({ ...prev, phone: formattedPhone }));
+  };
+
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
@@ -1813,17 +2120,26 @@ export default function App() {
       return;
     }
 
+    const normalizedPhone = profileData.phone ? normalizeSriLankanPhone(profileData.phone) : null;
+    if (profileData.phone && !normalizedPhone) {
+      alert('Please enter a valid Sri Lankan phone number in +94 format (e.g. +94771234567).');
+      return;
+    }
+
     setIsUpdatingProfile(true);
     try {
       const formData = new FormData();
       formData.append('firstName', profileData.firstName.trim());
       formData.append('lastName', profileData.lastName.trim());
-      if (profileData.phone) formData.append('phone', profileData.phone.trim());
+      formData.append('phone', normalizedPhone ?? '');
 
       if (currentUser.role === 'tutor') {
         const tutorId = currentTutor?.id || currentUser.id;
         const hasSubjects = profileData.subjects.length > 0;
-        const validTeachingLevel = profileData.teachingLevel === 'School' || profileData.teachingLevel === 'University' || profileData.teachingLevel === 'Both';
+        const validTeachingLevel =
+          profileData.teachingLevel === 'School' ||
+          profileData.teachingLevel === 'University' ||
+          profileData.teachingLevel === 'School and University';
 
         if (!hasSubjects || !validTeachingLevel || !profileData.education.trim()) {
           alert('Tutor profiles require Education, Subject(s), and Teaching Level.');
@@ -1851,6 +2167,42 @@ export default function App() {
       alert('Failed to update profile. Please try again.');
     } finally {
       setIsUpdatingProfile(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    if (!currentUser) {
+      return;
+    }
+
+    if (!changePasswordData.currentPassword || !changePasswordData.newPassword || !changePasswordData.confirmPassword) {
+      alert('Current password, new password, and confirm password are required.');
+      return;
+    }
+
+    if (changePasswordData.newPassword !== changePasswordData.confirmPassword) {
+      alert('New password and confirm password do not match.');
+      return;
+    }
+
+    setIsChangingPassword(true);
+    try {
+      const response = await apiService.changePassword(
+        currentUser.id,
+        changePasswordData.currentPassword,
+        changePasswordData.newPassword,
+        changePasswordData.confirmPassword
+      );
+
+      alert(response.message || 'Password changed successfully.');
+      setChangePasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      setShowChangePasswordPanel(false);
+    } catch (error) {
+      console.error('Failed to change password:', error);
+      const message = error instanceof Error ? error.message : 'Failed to change password. Please try again.';
+      alert(message);
+    } finally {
+      setIsChangingPassword(false);
     }
   };
 
@@ -2015,8 +2367,28 @@ export default function App() {
 
   const isDirectVideoFile = (url: string): boolean => /\.(mp4|webm|ogg|mov|m4v)(\?.*)?$/i.test(url.trim());
 
+  const resolveCourseLearningResourceUrl = (rawUrl: string): string => {
+    const trimmed = rawUrl.trim();
+    if (!trimmed) {
+      return '';
+    }
+
+    if (/^https?:\/\//i.test(trimmed)) {
+      return trimmed;
+    }
+
+    if (trimmed.startsWith('/uploads/')) {
+      if (window.location.port === '3000') {
+        return `${window.location.origin}${trimmed}`;
+      }
+      return `http://localhost:3000${trimmed}`;
+    }
+
+    return trimmed;
+  };
+
   return (
-    <div className="min-h-screen bg-[#F8FAFC] font-sans text-slate-900">
+    <div className={`${activeTab === 'quizzes' ? 'h-[100dvh] overflow-hidden' : 'min-h-screen'} bg-[#F8FAFC] font-sans text-slate-900`}>
       {/* Navbar */}
       <nav className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -2546,7 +2918,7 @@ export default function App() {
                                   />
                                   <div className="flex-1">
                                     <h5 className="text-lg font-black text-slate-900">{getTutorDisplayName(courseTutor)}</h5>
-                                    <p className="text-sm text-indigo-700 font-semibold">{courseTutor.teachingLevel === 'Both' ? 'School & University Tutor' : `${courseTutor.teachingLevel} Tutor`}</p>
+                                    <p className="text-sm text-indigo-700 font-semibold">{`${courseTutor.teachingLevel} Tutor`}</p>
                                     <p className="text-sm text-slate-600 mt-2 line-clamp-2">{courseTutor.bio}</p>
                                     <button
                                       onClick={() => {
@@ -2627,13 +2999,20 @@ export default function App() {
                           <div className="space-y-4">
                             {currentModule.resources.length > 0 ? (
                               <div className="grid grid-cols-1 gap-3">
-                                {currentModule.resources.map((resource, idx) => (
+                                {currentModule.resources.map((resource, idx) => {
+                                  const resolvedResourceUrl = resolveCourseLearningResourceUrl(resource.url);
+                                  return (
                                   <a
                                     key={`${currentModule.id}-res-${idx}`}
-                                    href={resource.url}
+                                    href={resolvedResourceUrl || '#'}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     download={resource.url.startsWith('/uploads/') ? resource.name : undefined}
+                                    onClick={(event) => {
+                                      if (!resolvedResourceUrl) {
+                                        event.preventDefault();
+                                      }
+                                    }}
                                     className="p-4 rounded-xl bg-slate-50 border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 transition-all flex items-center justify-between group"
                                   >
                                     <div className="flex items-center gap-3">
@@ -2649,7 +3028,8 @@ export default function App() {
                                     </div>
                                     <ArrowRight className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 transition-colors" />
                                   </a>
-                                ))}
+                                  );
+                                })}
                               </div>
                             ) : (
                               <div className="text-center py-12">
@@ -2805,7 +3185,9 @@ export default function App() {
 
       {/* Main Content - All other tabs */}
       {activeTab !== 'courseLearning' && (
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <main className={activeTab === 'quizzes'
+          ? 'h-[calc(100dvh-4rem)] overflow-hidden'
+          : 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8'}>
           {activeTab === 'tutorProfile' && viewingTutorId && (
             <TutorProfilePage
               tutorId={viewingTutorId}
@@ -3244,7 +3626,7 @@ export default function App() {
           )}
 
           {activeTab === 'quizzes' && (
-            <div className="flex-1 w-full bg-slate-50">
+            <div className="h-full w-full bg-slate-50 overflow-hidden">
               <QuizChatbotPage currentUser={currentUser} />
             </div>
           )}
@@ -3362,6 +3744,13 @@ export default function App() {
             </div>
           )}
 
+          {activeTab === 'forgotPassword' && !currentUser && (
+            <ForgotPasswordPage
+              onBackToHome={() => setActiveTab('home')}
+              onOpenLogin={handleOpenLoginFromForgotPassword}
+            />
+          )}
+
           {activeTab === 'registerSelect' && !currentUser && (
             <RegistrationSelectionPage
               onSelectRole={(role) => setActiveTab(role === 'student' ? 'registerStudent' : 'registerTutor')}
@@ -3376,7 +3765,9 @@ export default function App() {
               onAccountCreated={(user) => {
                 setCurrentUser(user);
                 setActiveTab('dashboard');
-                localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
+                setSessionPersistence('session');
+                setRememberMe(false);
+                persistSession({ user, activeTab: 'dashboard' }, 'session');
               }}
               STEM_SUBJECTS={STEM_SUBJECTS}
             />
@@ -3403,7 +3794,9 @@ export default function App() {
 
                 setCurrentUser(user);
                 setActiveTab('dashboard');
-                localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
+                setSessionPersistence('session');
+                setRememberMe(false);
+                persistSession({ user, activeTab: 'dashboard' }, 'session');
               }}
               STEM_SUBJECTS={STEM_SUBJECTS}
             />
@@ -3486,7 +3879,7 @@ export default function App() {
                         value={profileData.lastName}
                         onChange={e => setProfileData({ ...profileData, lastName: e.target.value })}
                         className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
-                        placeholder="Doe"
+                        placeholder="Enter last name"
                       />
                     </div>
                   </div>
@@ -3511,11 +3904,13 @@ export default function App() {
                         <input
                           type="tel"
                           value={profileData.phone}
-                          onChange={e => setProfileData({ ...profileData, phone: e.target.value })}
+                          onChange={e => handleProfilePhoneChange(e.target.value)}
                           className="w-full pl-12 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
-                          placeholder="+1 (555) 000-0000"
+                          placeholder="+94771234567"
+                          inputMode="tel"
                         />
                       </div>
+                      <p className="text-xs text-slate-400">Use Sri Lankan format: +94XXXXXXXXX</p>
                     </div>
                   </div>
 
@@ -3578,9 +3973,9 @@ export default function App() {
                         className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all appearance-none"
                       >
                         <option value="" disabled>Select your primary audience</option>
-                        <option value="School">School Level (K-12)</option>
+                        <option value="School">School Level</option>
                         <option value="University">University Level</option>
-                        <option value="Both">Both School & University</option>
+                        <option value="School and University">School and University</option>
                       </select>
                     </div>
                   </div>
@@ -3633,7 +4028,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => {
-                        if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                        if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') {
                           setActiveTab('manageAvailability');
                         } else {
                           alert('Advanced schedule manager is currently available for School level tutors only.');
@@ -3660,7 +4055,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                      if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') {
                         setActiveTab('manageAvailability');
                       } else {
                         alert('Advanced schedule manager is currently available for School level tutors only.');
@@ -3699,6 +4094,25 @@ export default function App() {
                     )}
                   </button>
                 </div>
+
+                {/* Danger Zone */}
+                <div className="bg-rose-50/60 border border-rose-200 rounded-[2rem] p-6 md:p-7">
+                  <h3 className="text-xl font-black text-rose-700 mb-2">Danger Zone</h3>
+                  <p className="text-sm text-rose-700/90 mb-5">
+                    Deleting your account is permanent and cannot be undone.
+                    {currentUser.role === 'tutor'
+                      ? ' Your tutor profile and learning content records will be removed.'
+                      : ' Your bookings and learning records will be removed.'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleDeleteAccount}
+                    disabled={isDeletingAccount || isUpdatingProfile}
+                    className="px-6 py-3 rounded-2xl font-black text-sm uppercase tracking-widest bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60 disabled:cursor-not-allowed transition-all"
+                  >
+                    {isDeletingAccount ? 'Deleting Account...' : 'Delete Account'}
+                  </button>
+                </div>
               </form>
             </div>
           )}
@@ -3717,7 +4131,7 @@ export default function App() {
                     <p className="font-black text-slate-900">Settings</p>
                     <p className="text-xs text-slate-500 mt-1">Manage subjects and profile settings</p>
                   </button>
-                  {(profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') && (
+                  {(profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') && (
                     <button onClick={() => setActiveTab('manageAvailability')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
                       <p className="font-black text-slate-900">Manage Availability</p>
                       <p className="text-xs text-slate-500 mt-1">Configure your tutoring schedule</p>
@@ -4455,7 +4869,7 @@ export default function App() {
                         value={profileData.lastName}
                         onChange={e => setProfileData({ ...profileData, lastName: e.target.value })}
                         className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
-                        placeholder="Doe"
+                        placeholder="Enter last name"
                       />
                     </div>
                   </div>
@@ -4480,12 +4894,104 @@ export default function App() {
                         <input
                           type="tel"
                           value={profileData.phone}
-                          onChange={e => setProfileData({ ...profileData, phone: e.target.value })}
+                          onChange={e => handleProfilePhoneChange(e.target.value)}
                           className="w-full pl-12 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
-                          placeholder="+1 (555) 000-0000"
+                          placeholder="+94771234567"
+                          inputMode="tel"
                         />
                       </div>
+                      <p className="text-xs text-slate-400">Use Sri Lankan format: +94XXXXXXXXX</p>
                     </div>
+                  </div>
+
+                  <div className="mt-8 border-t border-slate-100 pt-6">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                      <div>
+                        <h4 className="text-base font-bold text-slate-900">Password & Security</h4>
+                        <p className="text-sm text-slate-500">Update your account password to keep your profile secure.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (showChangePasswordPanel) {
+                            setChangePasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+                          }
+                          setShowChangePasswordPanel((prev) => !prev);
+                        }}
+                        className="px-5 py-2.5 bg-indigo-50 text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition-colors"
+                      >
+                        {showChangePasswordPanel ? 'Close Password Panel' : 'Change Password'}
+                      </button>
+                    </div>
+
+                    {showChangePasswordPanel && (
+                      <div className="mt-6 rounded-2xl border border-indigo-100 bg-indigo-50/40 p-5 space-y-4">
+                        <div className="grid md:grid-cols-3 gap-4">
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Current Password</label>
+                            <input
+                              type="password"
+                              value={changePasswordData.currentPassword}
+                              onChange={(e) => setChangePasswordData({ ...changePasswordData, currentPassword: e.target.value })}
+                              className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white"
+                              placeholder="Current password"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">New Password</label>
+                            <input
+                              type="password"
+                              value={changePasswordData.newPassword}
+                              onChange={(e) => setChangePasswordData({ ...changePasswordData, newPassword: e.target.value })}
+                              className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white"
+                              placeholder="New password"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Confirm Password</label>
+                            <input
+                              type="password"
+                              value={changePasswordData.confirmPassword}
+                              onChange={(e) => setChangePasswordData({ ...changePasswordData, confirmPassword: e.target.value })}
+                              className={`w-full px-4 py-3 rounded-xl border outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white ${changePasswordData.confirmPassword.length > 0 && changePasswordData.newPassword !== changePasswordData.confirmPassword
+                                  ? 'border-rose-300'
+                                  : 'border-slate-200'
+                                }`}
+                              placeholder="Confirm password"
+                            />
+                          </div>
+                        </div>
+
+                        {changePasswordData.confirmPassword.length > 0 && (
+                          <p className={`text-sm font-semibold ${changePasswordData.newPassword === changePasswordData.confirmPassword ? 'text-emerald-700' : 'text-rose-700'}`}>
+                            {changePasswordData.newPassword === changePasswordData.confirmPassword
+                              ? 'Passwords match.'
+                              : 'Passwords do not match.'}
+                          </p>
+                        )}
+
+                        <div className="flex flex-col sm:flex-row gap-3 sm:justify-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowChangePasswordPanel(false);
+                              setChangePasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+                            }}
+                            className="px-5 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleChangePassword}
+                            disabled={isChangingPassword}
+                            className="px-5 py-2.5 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                          >
+                            {isChangingPassword ? 'Updating Password...' : 'Update Password'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {currentUser.role === 'tutor' && (
@@ -4551,9 +5057,9 @@ export default function App() {
                             className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all appearance-none"
                           >
                             <option value="" disabled>Select your primary audience</option>
-                            <option value="School">School Level (K-12)</option>
+                            <option value="School">School Level</option>
                             <option value="University">University Level</option>
-                            <option value="Both">Both School & University</option>
+                            <option value="School and University">School and University</option>
                           </select>
                         </div>
                       </div>
@@ -4606,7 +5112,7 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => {
-                            if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                            if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') {
                               setActiveTab('manageAvailability');
                             } else {
                               alert('Advanced schedule manager is currently available for School level tutors only.');
@@ -4633,7 +5139,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => {
-                          if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'Both') {
+                          if (profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') {
                             setActiveTab('manageAvailability');
                           } else {
                             alert('Advanced schedule manager is currently available for School level tutors only.');
@@ -4672,6 +5178,25 @@ export default function App() {
                         <Check className="w-5 h-5" />
                       </>
                     )}
+                  </button>
+                </div>
+
+                {/* Danger Zone */}
+                <div className="bg-rose-50/60 border border-rose-200 rounded-[2rem] p-6 md:p-7">
+                  <h3 className="text-xl font-black text-rose-700 mb-2">Danger Zone</h3>
+                  <p className="text-sm text-rose-700/90 mb-5">
+                    Deleting your account is permanent and cannot be undone.
+                    {currentUser.role === 'tutor'
+                      ? ' Your tutor profile and learning content records will be removed.'
+                      : ' Your bookings and learning records will be removed.'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleDeleteAccount}
+                    disabled={isDeletingAccount || isUpdatingProfile}
+                    className="px-6 py-3 rounded-2xl font-black text-sm uppercase tracking-widest bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60 disabled:cursor-not-allowed transition-all"
+                  >
+                    {isDeletingAccount ? 'Deleting Account...' : 'Delete Account'}
                   </button>
                 </div>
               </form>
@@ -4786,27 +5311,31 @@ export default function App() {
                     </p>
                   </div>
 
-                  {/* Social Logins */}
-                  <div className="grid grid-cols-1 gap-3 mb-6">
-                    <button type="button" className="flex items-center justify-center gap-2 py-3 px-4 border border-slate-200 rounded-2xl hover:bg-slate-50 transition-all font-bold text-sm text-slate-700">
-                      <svg className="w-5 h-5" viewBox="0 0 24 24">
-                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
-                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                      </svg>
-                      Google
-                    </button>
-                  </div>
+                  {authMode === 'signup' && (
+                    <>
+                      {/* Social Logins */}
+                      <div className="grid grid-cols-1 gap-3 mb-6">
+                        <button type="button" className="flex items-center justify-center gap-2 py-3 px-4 border border-slate-200 rounded-2xl hover:bg-slate-50 transition-all font-bold text-sm text-slate-700">
+                          <svg className="w-5 h-5" viewBox="0 0 24 24">
+                            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
+                            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                          </svg>
+                          Google
+                        </button>
+                      </div>
 
-                  <div className="relative mb-6">
-                    <div className="absolute inset-0 flex items-center">
-                      <div className="w-full border-t border-slate-100"></div>
-                    </div>
-                    <div className="relative flex justify-center text-xs uppercase">
-                      <span className="bg-white px-4 text-slate-400 font-bold tracking-widest">Or continue with email</span>
-                    </div>
-                  </div>
+                      <div className="relative mb-6">
+                        <div className="absolute inset-0 flex items-center">
+                          <div className="w-full border-t border-slate-100"></div>
+                        </div>
+                        <div className="relative flex justify-center text-xs uppercase">
+                          <span className="bg-white px-4 text-slate-400 font-bold tracking-widest">Or continue with email</span>
+                        </div>
+                      </div>
+                    </>
+                  )}
 
                   <form onSubmit={handleAuth} className="space-y-4">
                     {authMode === 'signup' && (
@@ -4822,7 +5351,7 @@ export default function App() {
                                 value={authData.firstName || ''}
                                 onChange={e => setAuthData({ ...authData, firstName: e.target.value })}
                                 className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all bg-slate-50/50 font-medium"
-                                placeholder="John"
+                                placeholder="Enter first name"
                               />
                             </div>
                           </div>
@@ -4836,7 +5365,7 @@ export default function App() {
                                 value={authData.lastName || ''}
                                 onChange={e => setAuthData({ ...authData, lastName: e.target.value })}
                                 className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all bg-slate-50/50 font-medium"
-                                placeholder="Doe"
+                                placeholder="Enter last name"
                               />
                             </div>
                           </div>
@@ -4853,16 +5382,13 @@ export default function App() {
                           value={authData.email}
                           onChange={e => setAuthData({ ...authData, email: e.target.value })}
                           className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all bg-slate-50/50 font-medium"
-                          placeholder="name@example.com"
+                          placeholder="Enter email address"
                         />
                       </div>
                     </div>
                     <div className="space-y-2">
                       <div className="flex justify-between items-center ml-1">
                         <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Password</label>
-                        {authMode === 'login' && (
-                          <button type="button" className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 uppercase tracking-wider">Forgot Password?</button>
-                        )}
                       </div>
                       <div className="relative group">
                         <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
@@ -4875,6 +5401,17 @@ export default function App() {
                           placeholder="••••••••"
                         />
                       </div>
+                      {authMode === 'login' && (
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={handleOpenForgotPassword}
+                            className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 uppercase tracking-wider"
+                          >
+                            Forgot Password?
+                          </button>
+                        </div>
+                      )}
                     </div>
                     {authMode === 'signup' && (
                       <div className="space-y-2">
@@ -4895,7 +5432,13 @@ export default function App() {
 
                     {authMode === 'login' && (
                       <div className="flex items-center gap-2 ml-1">
-                        <input type="checkbox" id="remember" className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
+                        <input
+                          type="checkbox"
+                          id="remember"
+                          checked={rememberMe}
+                          onChange={(e) => setRememberMe(e.target.checked)}
+                          className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        />
                         <label htmlFor="remember" className="text-xs text-slate-500 font-medium cursor-pointer">Remember me for 30 days</label>
                       </div>
                     )}
@@ -4916,8 +5459,10 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           if (authMode === 'login') {
+                            setRememberMe(false);
                             setActiveTab('registerSelect');
                           } else {
+                            setRememberMe(false);
                             setAuthMode('login');
                           }
                         }}
@@ -5046,8 +5591,8 @@ export default function App() {
                           ? 'bg-indigo-600 text-white rounded-tr-none'
                           : 'bg-slate-100 text-slate-700 rounded-tl-none'
                         }`}>
-                        {msg.text}
-                        {msg.role === 'bot' && (
+                        <div className="whitespace-pre-line break-words">{msg.text}</div>
+                        {msg.role === 'bot' && msg.meta !== 'typing' && (
                           <button
                             onClick={() => handleSpeak(msg.text, i)}
                             className={`absolute -right-8 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-white border border-slate-100 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity ${isSpeaking === i.toString() ? 'text-indigo-600 animate-pulse' : 'text-slate-400 hover:text-indigo-600'}`}
@@ -5065,9 +5610,10 @@ export default function App() {
                     value={chatInput}
                     onChange={e => setChatInput(e.target.value)}
                     placeholder="Ask me anything..."
+                    disabled={isChatTyping}
                     className="flex-1 px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
                   />
-                  <button type="submit" className="bg-indigo-600 text-white p-2 rounded-xl">
+                  <button type="submit" disabled={isChatTyping} className="bg-indigo-600 text-white p-2 rounded-xl disabled:opacity-60">
                     <Send className="w-4 h-4" />
                   </button>
                 </form>

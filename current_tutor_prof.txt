@@ -222,7 +222,7 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
 
                     <div className="flex items-center gap-2.5 px-4 sm:px-6 py-1 border-l sm:border-l-0">
                       <GraduationCap className="w-5 h-5 text-emerald-500" />
-                      <span className="text-xl font-bold text-slate-900">{tutor.teachingLevel === 'Both' ? 'University' : tutor.teachingLevel}</span>
+                      <span className="text-xl font-bold text-slate-900">{tutor.teachingLevel}</span>
                       <span className="text-xs text-slate-500 font-bold uppercase tracking-wider mt-0.5">Level</span>
                     </div>
                   </div>

@@ -13,7 +13,7 @@ export interface User {
 export interface Tutor extends User {
   qualifications: string;
   subjects: string[];
-  teachingLevel: 'School' | 'University' | 'Both';
+  teachingLevel: 'School' | 'University' | 'School and University';
   pricePerHour: number;
   rating: number;
   reviewCount: number;
@@ -123,6 +123,7 @@ export interface Resource {
   url: string;
   description?: string;
   isFree: boolean;
+  downloadCount: number;
 }
 
 export interface Review {

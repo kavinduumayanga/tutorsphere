@@ -13,6 +13,7 @@ import {
   Library,
 } from 'lucide-react';
 import { Resource } from '../../types';
+import { apiService } from '../../services/apiService';
 import { EmptyState } from '../common/EmptyState';
 import { SkeletonGrid } from '../common/SkeletonCard';
 import { Pagination } from '../common/Pagination';
@@ -50,12 +51,6 @@ const getFileTypeBadge = (type: Resource['type']): { bg: string; text: string; b
   }
 };
 
-const getSimulatedDownloadCount = (id: string): number => {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
-  return Math.abs(hash) % 500 + 10;
-};
-
 const getSimulatedFileSize = (id: string): string => {
   let hash = 0;
   for (let i = 0; i < id.length; i++) hash = ((hash << 3) - hash + id.charCodeAt(i)) | 0;
@@ -89,6 +84,30 @@ const resolveResourceViewUrl = (rawUrl: string): string => {
   return trimmed;
 };
 
+const getResourceIdentifier = (resource: Resource): string => {
+  const idCandidate = String((resource as any)?.id ?? (resource as any)?._id ?? '').trim();
+  if (idCandidate) {
+    return idCandidate;
+  }
+
+  const fallback = String(resource.url || resource.title || '').trim();
+  return fallback;
+};
+
+const getResourceTimestamp = (resource: Resource): number => {
+  const createdAt = Date.parse(String((resource as any).createdAt || ''));
+  if (!Number.isNaN(createdAt)) {
+    return createdAt;
+  }
+
+  const updatedAt = Date.parse(String((resource as any).updatedAt || ''));
+  if (!Number.isNaN(updatedAt)) {
+    return updatedAt;
+  }
+
+  return 0;
+};
+
 const WISHLIST_KEY = 'tutorsphere_resource_wishlist';
 const ITEMS_PER_PAGE = 12;
 
@@ -109,16 +128,17 @@ const saveWishlist = (ids: Set<string>) => {
 
 const ResourceCard: React.FC<{
   resource: Resource;
+  downloadCount: number;
   isWishlisted: boolean;
   onToggleWishlist: () => void;
   onPreview: () => void;
   onDownload: () => void;
-}> = ({ resource, isWishlisted, onToggleWishlist, onPreview, onDownload }) => {
+}> = ({ resource, downloadCount, isWishlisted, onToggleWishlist, onPreview, onDownload }) => {
   const TypeIcon = getFileTypeIcon(resource.type);
   const badge = getFileTypeBadge(resource.type);
-  const downloadCount = getSimulatedDownloadCount(resource.id);
-  const fileSize = getSimulatedFileSize(resource.id);
-  const rating = getSimulatedRating(resource.id);
+  const resourceIdentity = getResourceIdentifier(resource) || `${resource.subject}-${resource.type}`;
+  const fileSize = getSimulatedFileSize(resourceIdentity);
+  const rating = getSimulatedRating(resourceIdentity);
 
   const accentColor = {
     Paper: 'from-blue-500 to-blue-400',
@@ -226,6 +246,14 @@ export const StudentResourceLibraryPage: React.FC<StudentResourceLibraryPageProp
   const [sortBy, setSortBy] = useState<SortOption>('popular');
   const [currentPage, setCurrentPage] = useState(1);
   const [wishlist, setWishlist] = useState<Set<string>>(loadWishlist);
+  const [downloadOverrides, setDownloadOverrides] = useState<Record<string, number>>({});
+
+  const resolveDownloadCount = useCallback((resource: Resource): number => {
+    const resourceKey = getResourceIdentifier(resource);
+    const value = (resourceKey ? downloadOverrides[resourceKey] : undefined) ?? resource.downloadCount;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  }, [downloadOverrides]);
 
   // Free resources only
   const freeResources = useMemo(
@@ -246,19 +274,25 @@ export const StudentResourceLibraryPage: React.FC<StudentResourceLibraryPageProp
 
     switch (sortBy) {
       case 'popular':
-        result.sort((a, b) => getSimulatedDownloadCount(b.id) - getSimulatedDownloadCount(a.id));
+        result.sort((a, b) => resolveDownloadCount(b) - resolveDownloadCount(a));
         break;
       case 'title':
         result.sort((a, b) => a.title.localeCompare(b.title));
         break;
       case 'newest':
       default:
-        result.sort((a, b) => b.id.localeCompare(a.id));
+        result.sort((a, b) => {
+          const timeDelta = getResourceTimestamp(b) - getResourceTimestamp(a);
+          if (timeDelta !== 0) {
+            return timeDelta;
+          }
+          return getResourceIdentifier(b).localeCompare(getResourceIdentifier(a));
+        });
         break;
     }
 
     return result;
-  }, [freeResources, searchQuery, subjectFilter, typeFilter, sortBy]);
+  }, [freeResources, searchQuery, subjectFilter, typeFilter, sortBy, resolveDownloadCount]);
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filteredResources.length / ITEMS_PER_PAGE));
@@ -278,18 +312,57 @@ export const StudentResourceLibraryPage: React.FC<StudentResourceLibraryPageProp
   }, []);
 
   // Preview / Download
-  const handleOpenResource = useCallback((resource: Resource) => {
+  const handleOpenResource = useCallback((resource: Resource): boolean => {
     if (!resource.url || resource.url === '#') {
       alert('Resource link is not available yet.');
-      return;
+      return false;
     }
     const resolvedUrl = resolveResourceViewUrl(resource.url);
     if (!resolvedUrl) {
       alert('Resource link is not available yet.');
-      return;
+      return false;
     }
     window.open(resolvedUrl, '_blank', 'noopener,noreferrer');
+    return true;
   }, []);
+
+  const updateDownloadCount = useCallback(async (resource: Resource) => {
+    const resourceKey = getResourceIdentifier(resource);
+    if (!resourceKey) {
+      return;
+    }
+
+    const previousCount = resolveDownloadCount(resource);
+    setDownloadOverrides((prev) => ({
+      ...prev,
+      [resourceKey]: previousCount + 1,
+    }));
+
+    try {
+      const updated = await apiService.incrementResourceDownload(resourceKey);
+      const updatedKey = getResourceIdentifier(updated) || resourceKey;
+      const nextCount = Number(updated.downloadCount);
+      setDownloadOverrides((prev) => ({
+        ...prev,
+        [updatedKey]: Number.isFinite(nextCount) ? Math.max(0, nextCount) : previousCount + 1,
+      }));
+    } catch (error) {
+      console.error('Failed to update download count:', error);
+      setDownloadOverrides((prev) => ({
+        ...prev,
+        [resourceKey]: previousCount,
+      }));
+    }
+  }, [resolveDownloadCount]);
+
+  const handleDownloadResource = useCallback((resource: Resource) => {
+    const didOpen = handleOpenResource(resource);
+    if (!didOpen) {
+      return;
+    }
+
+    void updateDownloadCount(resource);
+  }, [handleOpenResource, updateDownloadCount]);
 
   const resetPage = () => setCurrentPage(1);
 
@@ -406,16 +479,20 @@ export const StudentResourceLibraryPage: React.FC<StudentResourceLibraryPageProp
       ) : (
         <motion.div layout className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           <AnimatePresence mode="popLayout">
-            {paginatedResources.map((resource) => (
-              <ResourceCard
-                key={resource.id}
-                resource={resource}
-                isWishlisted={wishlist.has(resource.id)}
-                onToggleWishlist={() => toggleWishlist(resource.id)}
-                onPreview={() => handleOpenResource(resource)}
-                onDownload={() => handleOpenResource(resource)}
-              />
-            ))}
+            {paginatedResources.map((resource, index) => {
+              const resourceKey = getResourceIdentifier(resource) || `resource-${index}`;
+              return (
+                <ResourceCard
+                  key={resourceKey}
+                  resource={resource}
+                  downloadCount={resolveDownloadCount(resource)}
+                  isWishlisted={wishlist.has(resourceKey)}
+                  onToggleWishlist={() => toggleWishlist(resourceKey)}
+                  onPreview={() => handleOpenResource(resource)}
+                  onDownload={() => handleDownloadResource(resource)}
+                />
+              );
+            })}
           </AnimatePresence>
         </motion.div>
       )}

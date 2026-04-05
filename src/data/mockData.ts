@@ -1,4 +1,4 @@
-import { Tutor, Review, Course, Resource } from '../types';
+import { Tutor, Review, Course, Resource } from '../types.js';
 
 export const MOCK_TUTORS: Tutor[] = [
   {

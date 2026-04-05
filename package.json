@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "npx tsx server.ts",
-    "start": "npx tsx server.ts",
-    "build": "vite build",
+    "start": "node dist/server.js",
+    "build": "npm run build:client && npm run build:server",
+    "build:client": "vite build",
+    "build:server": "tsc -p tsconfig.server.json",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"

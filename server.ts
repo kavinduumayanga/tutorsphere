@@ -6,6 +6,8 @@ import fs from "fs/promises";
 import dotenv from "dotenv";
 import multer from "multer";
 import cors from "cors";
+import session from "express-session";
+import MongoStore from "connect-mongo";
 import { jsPDF } from "jspdf";
 import { connectDB } from "./src/database.js";
 import { User } from "./src/models/User.js";
@@ -42,6 +44,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const APP_ROOT = path.basename(__dirname) === 'dist' ? path.resolve(__dirname, '..') : __dirname;
 const UPLOADS_DIR = path.join(APP_ROOT, 'uploads');
+const REMEMBER_ME_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -678,14 +681,41 @@ async function startServer() {
   const app = express();
   const port = process.env.PORT || 3000;
   const isProduction = securityConfig.isProduction;
+  const sameSiteMode: 'none' | 'lax' = isProduction ? 'none' : 'lax';
   console.log(`[Startup] HTTP bind target set to 0.0.0.0:${port}`);
 
   // Honor reverse-proxy headers (App Service / load balancers) for protocol and host awareness.
   app.set('trust proxy', 1);
 
   app.use(express.json());
-  app.use(cors());
-  console.log('[Startup] Session setup: skipped (no server-side session consumers detected).');
+  app.use(cors({ origin: true, credentials: true }));
+
+  const sessionStore = isProduction
+    ? MongoStore.create({
+      mongoUrl: process.env.MONGODB_URI,
+      collectionName: 'app_sessions',
+      ttl: Math.floor(REMEMBER_ME_MAX_AGE_MS / 1000),
+      autoRemove: 'native',
+    })
+    : undefined;
+
+  app.use(
+    session({
+      secret: securityConfig.sessionSecret,
+      resave: false,
+      saveUninitialized: false,
+      proxy: isProduction,
+      store: sessionStore,
+      cookie: {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: sameSiteMode,
+      },
+    })
+  );
+
+  console.log(`[Startup] Cookie mode: secure=${isProduction}, sameSite=${sameSiteMode}, httpOnly=true`);
+  console.log(`[Startup] Session store mode: ${isProduction ? 'connect-mongo' : 'memory (development)'}`);
   app.use('/uploads', express.static(UPLOADS_DIR));
   app.use('/api/quiz-chatbot', quizChatbotRouter);
   app.use('/api/faq-chatbot', faqChatbotRouter);
@@ -810,7 +840,7 @@ async function startServer() {
 
   app.post("/api/auth/login", async (req, res) => {
     try {
-      const { email, password } = req.body;
+      const { email, password, rememberMe } = req.body;
 
       if (!email || !password) {
         return res.status(400).json({ error: "Email and password are required" });
@@ -846,6 +876,13 @@ async function startServer() {
       } catch (avatarError) {
         console.warn('Failed to build avatar URL during login:', avatarError);
         avatarUrl = undefined;
+      }
+
+      const persistentSession = Boolean(rememberMe);
+      if (req.session) {
+        (req.session as any).userId = user.id;
+        (req.session as any).role = user.role;
+        req.session.cookie.maxAge = persistentSession ? REMEMBER_ME_MAX_AGE_MS : null;
       }
 
       // Fallback to splitting name for old users if firstName is missing

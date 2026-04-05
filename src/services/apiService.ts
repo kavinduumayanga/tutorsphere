@@ -345,6 +345,7 @@ class ApiService {
     const isFormDataBody = options?.body instanceof FormData;
     const requestOptions: RequestInit = {
       ...options,
+      credentials: options?.credentials ?? 'include',
       headers: isFormDataBody
         ? options?.headers
         : {
@@ -363,10 +364,10 @@ class ApiService {
   }
 
   // Auth methods
-  async login(email: string, password: string): Promise<User> {
+  async login(email: string, password: string, rememberMe = false): Promise<User> {
     return this.request('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, rememberMe }),
     });
   }
 

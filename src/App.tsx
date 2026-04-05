@@ -1010,7 +1010,7 @@ export default function App() {
     try {
       let user;
       if (authMode === 'login') {
-        user = await apiService.login(authData.email, authData.password);
+        user = await apiService.login(authData.email, authData.password, rememberMe);
         const persistenceMode: SessionPersistenceMode = rememberMe ? 'remember' : 'session';
         setSessionPersistence(persistenceMode);
         setCurrentUser(user);

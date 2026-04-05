@@ -201,7 +201,7 @@ Use `.env.example` as the source of truth.
 
 ### Notes
 
-- Port is fixed to `3000` in current server/Vite setup.
+- Server listens on `process.env.PORT` with fallback to `3000` for local runs.
 - Keep secrets in `.env` only.
 - Never commit `.env`.
 
@@ -247,6 +247,7 @@ Main route groups under `/api`:
 ## Scripts
 
 - `npm run dev`: Start Express + Vite in development (`npx tsx server.ts`)
+- `npm start`: Start production server for single-app deployment (`NODE_ENV=production tsx server.ts`)
 - `npm run build`: Build frontend bundle with Vite
 - `npm run preview`: Preview built frontend
 - `npm run lint`: Type-check with TypeScript (`tsc --noEmit`)
@@ -263,10 +264,22 @@ npm run build
 ### Run in production mode (current setup)
 
 ```bash
-NODE_ENV=production npm run dev
+npm run build && npm start
 ```
 
-Note: Current runtime entrypoint is `server.ts`. If you deploy at scale, consider a dedicated production process manager and environment hardening.
+The production server serves static files from `dist/` and falls back to `dist/index.html` for non-API SPA routes.
+
+### Azure App Service (Single Full-Stack App)
+
+Use one Azure App Service for both frontend and backend:
+
+1. Configure App Service for Node.js 20+.
+2. Deploy this repository as-is (single app).
+3. Ensure build runs (`npm run build`) during deployment.
+4. Set startup command to `npm start` (or leave blank if App Service auto-detects `start`).
+5. Add required app settings (environment variables) in Azure.
+
+Keep `uploads/` as local filesystem storage for demo/testing only in this setup.
 
 ## Troubleshooting
 

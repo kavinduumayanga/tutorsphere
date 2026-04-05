@@ -657,7 +657,11 @@ async function startServer() {
   await fs.mkdir(path.join(__dirname, 'uploads'), { recursive: true });
 
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  // Honor reverse-proxy headers (App Service / load balancers) for protocol and host awareness.
+  app.set('trust proxy', 1);
 
   app.use(express.json());
   app.use(cors());
@@ -2161,7 +2165,7 @@ async function startServer() {
   });
 
   // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
+  if (!isProduction) {
     try {
       const vite = await createViteServer({
         server: {
@@ -2178,9 +2182,12 @@ async function startServer() {
       // Continue without Vite middleware - app will still work but without hot reloading
     }
   } else {
-    app.use(express.static(path.join(__dirname, "dist")));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(__dirname, "dist", "index.html"));
+    const distDir = path.join(__dirname, 'dist');
+    app.use(express.static(distDir, { index: false }));
+
+    // Let API and uploads routes return their own responses; serve SPA for all other GET routes.
+    app.get(/^\/(?!api(?:\/|$)|uploads(?:\/|$)).*/, (req, res) => {
+      res.sendFile(path.join(distDir, 'index.html'));
     });
   }
 

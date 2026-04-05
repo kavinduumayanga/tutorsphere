@@ -6,7 +6,6 @@ import fs from "fs/promises";
 import dotenv from "dotenv";
 import multer from "multer";
 import cors from "cors";
-import session from "express-session";
 import { jsPDF } from "jspdf";
 import { connectDB } from "./src/database.js";
 import { User } from "./src/models/User.js";
@@ -31,12 +30,18 @@ import {
 } from "./src/server/auth/passwordUtils.js";
 import { loadSecurityConfig } from "./src/server/config/securityConfig.js";
 
-// Load environment variables
-dotenv.config();
+console.log('[Startup] Loading environment variables...');
+const dotenvResult = dotenv.config({ quiet: true });
+if (dotenvResult.error) {
+  console.warn('[Startup] .env file was not loaded; relying on environment variables from host.');
+} else {
+  console.log('[Startup] Environment variables loaded.');
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const APP_ROOT = path.basename(__dirname) === 'dist' ? path.resolve(__dirname, '..') : __dirname;
+const UPLOADS_DIR = path.join(APP_ROOT, 'uploads');
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -499,7 +504,7 @@ async function migrateUsers() {
       return;
     }
 
-    const USERS_DB_PATH = path.join(__dirname, "users.json");
+    const USERS_DB_PATH = path.join(APP_ROOT, "users.json");
 
     // Check if users.json exists
     try {
@@ -640,10 +645,17 @@ async function normalizeResourceDownloadCounts() {
 }
 
 async function startServer() {
+  console.log('[Startup] Bootstrapping server runtime...');
   const securityConfig = loadSecurityConfig();
+  console.log(`[Startup] Runtime root: ${APP_ROOT}`);
+  console.log(`[Startup] Effective mode: ${securityConfig.isProduction ? 'production' : 'development'}`);
 
   // Connect to MongoDB
+  console.log('[Startup] Connecting to MongoDB...');
   await connectDB();
+  console.log('[Startup] MongoDB connection established.');
+
+  console.log('[Startup] Running startup data checks...');
 
   // Migrate existing users from JSON to MongoDB if needed
   await migrateUsers();
@@ -657,35 +669,28 @@ async function startServer() {
   // Ensure every resource has a persisted, non-negative download count.
   await normalizeResourceDownloadCounts();
 
+  console.log('[Startup] Startup data checks completed.');
+
   // Ensure uploads directory exists before handling multipart avatar uploads
-  await fs.mkdir(path.join(__dirname, 'uploads'), { recursive: true });
+  await fs.mkdir(UPLOADS_DIR, { recursive: true });
+  console.log(`[Startup] Upload directory ready: ${UPLOADS_DIR}`);
 
   const app = express();
   const port = process.env.PORT || 3000;
   const isProduction = securityConfig.isProduction;
+  console.log(`[Startup] HTTP bind target set to 0.0.0.0:${port}`);
 
   // Honor reverse-proxy headers (App Service / load balancers) for protocol and host awareness.
   app.set('trust proxy', 1);
 
   app.use(express.json());
   app.use(cors());
-  app.use(
-    session({
-      secret: securityConfig.sessionSecret,
-      resave: false,
-      saveUninitialized: false,
-      proxy: isProduction,
-      cookie: {
-        httpOnly: true,
-        sameSite: 'lax',
-        secure: isProduction,
-      },
-    })
-  );
+  console.log('[Startup] Session setup: skipped (no server-side session consumers detected).');
   app.use('/uploads', express.static(UPLOADS_DIR));
   app.use('/api/quiz-chatbot', quizChatbotRouter);
   app.use('/api/faq-chatbot', faqChatbotRouter);
   app.use('/api/auth', authRouter);
+  console.log('[Startup] Core route setup completed.');
 
   app.post('/api/uploads/course-thumbnail', handleCourseThumbnailUpload, async (req, res) => {
     try {
@@ -2183,6 +2188,7 @@ async function startServer() {
 
   // Vite middleware for development
   if (!isProduction) {
+    console.log('[Startup] Enabling Vite development middleware...');
     try {
       const vite = await createViteServer({
         server: {
@@ -2194,12 +2200,20 @@ async function startServer() {
         appType: "spa",
       });
       app.use(vite.middlewares);
+      console.log('[Startup] Vite middleware enabled.');
     } catch (error) {
       console.error('Failed to start Vite dev server:', (error as Error).message);
       // Continue without Vite middleware - app will still work but without hot reloading
     }
   } else {
-    const distDir = path.join(__dirname, 'dist');
+    const distDir = path.join(APP_ROOT, 'dist');
+    const indexPath = path.join(distDir, 'index.html');
+    console.log(`[Startup] Enabling static asset serving from: ${distDir}`);
+    try {
+      await fs.access(indexPath);
+    } catch {
+      throw new Error(`Production frontend build missing at ${indexPath}. Run \"npm run build\" before starting.`);
+    }
     app.use(express.static(distDir, { index: false }));
 
     // Let API and uploads routes return their own responses; serve SPA for all other GET routes.
@@ -2208,9 +2222,14 @@ async function startServer() {
     });
   }
 
+  console.log(`[Startup] Starting HTTP listener on 0.0.0.0:${port}...`);
   app.listen(Number(port), "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${port}`);
+    console.log(`[Startup] Server listening on 0.0.0.0:${port}`);
   });
 }
 
-startServer();
+startServer().catch((error) => {
+  const message = error instanceof Error ? error.stack || error.message : String(error);
+  console.error('[Startup] Fatal startup error:', message);
+  process.exit(1);
+});

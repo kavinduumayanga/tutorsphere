@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": ".",
+    "outDir": "dist",
+    "noEmit": false,
+    "strict": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "declaration": false,
+    "sourceMap": false,
+    "types": ["node"]
+  },
+  "include": [
+    "server.ts",
+    "src/database.ts",
+    "src/models/**/*.ts",
+    "src/server/**/*.ts",
+    "src/data/mockData.ts",
+    "src/types.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

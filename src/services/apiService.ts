@@ -176,6 +176,10 @@ export type ResetPasswordResponse = {
   message: string;
 };
 
+export type ChangePasswordResponse = {
+  message: string;
+};
+
 class ApiService {
   private sanitizeTutorName(value: string): string {
     return value.replace(/\s+updated\s*$/i, '').trim();
@@ -403,6 +407,18 @@ class ApiService {
     return this.request('/auth/reset-password', {
       method: 'POST',
       body: JSON.stringify({ email, resetToken, newPassword, confirmPassword }),
+    });
+  }
+
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+    confirmPassword: string
+  ): Promise<ChangePasswordResponse> {
+    return this.request('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ userId, currentPassword, newPassword, confirmPassword }),
     });
   }
 

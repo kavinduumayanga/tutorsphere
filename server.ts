@@ -25,6 +25,7 @@ import { authRouter } from "./src/server/auth/authRoutes.js";
 import {
   hashPassword,
   shouldUpgradePasswordHash,
+  validatePasswordStrength,
   verifyPassword,
 } from "./src/server/auth/passwordUtils.js";
 
@@ -842,6 +843,53 @@ async function startServer() {
     } catch (error) {
       console.error("Login error:", error);
       res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.post('/api/auth/change-password', async (req, res) => {
+    try {
+      const { userId, currentPassword, newPassword, confirmPassword } = req.body || {};
+
+      const normalizedUserId = String(userId || '').trim();
+      const currentPasswordValue = String(currentPassword || '');
+      const newPasswordValue = String(newPassword || '');
+      const confirmPasswordValue = String(confirmPassword || '');
+
+      if (!normalizedUserId || !currentPasswordValue || !newPasswordValue || !confirmPasswordValue) {
+        return res.status(400).json({ error: 'User ID, current password, new password, and confirm password are required.' });
+      }
+
+      if (newPasswordValue !== confirmPasswordValue) {
+        return res.status(400).json({ error: 'New password and confirm password do not match.' });
+      }
+
+      const strengthError = validatePasswordStrength(newPasswordValue);
+      if (strengthError) {
+        return res.status(400).json({ error: strengthError });
+      }
+
+      const user = await User.findOne({ id: normalizedUserId });
+      if (!user) {
+        return res.status(404).json({ error: 'User not found.' });
+      }
+
+      const isCurrentPasswordValid = await verifyPassword(currentPasswordValue, user.password);
+      if (!isCurrentPasswordValid) {
+        return res.status(400).json({ error: 'Current password is incorrect.' });
+      }
+
+      const isSameAsCurrentPassword = await verifyPassword(newPasswordValue, user.password);
+      if (isSameAsCurrentPassword) {
+        return res.status(400).json({ error: 'New password must be different from your current password.' });
+      }
+
+      user.password = await hashPassword(newPasswordValue);
+      await user.save();
+
+      return res.json({ message: 'Password changed successfully.' });
+    } catch (error) {
+      console.error('Change password error:', error);
+      return res.status(500).json({ error: 'Failed to change password. Please try again.' });
     }
   });
 

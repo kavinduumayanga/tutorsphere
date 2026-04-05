@@ -239,8 +239,135 @@ const createInitialResourceForm = () => ({
 
 type ResourceInputMode = 'url' | 'file';
 type ResourceUploadStatus = 'idle' | 'uploading' | 'uploaded' | 'error';
+type SessionPersistenceMode = 'session' | 'remember';
 
 const isUploadedResourcePath = (value: string): boolean => value.trim().startsWith('/uploads/');
+const SESSION_STORAGE_KEY = 'session';
+const REMEMBER_ME_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
+
+type PersistedSession = {
+  user: AppUser;
+  activeTab: Tab;
+  expiresAt?: number;
+};
+
+const parseStoredSession = (rawValue: string | null): PersistedSession | null => {
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    if (!parsed || typeof parsed !== 'object' || !parsed.user) {
+      return null;
+    }
+
+    return {
+      user: parsed.user as AppUser,
+      activeTab: (parsed.activeTab as Tab) || 'home',
+      expiresAt: typeof parsed.expiresAt === 'number' ? parsed.expiresAt : undefined,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const clearStoredSessions = (): void => {
+  localStorage.removeItem(SESSION_STORAGE_KEY);
+  sessionStorage.removeItem(SESSION_STORAGE_KEY);
+};
+
+const loadStoredSession = (): { session: PersistedSession; persistence: SessionPersistenceMode } | null => {
+  const sessionStorageValue = parseStoredSession(sessionStorage.getItem(SESSION_STORAGE_KEY));
+  if (sessionStorageValue) {
+    return { session: sessionStorageValue, persistence: 'session' };
+  }
+
+  if (sessionStorage.getItem(SESSION_STORAGE_KEY)) {
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  }
+
+  const rememberedSession = parseStoredSession(localStorage.getItem(SESSION_STORAGE_KEY));
+  if (!rememberedSession) {
+    if (localStorage.getItem(SESSION_STORAGE_KEY)) {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+    }
+    return null;
+  }
+
+  if (typeof rememberedSession.expiresAt === 'number' && rememberedSession.expiresAt <= Date.now()) {
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+    return null;
+  }
+
+  return { session: rememberedSession, persistence: 'remember' };
+};
+
+const persistSession = (session: PersistedSession, persistence: SessionPersistenceMode): void => {
+  if (persistence === 'remember') {
+    const nextExpiresAt =
+      typeof session.expiresAt === 'number' && session.expiresAt > Date.now()
+        ? session.expiresAt
+        : Date.now() + REMEMBER_ME_DURATION_MS;
+
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({
+        user: session.user,
+        activeTab: session.activeTab,
+        expiresAt: nextExpiresAt,
+      })
+    );
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    return;
+  }
+
+  sessionStorage.setItem(
+    SESSION_STORAGE_KEY,
+    JSON.stringify({
+      user: session.user,
+      activeTab: session.activeTab,
+    })
+  );
+  localStorage.removeItem(SESSION_STORAGE_KEY);
+};
+
+const sanitizePhoneInput = (value: string): string => {
+  const compact = value.replace(/[\s()-]/g, '');
+  if (!compact) {
+    return '';
+  }
+
+  const normalizedCharacters = compact.replace(/[^\d+]/g, '');
+  if (normalizedCharacters.startsWith('+')) {
+    return `+${normalizedCharacters.slice(1).replace(/\+/g, '')}`;
+  }
+
+  return normalizedCharacters.replace(/\+/g, '');
+};
+
+const normalizeSriLankanPhone = (value: string): string | null => {
+  const sanitized = sanitizePhoneInput(value);
+  if (!sanitized) {
+    return null;
+  }
+
+  const digitsOnly = sanitized.replace(/\D/g, '');
+
+  if (digitsOnly.length === 9) {
+    return `+94${digitsOnly}`;
+  }
+
+  if (digitsOnly.length === 10 && digitsOnly.startsWith('0')) {
+    return `+94${digitsOnly.slice(1)}`;
+  }
+
+  if (digitsOnly.length === 11 && digitsOnly.startsWith('94')) {
+    return `+${digitsOnly}`;
+  }
+
+  return null;
+};
 
 export default function App() {
   const [selectedTutor, setSelectedTutor] = useState<Tutor | null>(null);
@@ -252,6 +379,12 @@ export default function App() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [authData, setAuthData] = useState({ email: '', password: '', firstName: '', lastName: '', confirmPassword: '', role: 'student' as 'student' | 'tutor' });
+  const [rememberMe, setRememberMe] = useState(false);
+  const [sessionPersistence, setSessionPersistence] = useState<SessionPersistenceMode>('session');
+  const [hasLoadedSession, setHasLoadedSession] = useState(false);
+  const [showChangePasswordPanel, setShowChangePasswordPanel] = useState(false);
+  const [changePasswordData, setChangePasswordData] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
   // Profile Update State
   const [profileData, setProfileData] = useState({
@@ -284,27 +417,39 @@ export default function App() {
 
   const [certificateModalData, setCertificateModalData] = useState<{ enrollment: CourseEnrollment, courseTitle: string } | null>(null);
 
-  // Load user and activeTab from localStorage on app start
+  // Load user and activeTab from persisted storage on app start
   useEffect(() => {
-    const storedSession = localStorage.getItem('session');
+    const storedSession = loadStoredSession();
     if (storedSession) {
-      try {
-        const session = JSON.parse(storedSession);
-        setCurrentUser(session.user);
-        const restoredTab: Tab = session.activeTab || 'home';
-        setActiveTab(isInternalTab(restoredTab) ? 'home' : restoredTab);
-      } catch {
-        localStorage.removeItem('session');
-      }
+      setCurrentUser(storedSession.session.user);
+      const restoredTab: Tab = storedSession.session.activeTab || 'home';
+      setActiveTab(isInternalTab(restoredTab) ? 'home' : restoredTab);
+      setSessionPersistence(storedSession.persistence);
     }
+
+    setHasLoadedSession(true);
   }, []);
 
-  // Persist session when user or activeTab changes
+  // Persist session when user, tab, or persistence mode changes
   useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem('session', JSON.stringify({ user: currentUser, activeTab }));
+    if (!hasLoadedSession || !currentUser) {
+      return;
     }
-  }, [currentUser, activeTab]);
+
+    const existingRememberedSession =
+      sessionPersistence === 'remember'
+        ? parseStoredSession(localStorage.getItem(SESSION_STORAGE_KEY))
+        : null;
+
+    persistSession(
+      {
+        user: currentUser,
+        activeTab,
+        expiresAt: existingRememberedSession?.expiresAt,
+      },
+      sessionPersistence
+    );
+  }, [currentUser, activeTab, sessionPersistence, hasLoadedSession]);
 
   useEffect(() => {
     if (activeTab === 'tutorProfile' && !viewingTutorId) {
@@ -812,7 +957,7 @@ export default function App() {
       setProfileData({
         firstName: currentUser.firstName,
         lastName: currentUser.lastName,
-        phone: currentUser.phone || '',
+        phone: currentUser.phone ? normalizeSriLankanPhone(currentUser.phone) || currentUser.phone : '',
         education: tutorDoc?.qualifications || '',
         subjects: tutorDoc?.subjects || [],
         teachingLevel: tutorDoc?.teachingLevel || '',
@@ -866,11 +1011,14 @@ export default function App() {
       let user;
       if (authMode === 'login') {
         user = await apiService.login(authData.email, authData.password);
+        const persistenceMode: SessionPersistenceMode = rememberMe ? 'remember' : 'session';
+        setSessionPersistence(persistenceMode);
         setCurrentUser(user);
         setActiveTab('dashboard');
-        localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
+        persistSession({ user, activeTab: 'dashboard' }, persistenceMode);
         setShowAuthModal(false);
         setAuthData({ email: '', password: '', firstName: '', lastName: '', confirmPassword: '', role: 'student' });
+        setRememberMe(false);
       } else {
         if (!authData.firstName.trim() || !authData.lastName.trim()) {
           alert('First name and last name are required.');
@@ -885,6 +1033,7 @@ export default function App() {
         alert('Account created successfully! Please sign in with your credentials.');
         setAuthMode('login');
         setAuthData({ email: authData.email, password: '', firstName: '', lastName: '', confirmPassword: '', role: 'student' });
+        setRememberMe(false);
       }
     } catch (error: any) {
       alert(error.message || 'Authentication failed');
@@ -894,12 +1043,14 @@ export default function App() {
   const handleOpenForgotPassword = () => {
     setShowAuthModal(false);
     setAuthMode('login');
+    setRememberMe(false);
     setActiveTab('forgotPassword');
   };
 
   const handleOpenLoginFromForgotPassword = () => {
     setAuthMode('login');
     setShowAuthModal(true);
+    setRememberMe(false);
     setActiveTab('home');
     setAuthData((prev) => ({
       ...prev,
@@ -1775,10 +1926,12 @@ export default function App() {
   };
 
   const handleSignOut = () => {
-    localStorage.removeItem('session');
+    clearStoredSessions();
     setCurrentUser(null);
     setActiveLearningCourseId(null);
     setIsUserMenuOpen(false);
+    setSessionPersistence('session');
+    setRememberMe(false);
     setAuthMode('login');
     setShowAuthModal(true);
     setActiveTab('home');
@@ -1833,12 +1986,14 @@ export default function App() {
       setCourseEnrollments([]);
       setUserCourses([]);
 
-      localStorage.removeItem('session');
+      clearStoredSessions();
       setCurrentUser(null);
       setActiveLearningCourseId(null);
       setIsUserMenuOpen(false);
       setShowAuthModal(false);
       setAuthMode('login');
+      setSessionPersistence('session');
+      setRememberMe(false);
       setActiveTab('home');
 
       alert('Your account was deleted successfully.');
@@ -1925,6 +2080,37 @@ export default function App() {
     }
   };
 
+  const formatSriLankanPhoneForInput = (value: string): string => {
+    const sanitized = sanitizePhoneInput(value);
+    if (!sanitized) {
+      return '';
+    }
+
+    const digitsOnly = sanitized.replace(/\D/g, '');
+
+    if (sanitized.startsWith('+')) {
+      if (digitsOnly.startsWith('94')) {
+        return `+${digitsOnly.slice(0, 11)}`;
+      }
+      return '+94';
+    }
+
+    if (digitsOnly.startsWith('0')) {
+      return `+94${digitsOnly.slice(1, 10)}`;
+    }
+
+    if (digitsOnly.startsWith('94')) {
+      return `+94${digitsOnly.slice(2, 11)}`;
+    }
+
+    return `+94${digitsOnly.slice(0, 9)}`;
+  };
+
+  const handleProfilePhoneChange = (value: string) => {
+    const formattedPhone = formatSriLankanPhoneForInput(value);
+    setProfileData((prev) => ({ ...prev, phone: formattedPhone }));
+  };
+
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
@@ -1934,12 +2120,18 @@ export default function App() {
       return;
     }
 
+    const normalizedPhone = profileData.phone ? normalizeSriLankanPhone(profileData.phone) : null;
+    if (profileData.phone && !normalizedPhone) {
+      alert('Please enter a valid Sri Lankan phone number in +94 format (e.g. +94771234567).');
+      return;
+    }
+
     setIsUpdatingProfile(true);
     try {
       const formData = new FormData();
       formData.append('firstName', profileData.firstName.trim());
       formData.append('lastName', profileData.lastName.trim());
-      if (profileData.phone) formData.append('phone', profileData.phone.trim());
+      formData.append('phone', normalizedPhone ?? '');
 
       if (currentUser.role === 'tutor') {
         const tutorId = currentTutor?.id || currentUser.id;
@@ -1975,6 +2167,42 @@ export default function App() {
       alert('Failed to update profile. Please try again.');
     } finally {
       setIsUpdatingProfile(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    if (!currentUser) {
+      return;
+    }
+
+    if (!changePasswordData.currentPassword || !changePasswordData.newPassword || !changePasswordData.confirmPassword) {
+      alert('Current password, new password, and confirm password are required.');
+      return;
+    }
+
+    if (changePasswordData.newPassword !== changePasswordData.confirmPassword) {
+      alert('New password and confirm password do not match.');
+      return;
+    }
+
+    setIsChangingPassword(true);
+    try {
+      const response = await apiService.changePassword(
+        currentUser.id,
+        changePasswordData.currentPassword,
+        changePasswordData.newPassword,
+        changePasswordData.confirmPassword
+      );
+
+      alert(response.message || 'Password changed successfully.');
+      setChangePasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      setShowChangePasswordPanel(false);
+    } catch (error) {
+      console.error('Failed to change password:', error);
+      const message = error instanceof Error ? error.message : 'Failed to change password. Please try again.';
+      alert(message);
+    } finally {
+      setIsChangingPassword(false);
     }
   };
 
@@ -3537,7 +3765,9 @@ export default function App() {
               onAccountCreated={(user) => {
                 setCurrentUser(user);
                 setActiveTab('dashboard');
-                localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
+                setSessionPersistence('session');
+                setRememberMe(false);
+                persistSession({ user, activeTab: 'dashboard' }, 'session');
               }}
               STEM_SUBJECTS={STEM_SUBJECTS}
             />
@@ -3564,7 +3794,9 @@ export default function App() {
 
                 setCurrentUser(user);
                 setActiveTab('dashboard');
-                localStorage.setItem('session', JSON.stringify({ user, activeTab: 'dashboard' }));
+                setSessionPersistence('session');
+                setRememberMe(false);
+                persistSession({ user, activeTab: 'dashboard' }, 'session');
               }}
               STEM_SUBJECTS={STEM_SUBJECTS}
             />
@@ -3672,11 +3904,13 @@ export default function App() {
                         <input
                           type="tel"
                           value={profileData.phone}
-                          onChange={e => setProfileData({ ...profileData, phone: e.target.value })}
+                          onChange={e => handleProfilePhoneChange(e.target.value)}
                           className="w-full pl-12 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
-                          placeholder="+1 (555) 000-0000"
+                          placeholder="+94771234567"
+                          inputMode="tel"
                         />
                       </div>
+                      <p className="text-xs text-slate-400">Use Sri Lankan format: +94XXXXXXXXX</p>
                     </div>
                   </div>
 
@@ -4660,12 +4894,104 @@ export default function App() {
                         <input
                           type="tel"
                           value={profileData.phone}
-                          onChange={e => setProfileData({ ...profileData, phone: e.target.value })}
+                          onChange={e => handleProfilePhoneChange(e.target.value)}
                           className="w-full pl-12 pr-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all"
-                          placeholder="+1 (555) 000-0000"
+                          placeholder="+94771234567"
+                          inputMode="tel"
                         />
                       </div>
+                      <p className="text-xs text-slate-400">Use Sri Lankan format: +94XXXXXXXXX</p>
                     </div>
+                  </div>
+
+                  <div className="mt-8 border-t border-slate-100 pt-6">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                      <div>
+                        <h4 className="text-base font-bold text-slate-900">Password & Security</h4>
+                        <p className="text-sm text-slate-500">Update your account password to keep your profile secure.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (showChangePasswordPanel) {
+                            setChangePasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+                          }
+                          setShowChangePasswordPanel((prev) => !prev);
+                        }}
+                        className="px-5 py-2.5 bg-indigo-50 text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition-colors"
+                      >
+                        {showChangePasswordPanel ? 'Close Password Panel' : 'Change Password'}
+                      </button>
+                    </div>
+
+                    {showChangePasswordPanel && (
+                      <div className="mt-6 rounded-2xl border border-indigo-100 bg-indigo-50/40 p-5 space-y-4">
+                        <div className="grid md:grid-cols-3 gap-4">
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Current Password</label>
+                            <input
+                              type="password"
+                              value={changePasswordData.currentPassword}
+                              onChange={(e) => setChangePasswordData({ ...changePasswordData, currentPassword: e.target.value })}
+                              className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white"
+                              placeholder="Current password"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">New Password</label>
+                            <input
+                              type="password"
+                              value={changePasswordData.newPassword}
+                              onChange={(e) => setChangePasswordData({ ...changePasswordData, newPassword: e.target.value })}
+                              className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white"
+                              placeholder="New password"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Confirm Password</label>
+                            <input
+                              type="password"
+                              value={changePasswordData.confirmPassword}
+                              onChange={(e) => setChangePasswordData({ ...changePasswordData, confirmPassword: e.target.value })}
+                              className={`w-full px-4 py-3 rounded-xl border outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white ${changePasswordData.confirmPassword.length > 0 && changePasswordData.newPassword !== changePasswordData.confirmPassword
+                                  ? 'border-rose-300'
+                                  : 'border-slate-200'
+                                }`}
+                              placeholder="Confirm password"
+                            />
+                          </div>
+                        </div>
+
+                        {changePasswordData.confirmPassword.length > 0 && (
+                          <p className={`text-sm font-semibold ${changePasswordData.newPassword === changePasswordData.confirmPassword ? 'text-emerald-700' : 'text-rose-700'}`}>
+                            {changePasswordData.newPassword === changePasswordData.confirmPassword
+                              ? 'Passwords match.'
+                              : 'Passwords do not match.'}
+                          </p>
+                        )}
+
+                        <div className="flex flex-col sm:flex-row gap-3 sm:justify-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowChangePasswordPanel(false);
+                              setChangePasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+                            }}
+                            className="px-5 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleChangePassword}
+                            disabled={isChangingPassword}
+                            className="px-5 py-2.5 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                          >
+                            {isChangingPassword ? 'Updating Password...' : 'Update Password'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {currentUser.role === 'tutor' && (
@@ -4985,27 +5311,31 @@ export default function App() {
                     </p>
                   </div>
 
-                  {/* Social Logins */}
-                  <div className="grid grid-cols-1 gap-3 mb-6">
-                    <button type="button" className="flex items-center justify-center gap-2 py-3 px-4 border border-slate-200 rounded-2xl hover:bg-slate-50 transition-all font-bold text-sm text-slate-700">
-                      <svg className="w-5 h-5" viewBox="0 0 24 24">
-                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
-                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                      </svg>
-                      Google
-                    </button>
-                  </div>
+                  {authMode === 'signup' && (
+                    <>
+                      {/* Social Logins */}
+                      <div className="grid grid-cols-1 gap-3 mb-6">
+                        <button type="button" className="flex items-center justify-center gap-2 py-3 px-4 border border-slate-200 rounded-2xl hover:bg-slate-50 transition-all font-bold text-sm text-slate-700">
+                          <svg className="w-5 h-5" viewBox="0 0 24 24">
+                            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
+                            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                          </svg>
+                          Google
+                        </button>
+                      </div>
 
-                  <div className="relative mb-6">
-                    <div className="absolute inset-0 flex items-center">
-                      <div className="w-full border-t border-slate-100"></div>
-                    </div>
-                    <div className="relative flex justify-center text-xs uppercase">
-                      <span className="bg-white px-4 text-slate-400 font-bold tracking-widest">Or continue with email</span>
-                    </div>
-                  </div>
+                      <div className="relative mb-6">
+                        <div className="absolute inset-0 flex items-center">
+                          <div className="w-full border-t border-slate-100"></div>
+                        </div>
+                        <div className="relative flex justify-center text-xs uppercase">
+                          <span className="bg-white px-4 text-slate-400 font-bold tracking-widest">Or continue with email</span>
+                        </div>
+                      </div>
+                    </>
+                  )}
 
                   <form onSubmit={handleAuth} className="space-y-4">
                     {authMode === 'signup' && (
@@ -5059,15 +5389,6 @@ export default function App() {
                     <div className="space-y-2">
                       <div className="flex justify-between items-center ml-1">
                         <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Password</label>
-                        {authMode === 'login' && (
-                          <button
-                            type="button"
-                            onClick={handleOpenForgotPassword}
-                            className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 uppercase tracking-wider"
-                          >
-                            Forgot Password?
-                          </button>
-                        )}
                       </div>
                       <div className="relative group">
                         <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
@@ -5080,6 +5401,17 @@ export default function App() {
                           placeholder="••••••••"
                         />
                       </div>
+                      {authMode === 'login' && (
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={handleOpenForgotPassword}
+                            className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 uppercase tracking-wider"
+                          >
+                            Forgot Password?
+                          </button>
+                        </div>
+                      )}
                     </div>
                     {authMode === 'signup' && (
                       <div className="space-y-2">
@@ -5100,7 +5432,13 @@ export default function App() {
 
                     {authMode === 'login' && (
                       <div className="flex items-center gap-2 ml-1">
-                        <input type="checkbox" id="remember" className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
+                        <input
+                          type="checkbox"
+                          id="remember"
+                          checked={rememberMe}
+                          onChange={(e) => setRememberMe(e.target.checked)}
+                          className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        />
                         <label htmlFor="remember" className="text-xs text-slate-500 font-medium cursor-pointer">Remember me for 30 days</label>
                       </div>
                     )}
@@ -5121,8 +5459,10 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           if (authMode === 'login') {
+                            setRememberMe(false);
                             setActiveTab('registerSelect');
                           } else {
+                            setRememberMe(false);
                             setAuthMode('login');
                           }
                         }}

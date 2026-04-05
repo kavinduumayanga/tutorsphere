@@ -657,7 +657,7 @@ async function startServer() {
   await fs.mkdir(path.join(__dirname, 'uploads'), { recursive: true });
 
   const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
+  const port = process.env.PORT || 3000;
   const isProduction = process.env.NODE_ENV === 'production';
 
   // Honor reverse-proxy headers (App Service / load balancers) for protocol and host awareness.
@@ -2191,8 +2191,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  app.listen(Number(port), "0.0.0.0", () => {
+    console.log(`Server running on http://localhost:${port}`);
   });
 }
 

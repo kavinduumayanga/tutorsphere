@@ -67,10 +67,11 @@ import { ToastProvider } from './components/common/Toast';
 import { QuizChatbotPage } from './components/pages/QuizChatbotPage';
 import { FindTutorsPage } from './components/pages/FindTutorsPage';
 import { CertificateModal } from './components/common/CertificateModal';
+import { ForgotPasswordPage } from './components/pages/ForgotPasswordPage';
 
 const STEM_SUBJECTS = ['Maths', 'Science', 'Engineering', 'Tech', 'ICT'];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'about';
+type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'about';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
@@ -84,6 +85,7 @@ const NAV_LABELS: Record<Tab, string> = {
   registerSelect: 'Register',
   registerStudent: 'Register',
   registerTutor: 'Register',
+  forgotPassword: 'Forgot Password',
   register: 'Profile',
   dashboard: 'Dashboard',
   settings: 'Settings',
@@ -105,6 +107,7 @@ const getAllowedTabs = (user: AppUser | null): Tab[] => {
       'registerSelect',
       'registerStudent',
       'registerTutor',
+      'forgotPassword',
       'about'
     ];
   }
@@ -327,7 +330,7 @@ export default function App() {
   }, [activeTab, currentUser, viewingTutorId, bookingTutorId]);
 
   useEffect(() => {
-    if (activeTab === 'registerSelect' || activeTab === 'registerStudent' || activeTab === 'registerTutor') {
+    if (activeTab === 'registerSelect' || activeTab === 'registerStudent' || activeTab === 'registerTutor' || activeTab === 'forgotPassword') {
       setShowAuthModal(false);
       setAuthMode('login');
     }
@@ -886,6 +889,23 @@ export default function App() {
     } catch (error: any) {
       alert(error.message || 'Authentication failed');
     }
+  };
+
+  const handleOpenForgotPassword = () => {
+    setShowAuthModal(false);
+    setAuthMode('login');
+    setActiveTab('forgotPassword');
+  };
+
+  const handleOpenLoginFromForgotPassword = () => {
+    setAuthMode('login');
+    setShowAuthModal(true);
+    setActiveTab('home');
+    setAuthData((prev) => ({
+      ...prev,
+      password: '',
+      confirmPassword: '',
+    }));
   };
 
   const handleRegister = async (e: React.FormEvent) => {
@@ -3496,6 +3516,13 @@ export default function App() {
             </div>
           )}
 
+          {activeTab === 'forgotPassword' && !currentUser && (
+            <ForgotPasswordPage
+              onBackToHome={() => setActiveTab('home')}
+              onOpenLogin={handleOpenLoginFromForgotPassword}
+            />
+          )}
+
           {activeTab === 'registerSelect' && !currentUser && (
             <RegistrationSelectionPage
               onSelectRole={(role) => setActiveTab(role === 'student' ? 'registerStudent' : 'registerTutor')}
@@ -5033,7 +5060,13 @@ export default function App() {
                       <div className="flex justify-between items-center ml-1">
                         <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Password</label>
                         {authMode === 'login' && (
-                          <button type="button" className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 uppercase tracking-wider">Forgot Password?</button>
+                          <button
+                            type="button"
+                            onClick={handleOpenForgotPassword}
+                            className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 uppercase tracking-wider"
+                          >
+                            Forgot Password?
+                          </button>
                         )}
                       </div>
                       <div className="relative group">

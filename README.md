@@ -84,6 +84,10 @@ Use `.env.example` as a template.
 Required:
 
 - `MONGODB_URI`: MongoDB connection string
+- `GMAIL_USER`: Gmail address used for SMTP authentication
+- `GMAIL_APP_PASSWORD`: Gmail App Password used for SMTP (not your normal Gmail password)
+- `EMAIL_FROM`: Sender email address shown in OTP emails
+- `OTP_EXPIRY_MINUTES`: OTP validity window in minutes (recommended: `5` to `10`)
 - `AZURE_OPENAI_ENDPOINT`: Azure OpenAI resource endpoint
 - `AZURE_OPENAI_API_KEY`: Azure OpenAI API key
 - `AZURE_OPENAI_DEPLOYMENT`: Azure OpenAI chat deployment name
@@ -113,6 +117,11 @@ Notes:
 Core groups exposed under `/api`:
 
 - `auth`: signup, login, profile update, avatar retrieval
+- `auth`: signup, login, profile update, avatar retrieval, forgot-password OTP flow
+	- `POST /api/auth/forgot-password`
+	- `POST /api/auth/resend-otp`
+	- `POST /api/auth/verify-otp`
+	- `POST /api/auth/reset-password`
 - `tutors`: CRUD for tutor profiles
 - `reviews`: CRUD for tutor reviews
 - `courses`: CRUD and enroll endpoints

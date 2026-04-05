@@ -21,6 +21,12 @@ import { SkillLevel } from "./src/models/SkillLevel.js";
 import { CourseEnrollment } from "./src/models/CourseEnrollment.js";
 import { quizChatbotRouter } from "./src/server/quiz-chatbot/chatController.js";
 import { faqChatbotRouter } from "./src/server/faq-chatbot/chatController.js";
+import { authRouter } from "./src/server/auth/authRoutes.js";
+import {
+  hashPassword,
+  shouldUpgradePasswordHash,
+  verifyPassword,
+} from "./src/server/auth/passwordUtils.js";
 
 // Load environment variables
 dotenv.config();
@@ -518,7 +524,7 @@ async function migrateUsers() {
       console.log(`Migrated ${migratedCount} users from JSON to MongoDB`);
     }
   } catch (error) {
-    console.log('Migration skipped or failed:', error.message);
+    console.log('Migration skipped or failed:', (error as Error).message);
   }
 }
 
@@ -570,7 +576,7 @@ async function migrateMockData() {
     console.log(`Migrated ${MOCK_RESOURCES.length} resources`);
 
   } catch (error) {
-    console.log('Mock data migration failed:', error.message);
+    console.log('Mock data migration failed:', (error as Error).message);
   }
 }
 
@@ -657,6 +663,7 @@ async function startServer() {
   app.use('/uploads', express.static(UPLOADS_DIR));
   app.use('/api/quiz-chatbot', quizChatbotRouter);
   app.use('/api/faq-chatbot', faqChatbotRouter);
+  app.use('/api/auth', authRouter);
 
   app.post('/api/uploads/course-thumbnail', handleCourseThumbnailUpload, async (req, res) => {
     try {
@@ -735,7 +742,12 @@ async function startServer() {
     try {
       const { firstName, lastName, email, password, role } = req.body;
       const normalizedEmail = email ? email.trim() : '';
+      const normalizedPassword = String(password || '');
       const escapedEmail = normalizedEmail.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+
+      if (!firstName || !lastName || !normalizedEmail || !normalizedPassword) {
+        return res.status(400).json({ error: "First name, last name, email, and password are required" });
+      }
 
       // Check if user already exists
       const existingUser = await User.findOne({ email: { $regex: new RegExp(`^${escapedEmail}$`, 'i') } });
@@ -744,11 +756,25 @@ async function startServer() {
       }
 
       const id = Math.random().toString(36).substr(2, 9);
-      const newUser = new User({ id, firstName, lastName, email: normalizedEmail, password, role: role || 'student' });
+      const hashedPassword = await hashPassword(normalizedPassword);
+      const newUser = new User({
+        id,
+        firstName,
+        lastName,
+        email: normalizedEmail,
+        password: hashedPassword,
+        role: role || 'student',
+      });
 
       await newUser.save();
 
-      res.json({ id, firstName: newUser.firstName, lastName: newUser.lastName, email, role: newUser.role });
+      res.json({
+        id,
+        firstName: newUser.firstName,
+        lastName: newUser.lastName,
+        email: newUser.email,
+        role: newUser.role,
+      });
     } catch (error) {
       console.error("Signup error:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -767,29 +793,52 @@ async function startServer() {
       const escapedEmail = normalizedEmail.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
       const user = await User.findOne({
         email: { $regex: new RegExp(`^${escapedEmail}$`, 'i') },
-        password
       });
 
-      if (user) {
-        let avatarUrl: string | undefined;
-        try {
-          avatarUrl = await buildAvatarResponseUrl(req, user as { id: string; avatar?: string });
-        } catch (avatarError) {
-          console.warn('Failed to build avatar URL during login:', avatarError);
-          avatarUrl = undefined;
-        }
-        // Fallback to splitting name for old users if firstName is missing
-        let fName = user.firstName;
-        let lName = user.lastName;
-        if (!fName && !lName && (user as any).name) {
-          const parts = (user as any).name.split(' ');
-          fName = parts[0] || 'User';
-          lName = parts.slice(1).join(' ') || '';
-        }
-        res.json({ id: user.id, firstName: fName || 'User', lastName: lName || '', email: user.email, role: user.role, avatar: avatarUrl, phone: user.phone });
-      } else {
-        res.status(401).json({ error: "Invalid credentials" });
+      if (!user) {
+        return res.status(401).json({ error: "Invalid credentials" });
       }
+
+      const isPasswordValid = await verifyPassword(password, user.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+
+      if (shouldUpgradePasswordHash(user.password)) {
+        try {
+          user.password = await hashPassword(password);
+          await user.save();
+        } catch (upgradeError) {
+          console.warn('Failed to upgrade legacy password hash during login:', upgradeError);
+        }
+      }
+
+      let avatarUrl: string | undefined;
+      try {
+        avatarUrl = await buildAvatarResponseUrl(req, user as { id: string; avatar?: string });
+      } catch (avatarError) {
+        console.warn('Failed to build avatar URL during login:', avatarError);
+        avatarUrl = undefined;
+      }
+
+      // Fallback to splitting name for old users if firstName is missing
+      let fName = user.firstName;
+      let lName = user.lastName;
+      if (!fName && !lName && (user as any).name) {
+        const parts = (user as any).name.split(' ');
+        fName = parts[0] || 'User';
+        lName = parts.slice(1).join(' ') || '';
+      }
+
+      res.json({
+        id: user.id,
+        firstName: fName || 'User',
+        lastName: lName || '',
+        email: user.email,
+        role: user.role,
+        avatar: avatarUrl,
+        phone: user.phone,
+      });
     } catch (error) {
       console.error("Login error:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -2077,7 +2126,7 @@ async function startServer() {
       });
       app.use(vite.middlewares);
     } catch (error) {
-      console.error('Failed to start Vite dev server:', error.message);
+      console.error('Failed to start Vite dev server:', (error as Error).message);
       // Continue without Vite middleware - app will still work but without hot reloading
     }
   } else {

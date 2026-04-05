@@ -6,6 +6,7 @@ import fs from "fs/promises";
 import dotenv from "dotenv";
 import multer from "multer";
 import cors from "cors";
+import session from "express-session";
 import { jsPDF } from "jspdf";
 import { connectDB } from "./src/database.js";
 import { User } from "./src/models/User.js";
@@ -28,6 +29,7 @@ import {
   validatePasswordStrength,
   verifyPassword,
 } from "./src/server/auth/passwordUtils.js";
+import { loadSecurityConfig } from "./src/server/config/securityConfig.js";
 
 // Load environment variables
 dotenv.config();
@@ -638,6 +640,8 @@ async function normalizeResourceDownloadCounts() {
 }
 
 async function startServer() {
+  const securityConfig = loadSecurityConfig();
+
   // Connect to MongoDB
   await connectDB();
 
@@ -658,13 +662,26 @@ async function startServer() {
 
   const app = express();
   const port = process.env.PORT || 3000;
-  const isProduction = process.env.NODE_ENV === 'production';
+  const isProduction = securityConfig.isProduction;
 
   // Honor reverse-proxy headers (App Service / load balancers) for protocol and host awareness.
   app.set('trust proxy', 1);
 
   app.use(express.json());
   app.use(cors());
+  app.use(
+    session({
+      secret: securityConfig.sessionSecret,
+      resave: false,
+      saveUninitialized: false,
+      proxy: isProduction,
+      cookie: {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: isProduction,
+      },
+    })
+  );
   app.use('/uploads', express.static(UPLOADS_DIR));
   app.use('/api/quiz-chatbot', quizChatbotRouter);
   app.use('/api/faq-chatbot', faqChatbotRouter);

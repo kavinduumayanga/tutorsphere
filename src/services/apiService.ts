@@ -160,6 +160,22 @@ export type FaqChatResponse = {
   reply: string;
 };
 
+export type ForgotPasswordResponse = {
+  message: string;
+  cooldownSeconds: number;
+  otpExpiryMinutes: number;
+};
+
+export type VerifyPasswordOtpResponse = {
+  message: string;
+  resetToken: string;
+  resetTokenExpiryMinutes: number;
+};
+
+export type ResetPasswordResponse = {
+  message: string;
+};
+
 class ApiService {
   private sanitizeTutorName(value: string): string {
     return value.replace(/\s+updated\s*$/i, '').trim();
@@ -354,6 +370,39 @@ class ApiService {
     return this.request('/auth/signup', {
       method: 'POST',
       body: JSON.stringify({ firstName, lastName, email, password, role }),
+    });
+  }
+
+  async requestPasswordReset(email: string): Promise<ForgotPasswordResponse> {
+    return this.request('/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  async resendPasswordResetOtp(email: string): Promise<ForgotPasswordResponse> {
+    return this.request('/auth/resend-otp', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  async verifyPasswordResetOtp(email: string, otp: string): Promise<VerifyPasswordOtpResponse> {
+    return this.request('/auth/verify-otp', {
+      method: 'POST',
+      body: JSON.stringify({ email, otp }),
+    });
+  }
+
+  async resetPassword(
+    email: string,
+    resetToken: string,
+    newPassword: string,
+    confirmPassword: string
+  ): Promise<ResetPasswordResponse> {
+    return this.request('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ email, resetToken, newPassword, confirmPassword }),
     });
   }
 

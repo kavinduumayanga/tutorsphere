@@ -1,4 +1,5 @@
 import { Tutor, Review, Course, Resource } from '../types.js';
+import { ALLOWED_TUTOR_SUBJECTS } from './tutorSubjects.js';
 
 export const MOCK_TUTORS: Tutor[] = [
   {
@@ -169,6 +170,6 @@ export const MOCK_RESOURCES: Resource[] = [
   }
 ];
 
-export const STEM_SUBJECTS = ['Maths', 'Science', 'Engineering', 'Tech', 'ICT'];
+export const STEM_SUBJECTS = [...ALLOWED_TUTOR_SUBJECTS];
 
 export type Tab = 'home' | 'tutors' | 'questions' | 'courses' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'register' | 'dashboard' | 'about';

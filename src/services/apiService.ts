@@ -12,6 +12,7 @@ import {
   CourseEnrollment,
   CourseModuleResource,
 } from '../types';
+import { normalizeTutorSubjects } from '../data/tutorSubjects';
 
 const LOCALHOST_API_BASE_URL = 'http://localhost:3000/api';
 const LOOPBACK_API_BASE_URL = 'http://127.0.0.1:3000/api';
@@ -200,6 +201,7 @@ class ApiService {
   }
 
   private normalizeTutor(tutor: any): Tutor {
+    const normalizedSubjects = normalizeTutorSubjects(tutor?.subjects);
     const firstName = this.sanitizeTutorName((tutor?.firstName || '').trim());
     const lastName = this.sanitizeTutorName((tutor?.lastName || '').trim());
     const fullName = this.sanitizeTutorName((tutor?.name || '').trim());
@@ -207,6 +209,7 @@ class ApiService {
     if (firstName || lastName) {
       return {
         ...tutor,
+        subjects: normalizedSubjects,
         teachingLevel: this.normalizeTeachingLevel(tutor?.teachingLevel),
       } as Tutor;
     }
@@ -217,6 +220,7 @@ class ApiService {
         ...tutor,
         firstName: parsedFirstName || 'Tutor',
         lastName: rest.join(' '),
+        subjects: normalizedSubjects,
         teachingLevel: this.normalizeTeachingLevel(tutor?.teachingLevel),
       } as Tutor;
     }
@@ -225,6 +229,7 @@ class ApiService {
       ...tutor,
       firstName: 'Tutor',
       lastName: '',
+      subjects: normalizedSubjects,
       teachingLevel: this.normalizeTeachingLevel(tutor?.teachingLevel),
     } as Tutor;
   }
@@ -457,17 +462,30 @@ class ApiService {
   }
 
   async createTutor(tutor: Omit<Tutor, 'id'>): Promise<Tutor> {
+    const payload = {
+      ...tutor,
+      subjects: normalizeTutorSubjects(tutor.subjects),
+    };
+
     const createdTutor = await this.request<any>('/tutors', {
       method: 'POST',
-      body: JSON.stringify(tutor),
+      body: JSON.stringify(payload),
     });
     return this.normalizeTutor(createdTutor);
   }
 
   async updateTutor(id: string, tutor: Partial<Tutor>): Promise<Tutor> {
+    const payload: Partial<Tutor> = {
+      ...tutor,
+    };
+
+    if (Object.prototype.hasOwnProperty.call(payload, 'subjects')) {
+      payload.subjects = normalizeTutorSubjects(payload.subjects);
+    }
+
     const updatedTutor = await this.request<any>(`/tutors/${id}`, {
       method: 'PUT',
-      body: JSON.stringify(tutor),
+      body: JSON.stringify(payload),
     });
     return this.normalizeTutor(updatedTutor);
   }

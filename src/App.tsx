@@ -56,6 +56,7 @@ import { TutorProfilePage } from './components/pages/TutorProfilePage';
 import { GetStartedSection } from "./components/pages/GetStartedSection";
 import { TutorBookingPage } from './components/pages/TutorBookingPage';
 import { MOCK_TUTORS, MOCK_COURSES, MOCK_RESOURCES } from './data/mockData';
+import { ALLOWED_TUTOR_SUBJECTS } from './data/tutorSubjects';
 import { RegistrationSelectionPage } from './components/pages/RegistrationSelectionPage';
 import { AboutPage } from './components/pages/AboutPage';
 import { TutorAvailabilityManagePage } from './components/pages/TutorAvailabilityManagePage';
@@ -69,7 +70,7 @@ import { FindTutorsPage } from './components/pages/FindTutorsPage';
 import { CertificateModal } from './components/common/CertificateModal';
 import { ForgotPasswordPage } from './components/pages/ForgotPasswordPage';
 
-const STEM_SUBJECTS = ['Maths', 'Science', 'Engineering', 'Tech', 'ICT'];
+const STEM_SUBJECTS: string[] = [...ALLOWED_TUTOR_SUBJECTS];
 
 type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'about';
 

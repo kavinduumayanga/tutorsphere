@@ -1,6 +1,8 @@
 // Local service providing offline alternatives for all AI-powered features
 // This provides completely local implementations without external dependencies
 
+import { ALLOWED_TUTOR_SUBJECTS, normalizeTutorSubjects } from '../data/tutorSubjects';
+
 export const localService = {
   async generateSpeech(text: string) {
     // Mock speech generation - in a real local implementation,
@@ -40,8 +42,8 @@ export const localService = {
 
   async validateTutor(details: any) {
     // Simple local validation logic
-    const education = details.education.toLowerCase();
-    const subjects = details.subjects.map((s: string) => s.toLowerCase());
+    const education = String(details?.education || '').toLowerCase();
+    const subjects = normalizeTutorSubjects(details?.subjects);
 
     // Check for valid education
     const hasValidEducation = education.includes('degree') ||
@@ -52,11 +54,8 @@ export const localService = {
                              education.includes('master') ||
                              education.includes('doctor');
 
-    // Check for STEM subjects
-    const stemSubjects = ['mathematics', 'physics', 'chemistry', 'biology', 'ict', 'computer science', 'software engineering'];
-    const hasValidSubjects = subjects.some((subject: string) =>
-      stemSubjects.some(stem => subject.includes(stem))
-    );
+    // Require at least one canonical STEM/ICT subject.
+    const hasValidSubjects = subjects.length > 0;
 
     if (!hasValidEducation) {
       return {
@@ -68,7 +67,7 @@ export const localService = {
     if (!hasValidSubjects) {
       return {
         isValid: false,
-        reason: "Subjects must be STEM or ICT related. Please select appropriate subjects for tutoring."
+        reason: `Subjects must be STEM or ICT related. Please select at least one subject from: ${ALLOWED_TUTOR_SUBJECTS.join(', ')}.`
       };
     }
 

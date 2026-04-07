@@ -31,6 +31,7 @@ import {
   verifyPassword,
 } from "./src/server/auth/passwordUtils.js";
 import { loadSecurityConfig } from "./src/server/config/securityConfig.js";
+import { ALLOWED_TUTOR_SUBJECTS, normalizeTutorSubjects } from "./src/data/tutorSubjects.js";
 
 console.log('[Startup] Loading environment variables...');
 const dotenvResult = dotenv.config({ quiet: true });
@@ -253,6 +254,20 @@ const normalizeTeachingLevel = (value: unknown): 'School' | 'University' | 'Scho
     return 'University';
   }
   return 'School';
+};
+
+const INVALID_TUTOR_SUBJECTS_ERROR =
+  `Subjects must be STEM or ICT related. Please select at least one subject from: ${ALLOWED_TUTOR_SUBJECTS.join(', ')}.`;
+
+const validateAndNormalizeTutorSubjects = (subjects: unknown): { isValid: boolean; normalizedSubjects: string[] } => {
+  console.log('[TutorSubjectValidation] Received subjects:', subjects);
+  console.log('[TutorSubjectValidation] Allowed subjects:', ALLOWED_TUTOR_SUBJECTS);
+
+  const normalizedSubjects = normalizeTutorSubjects(subjects);
+  return {
+    isValid: normalizedSubjects.length > 0,
+    normalizedSubjects,
+  };
 };
 
 type CertificatePdfInput = {
@@ -1144,10 +1159,17 @@ async function startServer() {
 
   app.post("/api/tutors", async (req, res) => {
     try {
-      const tutorData = req.body;
+      const tutorData = req.body || {};
+      const { isValid, normalizedSubjects } = validateAndNormalizeTutorSubjects(tutorData.subjects);
+
+      if (!isValid) {
+        return res.status(400).json({ error: INVALID_TUTOR_SUBJECTS_ERROR });
+      }
+
       const id = tutorData.id || Math.random().toString(36).substr(2, 9);
       const tutor = new Tutor({
         ...tutorData,
+        subjects: normalizedSubjects,
         teachingLevel: normalizeTeachingLevel(tutorData.teachingLevel),
         id,
       });
@@ -1165,12 +1187,21 @@ async function startServer() {
       const { teachingLevel: requestedTeachingLevel, ...incomingTutorData } = req.body || {};
 
       if (tutor) {
-        const nextTutorPayload = {
+        const nextTutorPayload: Record<string, unknown> = {
           ...incomingTutorData,
           ...(requestedTeachingLevel !== undefined
             ? { teachingLevel: normalizeTeachingLevel(requestedTeachingLevel) }
             : {}),
         };
+
+        if (Object.prototype.hasOwnProperty.call(incomingTutorData, 'subjects')) {
+          const { isValid, normalizedSubjects } = validateAndNormalizeTutorSubjects(incomingTutorData.subjects);
+          if (!isValid) {
+            return res.status(400).json({ error: INVALID_TUTOR_SUBJECTS_ERROR });
+          }
+
+          nextTutorPayload.subjects = normalizedSubjects;
+        }
 
         tutor = await Tutor.findOneAndUpdate(
           { id: req.params.id },
@@ -1184,6 +1215,11 @@ async function startServer() {
           return res.status(404).json({ error: "User not found for tutor profile" });
         }
 
+        const { isValid, normalizedSubjects } = validateAndNormalizeTutorSubjects(incomingTutorData.subjects);
+        if (!isValid) {
+          return res.status(400).json({ error: INVALID_TUTOR_SUBJECTS_ERROR });
+        }
+
         tutor = new Tutor({
           ...incomingTutorData,
           id: user.id,
@@ -1191,7 +1227,7 @@ async function startServer() {
           email: incomingTutorData.email || user.email,
           role: 'tutor',
           qualifications: incomingTutorData.qualifications || 'Not specified',
-          subjects: incomingTutorData.subjects || [],
+          subjects: normalizedSubjects,
           teachingLevel: normalizeTeachingLevel(requestedTeachingLevel || 'School'),
           pricePerHour: incomingTutorData.pricePerHour || 0,
           rating: incomingTutorData.rating ?? 0,

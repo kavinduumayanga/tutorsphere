@@ -11,6 +11,8 @@ import {
   SkillLevel,
   CourseEnrollment,
   CourseModuleResource,
+  WithdrawalRequest,
+  WithdrawalSummary,
 } from '../types';
 import { normalizeTutorSubjects } from '../data/tutorSubjects';
 
@@ -669,6 +671,28 @@ class ApiService {
     return this.request(`/course-enrollments/${enrollmentId}/progress`, {
       method: 'PUT',
       body: JSON.stringify({ studentId, completedModuleIds }),
+    });
+  }
+
+  async getWithdrawalRequests(tutorId: string): Promise<WithdrawalRequest[]> {
+    const params = new URLSearchParams({ tutorId });
+    return this.request(`/withdrawals?${params.toString()}`);
+  }
+
+  async getWithdrawalSummary(tutorId: string): Promise<WithdrawalSummary> {
+    const params = new URLSearchParams({ tutorId });
+    return this.request(`/withdrawals/summary?${params.toString()}`);
+  }
+
+  async createWithdrawalRequest(payload: {
+    tutorId: string;
+    amount: number;
+    payoutMethodType: WithdrawalRequest['payoutMethodType'];
+    payoutMethodDetails: string;
+  }): Promise<WithdrawalRequest> {
+    return this.request('/withdrawals', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   }
 

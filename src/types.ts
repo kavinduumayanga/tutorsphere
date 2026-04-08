@@ -93,6 +93,13 @@ export interface CourseEnrollment {
   enrolledAt: string;
   completedAt?: string;
   certificateId?: string;
+  paymentStatus?: 'pending' | 'paid' | 'failed' | 'refunded' | 'cancelled';
+  paymentReference?: string;
+  paidAt?: string;
+  amountPaid?: number;
+  studentName?: string;
+  courseTitle?: string;
+  tutorId?: string;
 }
 
 export interface Quiz {
@@ -143,4 +150,25 @@ export interface Review {
   rating: number;
   comment: string;
   date: string;
+}
+
+export interface WithdrawalRequest {
+  id: string;
+  tutorId: string;
+  amount: number;
+  payoutMethodType: 'bank_transfer' | 'paypal';
+  payoutMethodDetails: string;
+  status: 'pending' | 'approved' | 'rejected' | 'paid';
+  requestedAt: string;
+  processedAt?: string;
+  note?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface WithdrawalSummary {
+  totalEarnings: number;
+  withdrawnAmount: number;
+  pendingWithdrawalAmount: number;
+  availableBalance: number;
 }

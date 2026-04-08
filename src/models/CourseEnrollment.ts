@@ -9,6 +9,10 @@ export interface ICourseEnrollment extends Document {
   enrolledAt: Date;
   completedAt?: Date;
   certificateId?: string;
+  paymentStatus?: 'pending' | 'paid' | 'failed' | 'refunded' | 'cancelled';
+  paymentReference?: string;
+  paidAt?: Date;
+  amountPaid?: number;
 }
 
 const CourseEnrollmentSchema: Schema = new Schema(
@@ -21,6 +25,15 @@ const CourseEnrollmentSchema: Schema = new Schema(
     enrolledAt: { type: Date, required: true, default: Date.now },
     completedAt: { type: Date },
     certificateId: { type: String },
+    paymentStatus: {
+      type: String,
+      enum: ['pending', 'paid', 'failed', 'refunded', 'cancelled'],
+      default: 'pending',
+      index: true,
+    },
+    paymentReference: { type: String },
+    paidAt: { type: Date },
+    amountPaid: { type: Number, min: 0, default: 0 },
   },
   {
     timestamps: true,

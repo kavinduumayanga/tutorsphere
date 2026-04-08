@@ -21,6 +21,7 @@ import { Quiz } from "./src/models/Quiz.js";
 import { StudyPlan } from "./src/models/StudyPlan.js";
 import { SkillLevel } from "./src/models/SkillLevel.js";
 import { CourseEnrollment } from "./src/models/CourseEnrollment.js";
+import { WithdrawalRequest } from "./src/models/WithdrawalRequest.js";
 import { quizChatbotRouter } from "./src/server/quiz-chatbot/chatController.js";
 import { faqChatbotRouter } from "./src/server/faq-chatbot/chatController.js";
 import { authRouter } from "./src/server/auth/authRoutes.js";
@@ -46,6 +47,7 @@ const __dirname = path.dirname(__filename);
 const APP_ROOT = path.basename(__dirname) === 'dist' ? path.resolve(__dirname, '..') : __dirname;
 const UPLOADS_DIR = path.join(APP_ROOT, 'uploads');
 const REMEMBER_ME_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const WITHDRAWAL_PLATFORM_FEE_RATE = 0.12;
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -385,11 +387,149 @@ const toFinitePrice = (value: unknown): number => {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
 };
 
+const roundCurrency = (value: number): number => {
+  return Math.round(value * 100) / 100;
+};
+
 const resolveCourseIsFree = (value: unknown, fallbackPrice: number): boolean => {
   if (typeof value === 'boolean') {
     return value;
   }
   return fallbackPrice <= 0;
+};
+
+const normalizeWithdrawalStatus = (value: unknown): 'pending' | 'approved' | 'rejected' | 'paid' => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'approved') return 'approved';
+  if (normalized === 'rejected') return 'rejected';
+  if (normalized === 'paid') return 'paid';
+  return 'pending';
+};
+
+const normalizeWithdrawalPayoutMethodType = (value: unknown): 'bank_transfer' | 'paypal' => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'paypal') return 'paypal';
+  return 'bank_transfer';
+};
+
+const resolveEffectiveWithdrawalStatus = (request: { status?: unknown; payoutMethodType?: unknown }) => {
+  const normalizedStatus = normalizeWithdrawalStatus(request.status);
+  const payoutMethodType = normalizeWithdrawalPayoutMethodType(request.payoutMethodType);
+
+  // Legacy PayPal rows created before auto-approval should not appear as pending.
+  if (payoutMethodType === 'paypal' && normalizedStatus === 'pending') {
+    return 'approved' as const;
+  }
+
+  return normalizedStatus;
+};
+
+const calculateTutorSessionNetEarningsForWithdrawal = async (tutorId: string): Promise<number> => {
+  const tutor = await Tutor.findOne({ id: tutorId });
+  const hourlyRate = toFinitePrice((tutor as any)?.pricePerHour);
+  if (hourlyRate <= 0) {
+    return 0;
+  }
+
+  const completedPaidSessions = await Booking.countDocuments({
+    tutorId,
+    status: 'completed',
+    paymentStatus: 'paid',
+  });
+
+  const gross = completedPaidSessions * hourlyRate;
+  const net = gross - gross * WITHDRAWAL_PLATFORM_FEE_RATE;
+  return roundCurrency(Math.max(0, net));
+};
+
+const calculateTutorCourseNetEarningsForWithdrawal = async (tutorId: string): Promise<number> => {
+  const tutorCourseIds = await Course.find({ tutorId }).distinct('id');
+  if (!tutorCourseIds.length) {
+    return 0;
+  }
+
+  const normalizedCourseIds = (tutorCourseIds as string[]).filter(Boolean);
+  if (!normalizedCourseIds.length) {
+    return 0;
+  }
+
+  const courses = await Course.find({ id: { $in: normalizedCourseIds } }, { id: 1, price: 1, isFree: 1 });
+  const courseById = new Map(courses.map((course) => [course.id, course]));
+
+  const enrollments = await CourseEnrollment.find({ courseId: { $in: normalizedCourseIds } });
+
+  let netEarnings = 0;
+  for (const enrollment of enrollments) {
+    const paymentStatus = String((enrollment as any)?.paymentStatus || '').trim().toLowerCase();
+    if (paymentStatus && paymentStatus !== 'paid') {
+      continue;
+    }
+
+    let amountPaid = Number((enrollment as any)?.amountPaid);
+    if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
+      const course = courseById.get(enrollment.courseId);
+      const fallbackPrice = toFinitePrice((course as any)?.price);
+      const isFree = resolveCourseIsFree((course as any)?.isFree, fallbackPrice);
+      amountPaid = isFree ? 0 : fallbackPrice;
+    }
+
+    if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
+      continue;
+    }
+
+    const netAmount = amountPaid - amountPaid * WITHDRAWAL_PLATFORM_FEE_RATE;
+    netEarnings += Math.max(0, netAmount);
+  }
+
+  return roundCurrency(Math.max(0, netEarnings));
+};
+
+const calculateTutorTotalNetEarningsForWithdrawal = async (tutorId: string): Promise<number> => {
+  const [sessionNet, courseNet] = await Promise.all([
+    calculateTutorSessionNetEarningsForWithdrawal(tutorId),
+    calculateTutorCourseNetEarningsForWithdrawal(tutorId),
+  ]);
+
+  return roundCurrency(sessionNet + courseNet);
+};
+
+const calculateTutorWithdrawalSummary = async (tutorId: string) => {
+  const [totalEarnings, withdrawalRequests] = await Promise.all([
+    calculateTutorTotalNetEarningsForWithdrawal(tutorId),
+    WithdrawalRequest.find({ tutorId }),
+  ]);
+
+  let withdrawnAmount = 0;
+  let pendingWithdrawalAmount = 0;
+  let approvedWithdrawalAmount = 0;
+
+  for (const request of withdrawalRequests) {
+    const normalizedStatus = resolveEffectiveWithdrawalStatus(request);
+    const amount = toFinitePrice(request.amount);
+
+    if (normalizedStatus === 'paid') {
+      withdrawnAmount += amount;
+      continue;
+    }
+
+    if (normalizedStatus === 'pending') {
+      pendingWithdrawalAmount += amount;
+      continue;
+    }
+
+    if (normalizedStatus === 'approved') {
+      approvedWithdrawalAmount += amount;
+    }
+  }
+
+  const availableBalance = Math.max(0, totalEarnings - withdrawnAmount - pendingWithdrawalAmount - approvedWithdrawalAmount);
+
+  return {
+    totalEarnings: roundCurrency(totalEarnings),
+    withdrawnAmount: roundCurrency(withdrawnAmount),
+    pendingWithdrawalAmount: roundCurrency(pendingWithdrawalAmount),
+    availableBalance: roundCurrency(availableBalance),
+  };
 };
 
 type NormalizedCourseModuleResource = {
@@ -1618,7 +1758,8 @@ async function startServer() {
         return res.status(404).json({ error: "Course not found" });
       }
 
-      const isFreeCourse = resolveCourseIsFree((existingCourse as any).isFree, toFinitePrice(existingCourse.price));
+      const normalizedCoursePrice = toFinitePrice(existingCourse.price);
+      const isFreeCourse = resolveCourseIsFree((existingCourse as any).isFree, normalizedCoursePrice);
       if (!isFreeCourse) {
         if (!paymentConfirmed) {
           return res.status(402).json({ error: "This is a paid course. Payment is required before enrollment." });
@@ -1636,6 +1777,11 @@ async function startServer() {
       );
 
       const existingEnrollment = await CourseEnrollment.findOne({ courseId: req.params.id, studentId });
+      const nextPaymentStatus: 'pending' | 'paid' = isFreeCourse ? 'paid' : 'paid';
+      const nextAmountPaid = isFreeCourse ? 0 : normalizedCoursePrice;
+      const nextPaidAt = nextPaymentStatus === 'paid' ? new Date() : undefined;
+      const normalizedPaymentReference = String(paymentReference || '').trim();
+
       if (!existingEnrollment) {
         await CourseEnrollment.create({
           id: createEntityId(),
@@ -1644,7 +1790,30 @@ async function startServer() {
           completedModuleIds: [],
           progress: 0,
           enrolledAt: new Date(),
+          paymentStatus: nextPaymentStatus,
+          paymentReference: normalizedPaymentReference || undefined,
+          paidAt: nextPaidAt,
+          amountPaid: nextAmountPaid,
         });
+      } else {
+        const shouldBackfillPaymentMetadata =
+          !existingEnrollment.paymentStatus ||
+          existingEnrollment.amountPaid === undefined ||
+          existingEnrollment.amountPaid === null;
+
+        if (shouldBackfillPaymentMetadata) {
+          await CourseEnrollment.updateOne(
+            { id: existingEnrollment.id },
+            {
+              $set: {
+                paymentStatus: nextPaymentStatus,
+                paymentReference: normalizedPaymentReference || undefined,
+                paidAt: nextPaidAt,
+                amountPaid: nextAmountPaid,
+              },
+            }
+          );
+        }
       }
 
       if (course) {
@@ -1700,7 +1869,52 @@ async function startServer() {
         enrollments = enrollments.filter((enrollment) => tutorCourseSet.has(enrollment.courseId));
       }
 
-      res.json(enrollments);
+      const normalizedEnrollments = enrollments.map((enrollment) => enrollment.toObject());
+      const enrollmentCourseIds = Array.from(new Set(normalizedEnrollments.map((enrollment) => enrollment.courseId)));
+      const enrollmentStudentIds = Array.from(new Set(normalizedEnrollments.map((enrollment) => enrollment.studentId)));
+
+      const enrollmentCourses = await Course.find({ id: { $in: enrollmentCourseIds } });
+      const courseById = new Map(enrollmentCourses.map((course) => [course.id, course]));
+
+      const enrollmentStudents = await User.find(
+        { id: { $in: enrollmentStudentIds } },
+        { id: 1, firstName: 1, lastName: 1 }
+      );
+      const studentNameById = new Map(
+        enrollmentStudents.map((student) => [student.id, `${String(student.firstName || '').trim()} ${String(student.lastName || '').trim()}`.trim()])
+      );
+
+      const paymentStatusWhitelist = new Set(['pending', 'paid', 'failed', 'refunded', 'cancelled']);
+
+      const enrichedEnrollments = normalizedEnrollments.map((enrollment: any) => {
+        const course = courseById.get(enrollment.courseId);
+        const resolvedPrice = toFinitePrice(course?.price);
+        const isFreeCourse = resolveCourseIsFree((course as any)?.isFree, resolvedPrice);
+        const fallbackAmountPaid = isFreeCourse ? 0 : resolvedPrice;
+
+        const rawPaymentStatus = String(enrollment.paymentStatus || '').trim().toLowerCase();
+        const paymentStatus = paymentStatusWhitelist.has(rawPaymentStatus)
+          ? rawPaymentStatus
+          : 'paid';
+
+        const normalizedAmountPaid = Number.isFinite(Number(enrollment.amountPaid))
+          ? Math.max(0, Number(enrollment.amountPaid))
+          : fallbackAmountPaid;
+
+        const studentName = studentNameById.get(enrollment.studentId) || 'Student';
+
+        return {
+          ...enrollment,
+          paymentStatus,
+          amountPaid: normalizedAmountPaid,
+          paidAt: enrollment.paidAt || (paymentStatus === 'paid' ? enrollment.enrolledAt : undefined),
+          studentName,
+          courseTitle: course?.title || undefined,
+          tutorId: course?.tutorId || undefined,
+        };
+      });
+
+      res.json(enrichedEnrollments);
     } catch (error) {
       console.error("Get course enrollments error:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -1768,6 +1982,110 @@ async function startServer() {
     } catch (error) {
       console.error("Update enrollment progress error:", error);
       res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get('/api/withdrawals/summary', async (req, res) => {
+    try {
+      const tutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
+      if (!tutorId) {
+        return res.status(400).json({ error: 'tutorId is required.' });
+      }
+
+      const tutor = await Tutor.findOne({ id: tutorId });
+      if (!tutor) {
+        return res.status(404).json({ error: 'Tutor not found.' });
+      }
+
+      const summary = await calculateTutorWithdrawalSummary(tutorId);
+      return res.json(summary);
+    } catch (error) {
+      console.error('Get withdrawal summary error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.get('/api/withdrawals', async (req, res) => {
+    try {
+      const tutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
+      if (!tutorId) {
+        return res.status(400).json({ error: 'tutorId is required.' });
+      }
+
+      const tutor = await Tutor.findOne({ id: tutorId });
+      if (!tutor) {
+        return res.status(404).json({ error: 'Tutor not found.' });
+      }
+
+      const requests = await WithdrawalRequest.find({ tutorId }).sort({ requestedAt: -1, createdAt: -1 });
+      const normalizedRequests = requests.map((request) => {
+        const requestObject: any = request.toObject();
+        const effectiveStatus = resolveEffectiveWithdrawalStatus(requestObject);
+
+        return {
+          ...requestObject,
+          status: effectiveStatus,
+          processedAt:
+            effectiveStatus === 'approved' && !requestObject.processedAt
+              ? requestObject.updatedAt || requestObject.requestedAt
+              : requestObject.processedAt,
+        };
+      });
+
+      return res.json(normalizedRequests);
+    } catch (error) {
+      console.error('Get withdrawals error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.post('/api/withdrawals', async (req, res) => {
+    try {
+      const tutorId = String(req.body?.tutorId || '').trim();
+      const payoutMethodDetails = String(req.body?.payoutMethodDetails || '').trim();
+      const payoutMethodType = normalizeWithdrawalPayoutMethodType(req.body?.payoutMethodType);
+      const amount = toFinitePrice(req.body?.amount);
+
+      if (!tutorId) {
+        return res.status(400).json({ error: 'tutorId is required.' });
+      }
+
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return res.status(400).json({ error: 'Withdrawal amount must be greater than zero.' });
+      }
+
+      if (!payoutMethodDetails || payoutMethodDetails.length < 4) {
+        return res.status(400).json({ error: 'Payout method details are required.' });
+      }
+
+      const tutor = await Tutor.findOne({ id: tutorId });
+      if (!tutor) {
+        return res.status(404).json({ error: 'Tutor not found.' });
+      }
+
+      const summary = await calculateTutorWithdrawalSummary(tutorId);
+      if (amount > summary.availableBalance) {
+        return res.status(400).json({ error: 'Withdrawal amount exceeds available balance.' });
+      }
+
+      const shouldAutoApprove = payoutMethodType === 'paypal';
+
+      const request = await WithdrawalRequest.create({
+        id: createEntityId(),
+        tutorId,
+        amount: roundCurrency(amount),
+        payoutMethodType,
+        payoutMethodDetails,
+        status: shouldAutoApprove ? 'approved' : 'pending',
+        requestedAt: new Date(),
+        processedAt: shouldAutoApprove ? new Date() : undefined,
+        note: shouldAutoApprove ? 'Automatically approved for PayPal payouts.' : undefined,
+      });
+
+      return res.status(201).json(request);
+    } catch (error) {
+      console.error('Create withdrawal request error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

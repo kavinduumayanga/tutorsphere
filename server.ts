@@ -21,6 +21,7 @@ import { Quiz } from "./src/models/Quiz.js";
 import { StudyPlan } from "./src/models/StudyPlan.js";
 import { SkillLevel } from "./src/models/SkillLevel.js";
 import { CourseEnrollment } from "./src/models/CourseEnrollment.js";
+import { WithdrawalRequest } from "./src/models/WithdrawalRequest.js";
 import { quizChatbotRouter } from "./src/server/quiz-chatbot/chatController.js";
 import { faqChatbotRouter } from "./src/server/faq-chatbot/chatController.js";
 import { authRouter } from "./src/server/auth/authRoutes.js";
@@ -46,6 +47,7 @@ const __dirname = path.dirname(__filename);
 const APP_ROOT = path.basename(__dirname) === 'dist' ? path.resolve(__dirname, '..') : __dirname;
 const UPLOADS_DIR = path.join(APP_ROOT, 'uploads');
 const REMEMBER_ME_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const WITHDRAWAL_PLATFORM_FEE_RATE = 0.12;
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -385,11 +387,149 @@ const toFinitePrice = (value: unknown): number => {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
 };
 
+const roundCurrency = (value: number): number => {
+  return Math.round(value * 100) / 100;
+};
+
 const resolveCourseIsFree = (value: unknown, fallbackPrice: number): boolean => {
   if (typeof value === 'boolean') {
     return value;
   }
   return fallbackPrice <= 0;
+};
+
+const normalizeWithdrawalStatus = (value: unknown): 'pending' | 'approved' | 'rejected' | 'paid' => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'approved') return 'approved';
+  if (normalized === 'rejected') return 'rejected';
+  if (normalized === 'paid') return 'paid';
+  return 'pending';
+};
+
+const normalizeWithdrawalPayoutMethodType = (value: unknown): 'bank_transfer' | 'paypal' => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'paypal') return 'paypal';
+  return 'bank_transfer';
+};
+
+const resolveEffectiveWithdrawalStatus = (request: { status?: unknown; payoutMethodType?: unknown }) => {
+  const normalizedStatus = normalizeWithdrawalStatus(request.status);
+  const payoutMethodType = normalizeWithdrawalPayoutMethodType(request.payoutMethodType);
+
+  // Legacy PayPal rows created before auto-approval should not appear as pending.
+  if (payoutMethodType === 'paypal' && normalizedStatus === 'pending') {
+    return 'approved' as const;
+  }
+
+  return normalizedStatus;
+};
+
+const calculateTutorSessionNetEarningsForWithdrawal = async (tutorId: string): Promise<number> => {
+  const tutor = await Tutor.findOne({ id: tutorId });
+  const hourlyRate = toFinitePrice((tutor as any)?.pricePerHour);
+  if (hourlyRate <= 0) {
+    return 0;
+  }
+
+  const completedPaidSessions = await Booking.countDocuments({
+    tutorId,
+    status: 'completed',
+    paymentStatus: 'paid',
+  });
+
+  const gross = completedPaidSessions * hourlyRate;
+  const net = gross - gross * WITHDRAWAL_PLATFORM_FEE_RATE;
+  return roundCurrency(Math.max(0, net));
+};
+
+const calculateTutorCourseNetEarningsForWithdrawal = async (tutorId: string): Promise<number> => {
+  const tutorCourseIds = await Course.find({ tutorId }).distinct('id');
+  if (!tutorCourseIds.length) {
+    return 0;
+  }
+
+  const normalizedCourseIds = (tutorCourseIds as string[]).filter(Boolean);
+  if (!normalizedCourseIds.length) {
+    return 0;
+  }
+
+  const courses = await Course.find({ id: { $in: normalizedCourseIds } }, { id: 1, price: 1, isFree: 1 });
+  const courseById = new Map(courses.map((course) => [course.id, course]));
+
+  const enrollments = await CourseEnrollment.find({ courseId: { $in: normalizedCourseIds } });
+
+  let netEarnings = 0;
+  for (const enrollment of enrollments) {
+    const paymentStatus = String((enrollment as any)?.paymentStatus || '').trim().toLowerCase();
+    if (paymentStatus && paymentStatus !== 'paid') {
+      continue;
+    }
+
+    let amountPaid = Number((enrollment as any)?.amountPaid);
+    if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
+      const course = courseById.get(enrollment.courseId);
+      const fallbackPrice = toFinitePrice((course as any)?.price);
+      const isFree = resolveCourseIsFree((course as any)?.isFree, fallbackPrice);
+      amountPaid = isFree ? 0 : fallbackPrice;
+    }
+
+    if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
+      continue;
+    }
+
+    const netAmount = amountPaid - amountPaid * WITHDRAWAL_PLATFORM_FEE_RATE;
+    netEarnings += Math.max(0, netAmount);
+  }
+
+  return roundCurrency(Math.max(0, netEarnings));
+};
+
+const calculateTutorTotalNetEarningsForWithdrawal = async (tutorId: string): Promise<number> => {
+  const [sessionNet, courseNet] = await Promise.all([
+    calculateTutorSessionNetEarningsForWithdrawal(tutorId),
+    calculateTutorCourseNetEarningsForWithdrawal(tutorId),
+  ]);
+
+  return roundCurrency(sessionNet + courseNet);
+};
+
+const calculateTutorWithdrawalSummary = async (tutorId: string) => {
+  const [totalEarnings, withdrawalRequests] = await Promise.all([
+    calculateTutorTotalNetEarningsForWithdrawal(tutorId),
+    WithdrawalRequest.find({ tutorId }),
+  ]);
+
+  let withdrawnAmount = 0;
+  let pendingWithdrawalAmount = 0;
+  let approvedWithdrawalAmount = 0;
+
+  for (const request of withdrawalRequests) {
+    const normalizedStatus = resolveEffectiveWithdrawalStatus(request);
+    const amount = toFinitePrice(request.amount);
+
+    if (normalizedStatus === 'paid') {
+      withdrawnAmount += amount;
+      continue;
+    }
+
+    if (normalizedStatus === 'pending') {
+      pendingWithdrawalAmount += amount;
+      continue;
+    }
+
+    if (normalizedStatus === 'approved') {
+      approvedWithdrawalAmount += amount;
+    }
+  }
+
+  const availableBalance = Math.max(0, totalEarnings - withdrawnAmount - pendingWithdrawalAmount - approvedWithdrawalAmount);
+
+  return {
+    totalEarnings: roundCurrency(totalEarnings),
+    withdrawnAmount: roundCurrency(withdrawnAmount),
+    pendingWithdrawalAmount: roundCurrency(pendingWithdrawalAmount),
+    availableBalance: roundCurrency(availableBalance),
+  };
 };
 
 type NormalizedCourseModuleResource = {
@@ -662,6 +802,55 @@ async function normalizeResourceDownloadCounts() {
   }
 }
 
+async function normalizeBookingPaymentStates() {
+  try {
+    // Preserve historical confirmed/completed sessions as paid bookings.
+    await Booking.updateMany(
+      {
+        paymentStatus: { $exists: false },
+        status: { $in: ['confirmed', 'completed'] },
+      },
+      {
+        $set: {
+          paymentStatus: 'paid',
+          paidAt: new Date().toISOString(),
+        },
+      }
+    );
+
+    // Default all other legacy bookings to pending payment.
+    await Booking.updateMany(
+      {
+        paymentStatus: { $exists: false },
+        status: { $nin: ['confirmed', 'completed'] },
+      },
+      {
+        $set: {
+          paymentStatus: 'pending',
+        },
+      }
+    );
+  } catch (error) {
+    console.log('Booking payment status normalization skipped or failed:', (error as Error).message);
+  }
+}
+
+async function normalizeBookingVisibilityFlags() {
+  try {
+    await Booking.updateMany(
+      { hiddenForTutor: { $exists: false } },
+      { $set: { hiddenForTutor: false } }
+    );
+
+    await Booking.updateMany(
+      { hiddenForStudent: { $exists: false } },
+      { $set: { hiddenForStudent: false } }
+    );
+  } catch (error) {
+    console.log('Booking visibility normalization skipped or failed:', (error as Error).message);
+  }
+}
+
 async function startServer() {
   console.log('[Startup] Bootstrapping server runtime...');
   const securityConfig = loadSecurityConfig();
@@ -686,6 +875,12 @@ async function startServer() {
 
   // Ensure every resource has a persisted, non-negative download count.
   await normalizeResourceDownloadCounts();
+
+  // Keep legacy bookings compatible with payment-aware booking workflows.
+  await normalizeBookingPaymentStates();
+
+  // Ensure booking visibility flags exist for soft-hide session cards.
+  await normalizeBookingVisibilityFlags();
 
   console.log('[Startup] Startup data checks completed.');
 
@@ -897,7 +1092,7 @@ async function startServer() {
       if (req.session) {
         (req.session as any).userId = user.id;
         (req.session as any).role = user.role;
-        req.session.cookie.maxAge = persistentSession ? REMEMBER_ME_MAX_AGE_MS : null;
+        req.session.cookie.maxAge = persistentSession ? REMEMBER_ME_MAX_AGE_MS : undefined;
       }
 
       // Fallback to splitting name for old users if firstName is missing
@@ -1263,7 +1458,7 @@ async function startServer() {
   // Review APIs
   app.get("/api/reviews", async (req, res) => {
     try {
-      const reviews = await Review.find();
+      const reviews = await Review.find().sort({ date: -1, createdAt: -1 });
       res.json(reviews);
     } catch (error) {
       console.error("Get reviews error:", error);
@@ -1273,7 +1468,7 @@ async function startServer() {
 
   app.get("/api/reviews/:tutorId", async (req, res) => {
     try {
-      const reviews = await Review.find({ tutorId: req.params.tutorId });
+      const reviews = await Review.find({ tutorId: req.params.tutorId }).sort({ date: -1, createdAt: -1 });
       res.json(reviews);
     } catch (error) {
       console.error("Get tutor reviews error:", error);
@@ -1283,9 +1478,47 @@ async function startServer() {
 
   app.post("/api/reviews", async (req, res) => {
     try {
-      const reviewData = req.body;
+      const reviewData = req.body || {};
+      const tutorId = String(reviewData.tutorId || '').trim();
+      const studentId = String(reviewData.studentId || '').trim();
+      const studentName = String(reviewData.studentName || '').trim();
+      const sessionId = String(reviewData.sessionId || '').trim();
+      const rating = Number(reviewData.rating);
+      const comment = String(reviewData.comment || '').trim();
+      const date = String(reviewData.date || new Date().toISOString().split('T')[0]).trim();
+
+      if (!tutorId || !studentId || !studentName) {
+        return res.status(400).json({ error: 'tutorId, studentId, and studentName are required.' });
+      }
+
+      if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
+        return res.status(400).json({ error: 'rating must be between 1 and 5.' });
+      }
+
+      if (sessionId) {
+        const existingReview = await Review.findOne({ sessionId, studentId });
+        if (existingReview) {
+          existingReview.tutorId = tutorId;
+          existingReview.studentName = studentName;
+          existingReview.rating = rating;
+          existingReview.comment = comment;
+          existingReview.date = date;
+          await existingReview.save();
+          return res.json(existingReview);
+        }
+      }
+
       const id = Math.random().toString(36).substr(2, 9);
-      const review = new Review({ ...reviewData, id });
+      const review = new Review({
+        id,
+        tutorId,
+        studentId,
+        studentName,
+        sessionId: sessionId || undefined,
+        rating,
+        comment,
+        date,
+      });
       await review.save();
       res.json(review);
     } catch (error) {
@@ -1525,7 +1758,8 @@ async function startServer() {
         return res.status(404).json({ error: "Course not found" });
       }
 
-      const isFreeCourse = resolveCourseIsFree((existingCourse as any).isFree, toFinitePrice(existingCourse.price));
+      const normalizedCoursePrice = toFinitePrice(existingCourse.price);
+      const isFreeCourse = resolveCourseIsFree((existingCourse as any).isFree, normalizedCoursePrice);
       if (!isFreeCourse) {
         if (!paymentConfirmed) {
           return res.status(402).json({ error: "This is a paid course. Payment is required before enrollment." });
@@ -1543,6 +1777,11 @@ async function startServer() {
       );
 
       const existingEnrollment = await CourseEnrollment.findOne({ courseId: req.params.id, studentId });
+      const nextPaymentStatus: 'pending' | 'paid' = isFreeCourse ? 'paid' : 'paid';
+      const nextAmountPaid = isFreeCourse ? 0 : normalizedCoursePrice;
+      const nextPaidAt = nextPaymentStatus === 'paid' ? new Date() : undefined;
+      const normalizedPaymentReference = String(paymentReference || '').trim();
+
       if (!existingEnrollment) {
         await CourseEnrollment.create({
           id: createEntityId(),
@@ -1551,7 +1790,30 @@ async function startServer() {
           completedModuleIds: [],
           progress: 0,
           enrolledAt: new Date(),
+          paymentStatus: nextPaymentStatus,
+          paymentReference: normalizedPaymentReference || undefined,
+          paidAt: nextPaidAt,
+          amountPaid: nextAmountPaid,
         });
+      } else {
+        const shouldBackfillPaymentMetadata =
+          !existingEnrollment.paymentStatus ||
+          existingEnrollment.amountPaid === undefined ||
+          existingEnrollment.amountPaid === null;
+
+        if (shouldBackfillPaymentMetadata) {
+          await CourseEnrollment.updateOne(
+            { id: existingEnrollment.id },
+            {
+              $set: {
+                paymentStatus: nextPaymentStatus,
+                paymentReference: normalizedPaymentReference || undefined,
+                paidAt: nextPaidAt,
+                amountPaid: nextAmountPaid,
+              },
+            }
+          );
+        }
       }
 
       if (course) {
@@ -1607,7 +1869,52 @@ async function startServer() {
         enrollments = enrollments.filter((enrollment) => tutorCourseSet.has(enrollment.courseId));
       }
 
-      res.json(enrollments);
+      const normalizedEnrollments = enrollments.map((enrollment) => enrollment.toObject());
+      const enrollmentCourseIds = Array.from(new Set(normalizedEnrollments.map((enrollment) => enrollment.courseId)));
+      const enrollmentStudentIds = Array.from(new Set(normalizedEnrollments.map((enrollment) => enrollment.studentId)));
+
+      const enrollmentCourses = await Course.find({ id: { $in: enrollmentCourseIds } });
+      const courseById = new Map(enrollmentCourses.map((course) => [course.id, course]));
+
+      const enrollmentStudents = await User.find(
+        { id: { $in: enrollmentStudentIds } },
+        { id: 1, firstName: 1, lastName: 1 }
+      );
+      const studentNameById = new Map(
+        enrollmentStudents.map((student) => [student.id, `${String(student.firstName || '').trim()} ${String(student.lastName || '').trim()}`.trim()])
+      );
+
+      const paymentStatusWhitelist = new Set(['pending', 'paid', 'failed', 'refunded', 'cancelled']);
+
+      const enrichedEnrollments = normalizedEnrollments.map((enrollment: any) => {
+        const course = courseById.get(enrollment.courseId);
+        const resolvedPrice = toFinitePrice(course?.price);
+        const isFreeCourse = resolveCourseIsFree((course as any)?.isFree, resolvedPrice);
+        const fallbackAmountPaid = isFreeCourse ? 0 : resolvedPrice;
+
+        const rawPaymentStatus = String(enrollment.paymentStatus || '').trim().toLowerCase();
+        const paymentStatus = paymentStatusWhitelist.has(rawPaymentStatus)
+          ? rawPaymentStatus
+          : 'paid';
+
+        const normalizedAmountPaid = Number.isFinite(Number(enrollment.amountPaid))
+          ? Math.max(0, Number(enrollment.amountPaid))
+          : fallbackAmountPaid;
+
+        const studentName = studentNameById.get(enrollment.studentId) || 'Student';
+
+        return {
+          ...enrollment,
+          paymentStatus,
+          amountPaid: normalizedAmountPaid,
+          paidAt: enrollment.paidAt || (paymentStatus === 'paid' ? enrollment.enrolledAt : undefined),
+          studentName,
+          courseTitle: course?.title || undefined,
+          tutorId: course?.tutorId || undefined,
+        };
+      });
+
+      res.json(enrichedEnrollments);
     } catch (error) {
       console.error("Get course enrollments error:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -1675,6 +1982,110 @@ async function startServer() {
     } catch (error) {
       console.error("Update enrollment progress error:", error);
       res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get('/api/withdrawals/summary', async (req, res) => {
+    try {
+      const tutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
+      if (!tutorId) {
+        return res.status(400).json({ error: 'tutorId is required.' });
+      }
+
+      const tutor = await Tutor.findOne({ id: tutorId });
+      if (!tutor) {
+        return res.status(404).json({ error: 'Tutor not found.' });
+      }
+
+      const summary = await calculateTutorWithdrawalSummary(tutorId);
+      return res.json(summary);
+    } catch (error) {
+      console.error('Get withdrawal summary error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.get('/api/withdrawals', async (req, res) => {
+    try {
+      const tutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
+      if (!tutorId) {
+        return res.status(400).json({ error: 'tutorId is required.' });
+      }
+
+      const tutor = await Tutor.findOne({ id: tutorId });
+      if (!tutor) {
+        return res.status(404).json({ error: 'Tutor not found.' });
+      }
+
+      const requests = await WithdrawalRequest.find({ tutorId }).sort({ requestedAt: -1, createdAt: -1 });
+      const normalizedRequests = requests.map((request) => {
+        const requestObject: any = request.toObject();
+        const effectiveStatus = resolveEffectiveWithdrawalStatus(requestObject);
+
+        return {
+          ...requestObject,
+          status: effectiveStatus,
+          processedAt:
+            effectiveStatus === 'approved' && !requestObject.processedAt
+              ? requestObject.updatedAt || requestObject.requestedAt
+              : requestObject.processedAt,
+        };
+      });
+
+      return res.json(normalizedRequests);
+    } catch (error) {
+      console.error('Get withdrawals error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.post('/api/withdrawals', async (req, res) => {
+    try {
+      const tutorId = String(req.body?.tutorId || '').trim();
+      const payoutMethodDetails = String(req.body?.payoutMethodDetails || '').trim();
+      const payoutMethodType = normalizeWithdrawalPayoutMethodType(req.body?.payoutMethodType);
+      const amount = toFinitePrice(req.body?.amount);
+
+      if (!tutorId) {
+        return res.status(400).json({ error: 'tutorId is required.' });
+      }
+
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return res.status(400).json({ error: 'Withdrawal amount must be greater than zero.' });
+      }
+
+      if (!payoutMethodDetails || payoutMethodDetails.length < 4) {
+        return res.status(400).json({ error: 'Payout method details are required.' });
+      }
+
+      const tutor = await Tutor.findOne({ id: tutorId });
+      if (!tutor) {
+        return res.status(404).json({ error: 'Tutor not found.' });
+      }
+
+      const summary = await calculateTutorWithdrawalSummary(tutorId);
+      if (amount > summary.availableBalance) {
+        return res.status(400).json({ error: 'Withdrawal amount exceeds available balance.' });
+      }
+
+      const shouldAutoApprove = payoutMethodType === 'paypal';
+
+      const request = await WithdrawalRequest.create({
+        id: createEntityId(),
+        tutorId,
+        amount: roundCurrency(amount),
+        payoutMethodType,
+        payoutMethodDetails,
+        status: shouldAutoApprove ? 'approved' : 'pending',
+        requestedAt: new Date(),
+        processedAt: shouldAutoApprove ? new Date() : undefined,
+        note: shouldAutoApprove ? 'Automatically approved for PayPal payouts.' : undefined,
+      });
+
+      return res.status(201).json(request);
+    } catch (error) {
+      console.error('Create withdrawal request error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -1975,6 +2386,30 @@ async function startServer() {
     }
   });
 
+  const normalizeBookingStatus = (value: unknown): 'pending' | 'confirmed' | 'completed' | 'cancelled' => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'confirmed') return 'confirmed';
+    if (normalized === 'completed') return 'completed';
+    if (normalized === 'cancelled') return 'cancelled';
+    return 'pending';
+  };
+
+  const normalizeBookingPaymentStatus = (value: unknown): 'pending' | 'paid' | 'failed' => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'paid') return 'paid';
+    if (normalized === 'failed') return 'failed';
+    return 'pending';
+  };
+
+  const isValidHttpMeetingLink = (value: string): boolean => {
+    try {
+      const parsed = new URL(value);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  };
+
   // Booking APIs
   app.get("/api/bookings", async (req, res) => {
     try {
@@ -1988,10 +2423,104 @@ async function startServer() {
 
   app.post("/api/bookings", async (req, res) => {
     try {
-      const bookingData = req.body;
+      const bookingData = req.body || {};
+      const studentId = String(bookingData.studentId || '').trim();
+      const studentName = String(bookingData.studentName || '').trim();
+      const tutorId = String(bookingData.tutorId || '').trim();
+      const slotId = String(bookingData.slotId || '').trim();
+      const subject = String(bookingData.subject || '').trim();
+      const date = String(bookingData.date || '').trim();
+      const timeSlot = String(bookingData.timeSlot || '').trim();
+      const paymentStatus = normalizeBookingPaymentStatus(bookingData.paymentStatus);
+      const paymentReference = String(bookingData.paymentReference || '').trim();
+      const paymentFailureReason = String(bookingData.paymentFailureReason || '').trim();
+      const paidAt = String(bookingData.paidAt || '').trim();
+      const meetingLink = String(bookingData.meetingLink || '').trim();
+      const hiddenForTutor = Boolean(bookingData.hiddenForTutor);
+      const hiddenForStudent = Boolean(bookingData.hiddenForStudent);
+      let status = normalizeBookingStatus(bookingData.status);
+
+      if (!studentId || !tutorId || !slotId || !subject || !date) {
+        return res.status(400).json({ error: 'studentId, tutorId, slotId, subject, and date are required.' });
+      }
+
+      if ((status === 'confirmed' || status === 'completed') && paymentStatus !== 'paid') {
+        return res.status(400).json({ error: 'Confirmed bookings require a successful payment.' });
+      }
+
+      if (paymentStatus === 'paid' && !paymentReference) {
+        return res.status(400).json({ error: 'Payment reference is required for paid bookings.' });
+      }
+
+      if (paymentStatus !== 'paid' && status === 'completed') {
+        status = 'pending';
+      }
+
+      if (paymentStatus === 'paid' && status === 'pending') {
+        status = 'confirmed';
+      }
+
+      if (meetingLink && !isValidHttpMeetingLink(meetingLink)) {
+        return res.status(400).json({ error: 'Meeting link must be a valid http/https URL.' });
+      }
+
+      if (meetingLink && paymentStatus === 'paid' && status === 'pending') {
+        status = 'confirmed';
+      }
+
+      const conflictingBooking = await Booking.findOne({
+        tutorId,
+        slotId,
+        date,
+        status: { $in: ['pending', 'confirmed'] },
+        paymentStatus: { $ne: 'failed' },
+      });
+
+      if (conflictingBooking) {
+        return res.status(409).json({ error: 'This time slot is already booked.' });
+      }
+
+      let resolvedStudentName = studentName;
+      if (!resolvedStudentName) {
+        const studentUser = await User.findOne({ id: studentId });
+        if (studentUser) {
+          resolvedStudentName = `${studentUser.firstName || ''} ${studentUser.lastName || ''}`.trim();
+        }
+      }
+
       const id = Math.random().toString(36).substr(2, 9);
-      const booking = new Booking({ ...bookingData, id });
+      const booking = new Booking({
+        ...bookingData,
+        id,
+        studentId,
+        studentName: resolvedStudentName || undefined,
+        tutorId,
+        slotId,
+        subject,
+        date,
+        timeSlot: timeSlot || undefined,
+        meetingLink: meetingLink || undefined,
+        status,
+        paymentStatus,
+        paymentReference: paymentStatus === 'paid' ? paymentReference : undefined,
+        paymentFailureReason: paymentStatus === 'failed' ? (paymentFailureReason || 'Payment failed before confirmation.') : undefined,
+        paidAt: paymentStatus === 'paid' ? (paidAt || new Date().toISOString()) : undefined,
+        hiddenForTutor,
+        hiddenForStudent,
+      });
       await booking.save();
+
+      if (booking.status === 'confirmed' && booking.paymentStatus === 'paid') {
+        try {
+          await Tutor.updateOne(
+            { id: booking.tutorId, "availability.id": booking.slotId },
+            { $set: { "availability.$.isBooked": true } }
+          );
+        } catch (availabilitySyncError) {
+          console.warn('Booking slot sync warning (create):', availabilitySyncError);
+        }
+      }
+
       res.json(booking);
     } catch (error) {
       console.error("Create booking error:", error);
@@ -2001,12 +2530,179 @@ async function startServer() {
 
   app.put("/api/bookings/:id", async (req, res) => {
     try {
+      const existingBooking = await Booking.findOne({ id: req.params.id });
+      if (!existingBooking) {
+        return res.status(404).json({ error: "Booking not found" });
+      }
+
+      const incomingStatus = req.body?.status;
+      const incomingPaymentStatus = req.body?.paymentStatus;
+      let status = incomingStatus !== undefined
+        ? normalizeBookingStatus(incomingStatus)
+        : normalizeBookingStatus(existingBooking.status);
+      const paymentStatus = incomingPaymentStatus !== undefined
+        ? normalizeBookingPaymentStatus(incomingPaymentStatus)
+        : normalizeBookingPaymentStatus(existingBooking.paymentStatus);
+
+      const nextTutorId = String(req.body?.tutorId ?? existingBooking.tutorId).trim();
+      const nextSlotId = String(req.body?.slotId ?? existingBooking.slotId).trim();
+      const nextDate = String(req.body?.date ?? existingBooking.date).trim();
+
+      if (!nextTutorId || !nextSlotId || !nextDate) {
+        return res.status(400).json({ error: 'tutorId, slotId, and date must be valid values.' });
+      }
+
+      const normalizedMeetingLink = req.body?.meetingLink !== undefined
+        ? String(req.body.meetingLink || '').trim()
+        : undefined;
+
+      if (normalizedMeetingLink !== undefined && normalizedMeetingLink && !isValidHttpMeetingLink(normalizedMeetingLink)) {
+        return res.status(400).json({ error: 'Meeting link must be a valid http/https URL.' });
+      }
+
+      if (normalizedMeetingLink !== undefined && normalizedMeetingLink && status === 'pending' && paymentStatus === 'paid') {
+        status = 'confirmed';
+      }
+
+      if ((status === 'confirmed' || status === 'completed') && paymentStatus !== 'paid') {
+        return res.status(400).json({ error: 'Only paid bookings can be confirmed or completed.' });
+      }
+
+      const paymentReference = req.body?.paymentReference !== undefined
+        ? String(req.body.paymentReference || '').trim()
+        : String(existingBooking.paymentReference || '').trim();
+
+      if (paymentStatus === 'paid' && !paymentReference) {
+        return res.status(400).json({ error: 'Payment reference is required for paid bookings.' });
+      }
+
+      const paymentFailureReason = req.body?.paymentFailureReason !== undefined
+        ? String(req.body.paymentFailureReason || '').trim()
+        : String(existingBooking.paymentFailureReason || '').trim();
+
+      const paidAt = req.body?.paidAt !== undefined
+        ? String(req.body.paidAt || '').trim()
+        : String(existingBooking.paidAt || '').trim();
+
+      const scheduleRelevantChange =
+        req.body?.tutorId !== undefined ||
+        req.body?.slotId !== undefined ||
+        req.body?.date !== undefined ||
+        req.body?.status !== undefined ||
+        req.body?.paymentStatus !== undefined;
+
+      if (scheduleRelevantChange && (status === 'pending' || status === 'confirmed') && paymentStatus !== 'failed') {
+        const conflictingBooking = await Booking.findOne({
+          id: { $ne: req.params.id },
+          tutorId: nextTutorId,
+          slotId: nextSlotId,
+          date: nextDate,
+          status: { $in: ['pending', 'confirmed'] },
+          paymentStatus: { $ne: 'failed' },
+        });
+
+        if (conflictingBooking) {
+          return res.status(409).json({ error: 'This time slot is already booked.' });
+        }
+      }
+
+      const updateSet: Record<string, any> = {
+        ...req.body,
+        status,
+        paymentStatus,
+      };
+      const updateUnset: Record<string, ''> = {};
+
+      if (req.body?.tutorId !== undefined) {
+        updateSet.tutorId = nextTutorId;
+      }
+
+      if (req.body?.slotId !== undefined) {
+        updateSet.slotId = nextSlotId;
+      }
+
+      if (req.body?.date !== undefined) {
+        updateSet.date = nextDate;
+      }
+
+      if (req.body?.timeSlot !== undefined) {
+        const normalizedTimeSlot = String(req.body.timeSlot || '').trim();
+        if (normalizedTimeSlot) {
+          updateSet.timeSlot = normalizedTimeSlot;
+        } else {
+          delete updateSet.timeSlot;
+          updateUnset.timeSlot = '';
+        }
+      }
+
+      if (normalizedMeetingLink !== undefined) {
+        if (normalizedMeetingLink) {
+          updateSet.meetingLink = normalizedMeetingLink;
+        } else {
+          delete updateSet.meetingLink;
+          updateUnset.meetingLink = '';
+        }
+      }
+
+      if (req.body?.hiddenForTutor !== undefined) {
+        updateSet.hiddenForTutor = Boolean(req.body.hiddenForTutor);
+      }
+
+      if (req.body?.hiddenForStudent !== undefined) {
+        updateSet.hiddenForStudent = Boolean(req.body.hiddenForStudent);
+      }
+
+      if (paymentStatus === 'paid') {
+        updateSet.paymentReference = paymentReference;
+        updateSet.paidAt = paidAt || new Date().toISOString();
+        updateUnset.paymentFailureReason = '';
+      } else if (paymentStatus === 'failed') {
+        updateSet.paymentFailureReason = paymentFailureReason || 'Payment failed before confirmation.';
+        updateUnset.paymentReference = '';
+        updateUnset.paidAt = '';
+      } else {
+        updateUnset.paymentReference = '';
+        updateUnset.paymentFailureReason = '';
+        updateUnset.paidAt = '';
+      }
+
+      delete updateSet.id;
+
       const booking = await Booking.findOneAndUpdate(
         { id: req.params.id },
-        req.body,
+        Object.keys(updateUnset).length > 0
+          ? { $set: updateSet, $unset: updateUnset }
+          : { $set: updateSet },
         { new: true }
       );
+
       if (booking) {
+        const wasSlotLocked =
+          existingBooking.status === 'confirmed' && normalizeBookingPaymentStatus(existingBooking.paymentStatus) === 'paid';
+        const isSlotLocked =
+          booking.status === 'confirmed' && normalizeBookingPaymentStatus(booking.paymentStatus) === 'paid';
+
+        try {
+          if (
+            wasSlotLocked &&
+            (!isSlotLocked || existingBooking.slotId !== booking.slotId || existingBooking.tutorId !== booking.tutorId)
+          ) {
+            await Tutor.updateOne(
+              { id: existingBooking.tutorId, "availability.id": existingBooking.slotId },
+              { $set: { "availability.$.isBooked": false } }
+            );
+          }
+
+          if (isSlotLocked) {
+            await Tutor.updateOne(
+              { id: booking.tutorId, "availability.id": booking.slotId },
+              { $set: { "availability.$.isBooked": true } }
+            );
+          }
+        } catch (availabilitySyncError) {
+          console.warn('Booking slot sync warning (update):', availabilitySyncError);
+        }
+
         res.json(booking);
       } else {
         res.status(404).json({ error: "Booking not found" });
@@ -2021,6 +2717,16 @@ async function startServer() {
     try {
       const booking = await Booking.findOneAndDelete({ id: req.params.id });
       if (booking) {
+        if (booking.status === 'confirmed' && booking.paymentStatus === 'paid') {
+          try {
+            await Tutor.updateOne(
+              { id: booking.tutorId, "availability.id": booking.slotId },
+              { $set: { "availability.$.isBooked": false } }
+            );
+          } catch (availabilitySyncError) {
+            console.warn('Booking slot sync warning (delete):', availabilitySyncError);
+          }
+        }
         res.json({ message: "Booking deleted successfully" });
       } else {
         res.status(404).json({ error: "Booking not found" });

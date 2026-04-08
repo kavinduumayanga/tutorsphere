@@ -43,7 +43,8 @@ import {
   Binary,
   Calculator,
   Link as LinkIcon,
-  MessageCircle
+  MessageCircle,
+  Wallet
 } from 'lucide-react';
 import Markdown from 'react-markdown';
 import CountUp from 'react-countup';
@@ -51,7 +52,7 @@ import { localService } from './services/localService';
 import { apiService } from './services/apiService';
 import { formatLkr } from './utils/currency';
 
-import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz, TimeSlot, CourseEnrollment } from './types';
+import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz, TimeSlot, CourseEnrollment, WithdrawalRequest, WithdrawalSummary } from './types';
 import { TutorProfilePage } from './components/pages/TutorProfilePage';
 import { GetStartedSection } from "./components/pages/GetStartedSection";
 import { TutorBookingPage } from './components/pages/TutorBookingPage';
@@ -72,7 +73,7 @@ import { ForgotPasswordPage } from './components/pages/ForgotPasswordPage';
 
 const STEM_SUBJECTS: string[] = [...ALLOWED_TUTOR_SUBJECTS];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'about';
+type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'earnings' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'about';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
@@ -89,6 +90,7 @@ const NAV_LABELS: Record<Tab, string> = {
   forgotPassword: 'Forgot Password',
   register: 'Profile',
   dashboard: 'Dashboard',
+  earnings: 'Earnings',
   settings: 'Settings',
   tutorProfile: 'Tutor Profile',
   tutorBooking: 'Book Session',
@@ -118,7 +120,7 @@ const getAllowedTabs = (user: AppUser | null): Tab[] => {
   }
 
   if (user.role === 'tutor') {
-    return ['home', 'dashboard', 'manageAvailability', 'register', 'courses', 'resources', 'quizzes', 'settings', 'about'];
+    return ['home', 'dashboard', 'earnings', 'manageAvailability', 'register', 'courses', 'resources', 'quizzes', 'settings', 'about'];
   }
 
   return ['home', 'about'];
@@ -241,10 +243,37 @@ const createInitialResourceForm = () => ({
 type ResourceInputMode = 'url' | 'file';
 type ResourceUploadStatus = 'idle' | 'uploading' | 'uploaded' | 'error';
 type SessionPersistenceMode = 'session' | 'remember';
+type BookingStatusFilter = 'all' | 'pending' | 'confirmed' | 'completed' | 'cancelled';
+type SessionTimelineFilter = 'all' | 'upcoming' | 'past';
+
+type SessionRatingDraft = {
+  rating: number;
+  feedback: string;
+};
+
+type TutorTransactionStatus = 'paid' | 'pending' | 'refunded_or_cancelled';
+type TutorTransactionPaymentType = 'session booking' | 'course purchase';
+type TutorTransactionFilter = 'all' | 'paid' | 'pending' | 'refunded_or_cancelled';
+type TutorTransactionSortOrder = 'newest' | 'oldest';
+
+type TutorTransactionItem = {
+  id: string;
+  timestamp: number;
+  dateLabel: string;
+  itemName: string;
+  studentName: string;
+  paymentType: TutorTransactionPaymentType;
+  amount: number;
+  platformFee: number;
+  netEarning: number;
+  status: TutorTransactionStatus;
+  paymentReference?: string;
+};
 
 const isUploadedResourcePath = (value: string): boolean => value.trim().startsWith('/uploads/');
 const SESSION_STORAGE_KEY = 'session';
 const REMEMBER_ME_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
+const PLATFORM_FEE_RATE = 0.12;
 
 type PersistedSession = {
   user: AppUser;
@@ -401,6 +430,36 @@ export default function App() {
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [activeBookingActionId, setActiveBookingActionId] = useState<string | null>(null);
+  const [tutorBookingStatusFilter, setTutorBookingStatusFilter] = useState<BookingStatusFilter>('all');
+  const [studentBookingStatusFilter, setStudentBookingStatusFilter] = useState<BookingStatusFilter>('all');
+  const [tutorSessionTimelineFilter, setTutorSessionTimelineFilter] = useState<SessionTimelineFilter>('all');
+  const [studentSessionTimelineFilter, setStudentSessionTimelineFilter] = useState<SessionTimelineFilter>('all');
+  const [sessionRatingDrafts, setSessionRatingDrafts] = useState<Record<string, SessionRatingDraft>>({});
+  const [activeRatingActionBookingId, setActiveRatingActionBookingId] = useState<string | null>(null);
+  const [tutorTransactionFilter, setTutorTransactionFilter] = useState<TutorTransactionFilter>('all');
+  const [tutorTransactionSortOrder, setTutorTransactionSortOrder] = useState<TutorTransactionSortOrder>('newest');
+  const [bookingCancelNotice, setBookingCancelNotice] = useState<string | null>(null);
+  const [withdrawalRequests, setWithdrawalRequests] = useState<WithdrawalRequest[]>([]);
+  const [withdrawalSummary, setWithdrawalSummary] = useState<WithdrawalSummary>({
+    totalEarnings: 0,
+    withdrawnAmount: 0,
+    pendingWithdrawalAmount: 0,
+    availableBalance: 0,
+  });
+  const [isLoadingWithdrawalData, setIsLoadingWithdrawalData] = useState(false);
+  const [isWithdrawalModalOpen, setIsWithdrawalModalOpen] = useState(false);
+  const [isSubmittingWithdrawal, setIsSubmittingWithdrawal] = useState(false);
+  const [withdrawalForm, setWithdrawalForm] = useState({
+    amount: '',
+    payoutMethodType: 'bank_transfer' as WithdrawalRequest['payoutMethodType'],
+    bankAccountHolder: '',
+    bankName: '',
+    bankBranch: '',
+    bankAccountNumber: '',
+    paypalEmail: '',
+  });
+  const [withdrawalNotice, setWithdrawalNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [bankTransferEtaNotice, setBankTransferEtaNotice] = useState<string | null>(null);
 
   // Courses browsing state
   const [courseSearchQuery, setCourseSearchQuery] = useState('');
@@ -481,6 +540,34 @@ export default function App() {
       setAuthMode('login');
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!bookingCancelNotice) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setBookingCancelNotice(null);
+    }, 6500);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [bookingCancelNotice]);
+
+  useEffect(() => {
+    if (!withdrawalNotice) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setWithdrawalNotice(null);
+    }, 5500);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [withdrawalNotice]);
 
   // Cycle through subjects for live session animation
   const DISPLAY_SUBJECTS = ['Science', 'Technology', 'Engineering', 'Mathematics', 'ICT'];
@@ -765,6 +852,40 @@ export default function App() {
   const navTabs = currentUser ? availableTabs.filter(tab => primaryNavTabs.includes(tab)) : primaryNavTabs;
   const canUseChatbot = (!currentUser || isStudent) && activeTab === 'home';
 
+  const resetWithdrawalSummaryState = () => {
+    setWithdrawalSummary({
+      totalEarnings: 0,
+      withdrawnAmount: 0,
+      pendingWithdrawalAmount: 0,
+      availableBalance: 0,
+    });
+  };
+
+  const loadTutorWithdrawalData = async (tutorId: string) => {
+    if (!tutorId) {
+      setWithdrawalRequests([]);
+      resetWithdrawalSummaryState();
+      setIsLoadingWithdrawalData(false);
+      return;
+    }
+
+    setIsLoadingWithdrawalData(true);
+    try {
+      const [requests, summary] = await Promise.all([
+        apiService.getWithdrawalRequests(tutorId),
+        apiService.getWithdrawalSummary(tutorId),
+      ]);
+      setWithdrawalRequests(requests);
+      setWithdrawalSummary(summary);
+    } catch (error) {
+      console.error('Failed to fetch withdrawal data:', error);
+      setWithdrawalRequests([]);
+      resetWithdrawalSummaryState();
+    } finally {
+      setIsLoadingWithdrawalData(false);
+    }
+  };
+
   // Fetch data from API on component mount
   useEffect(() => {
     const fetchTutors = async () => {
@@ -859,6 +980,9 @@ export default function App() {
         setQuestions([]);
         setCourseEnrollments([]);
         setUserCourses([]);
+        setWithdrawalRequests([]);
+        resetWithdrawalSummaryState();
+        setIsLoadingWithdrawalData(false);
         setIsLoadingUserData(false);
         return;
       }
@@ -873,10 +997,18 @@ export default function App() {
 
         // Fetch user's bookings (student booking history vs tutor booking management)
         const userBookings = await apiService.getBookings();
+        const normalizedBookings = userBookings.map((booking) => ({
+          ...booking,
+          paymentStatus:
+            booking.paymentStatus ||
+            (booking.status === 'confirmed' || booking.status === 'completed' ? 'paid' : 'pending'),
+          hiddenForTutor: Boolean(booking.hiddenForTutor),
+          hiddenForStudent: Boolean(booking.hiddenForStudent),
+        }));
         setBookings(
           currentUser.role === 'tutor'
-            ? userBookings.filter((b) => tutorIdentityIds.includes(b.tutorId))
-            : userBookings.filter(b => b.studentId === currentUser.id)
+            ? normalizedBookings.filter((b) => tutorIdentityIds.includes(b.tutorId))
+            : normalizedBookings.filter((b) => b.studentId === currentUser.id)
         );
 
         // Fetch user's reviews
@@ -895,6 +1027,9 @@ export default function App() {
           const enrollments = await apiService.getCourseEnrollments({ studentId: currentUser.id });
           setCourseEnrollments(enrollments);
           setUserCourses(enrollments.map((enrollment) => enrollment.courseId));
+          setWithdrawalRequests([]);
+          resetWithdrawalSummaryState();
+          setIsLoadingWithdrawalData(false);
         } else {
           setQuestions([]);
 
@@ -902,8 +1037,12 @@ export default function App() {
           if (resolvedTutorId) {
             const tutorEnrollments = await apiService.getCourseEnrollments({ tutorId: resolvedTutorId });
             setCourseEnrollments(tutorEnrollments);
+            await loadTutorWithdrawalData(resolvedTutorId);
           } else {
             setCourseEnrollments([]);
+            setWithdrawalRequests([]);
+            resetWithdrawalSummaryState();
+            setIsLoadingWithdrawalData(false);
           }
           setUserCourses([]);
         }
@@ -980,29 +1119,60 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isUserMenuOpen]);
 
-  const handleBookSession = async (tutor: Tutor, slotId: string) => {
+  const handleBookSession = async (
+    tutor: Tutor,
+    bookingIntent: {
+      slotId: string;
+      sessionDate: string;
+      sessionTime: string;
+      paymentStatus: 'paid' | 'failed';
+      paymentReference?: string;
+      paymentFailureReason?: string;
+    }
+  ): Promise<{ ok: boolean; error?: string }> => {
     if (!currentUser) {
       setShowAuthModal(true);
-      return;
+      return { ok: false, error: 'Please sign in to continue.' };
     }
+
     if (currentUser.role !== 'student') {
-      alert('Only student accounts can book sessions.');
-      return;
+      return { ok: false, error: 'Only student accounts can book sessions.' };
     }
+
     try {
+      const isPaid = bookingIntent.paymentStatus === 'paid';
       const booking = await apiService.createBooking({
         studentId: currentUser.id,
+        studentName: `${currentUser.firstName} ${currentUser.lastName}`.trim(),
         tutorId: tutor.id,
-        slotId,
-        status: 'confirmed',
+        slotId: bookingIntent.slotId,
+        status: isPaid ? 'confirmed' : 'pending',
         subject: tutor.subjects?.[0] || 'General',
-        date: new Date().toLocaleDateString(),
-        meetingLink: 'https://meet.google.com/xyz-abc'
+        date: bookingIntent.sessionDate,
+        timeSlot: bookingIntent.sessionTime,
+        meetingLink: undefined,
+        paymentStatus: bookingIntent.paymentStatus,
+        paymentReference: bookingIntent.paymentReference,
+        paymentFailureReason: isPaid ? undefined : bookingIntent.paymentFailureReason,
+        paidAt: isPaid ? new Date().toISOString() : undefined,
+        hiddenForTutor: false,
+        hiddenForStudent: false,
       });
-      setBookings([booking, ...bookings]);
-      alert('Session booked successfully!');
+
+      setBookings((prevBookings) => [
+        {
+          ...booking,
+          paymentStatus:
+            booking.paymentStatus ||
+            (booking.status === 'confirmed' || booking.status === 'completed' ? 'paid' : 'pending'),
+          hiddenForTutor: Boolean(booking.hiddenForTutor),
+          hiddenForStudent: Boolean(booking.hiddenForStudent),
+        },
+        ...prevBookings,
+      ]);
+      return { ok: true };
     } catch (error: any) {
-      alert(error.message || 'Failed to book session.');
+      return { ok: false, error: error?.message || 'Failed to save booking.' };
     }
   };
 
@@ -2248,19 +2418,175 @@ export default function App() {
     }
   };
 
+  const isValidMeetingLink = (value?: string): boolean => {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) {
+      return false;
+    }
+
+    try {
+      const parsed = new URL(trimmed);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  };
+
+  const getBookingStudentName = (booking: Booking): string => {
+    const normalizedName = String(booking.studentName || '').trim();
+    if (normalizedName) {
+      return normalizedName;
+    }
+
+    if (currentUser?.role === 'student' && booking.studentId === currentUser.id) {
+      return `${currentUser.firstName} ${currentUser.lastName}`.trim();
+    }
+
+    return 'Student';
+  };
+
+  const getBookingTutorName = (booking: Booking): string => {
+    const matchedTutor = tutors.find((tutor) => tutor.id === booking.tutorId);
+    if (matchedTutor) {
+      return getTutorDisplayName(matchedTutor);
+    }
+
+    return 'Tutor';
+  };
+
+  const parseBookingStartDate = (booking: Booking): Date | null => {
+    const rawDate = String(booking.date || '').trim();
+    if (!rawDate) {
+      return null;
+    }
+
+    const baseDate = new Date(rawDate);
+    if (Number.isNaN(baseDate.getTime())) {
+      return null;
+    }
+
+    const rawStartToken = String(booking.timeSlot || '')
+      .split('-')[0]
+      ?.trim();
+
+    if (!rawStartToken) {
+      baseDate.setHours(0, 0, 0, 0);
+      return baseDate;
+    }
+
+    const twelveHourMatch = rawStartToken.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (twelveHourMatch) {
+      let hours = Number(twelveHourMatch[1]);
+      const minutes = Number(twelveHourMatch[2]);
+      const meridiem = twelveHourMatch[3].toUpperCase();
+
+      if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+        return baseDate;
+      }
+
+      if (hours === 12) {
+        hours = meridiem === 'AM' ? 0 : 12;
+      } else if (meridiem === 'PM') {
+        hours += 12;
+      }
+
+      baseDate.setHours(hours, minutes, 0, 0);
+      return baseDate;
+    }
+
+    const twentyFourHourMatch = rawStartToken.match(/^(\d{1,2}):(\d{2})$/);
+    if (twentyFourHourMatch) {
+      const hours = Number(twentyFourHourMatch[1]);
+      const minutes = Number(twentyFourHourMatch[2]);
+      if (Number.isFinite(hours) && Number.isFinite(minutes)) {
+        baseDate.setHours(hours, minutes, 0, 0);
+      }
+      return baseDate;
+    }
+
+    baseDate.setHours(0, 0, 0, 0);
+    return baseDate;
+  };
+
+  const getBookingSortTimestamp = (booking: Booking): number => {
+    const sessionDate = parseBookingStartDate(booking);
+    if (sessionDate) {
+      return sessionDate.getTime();
+    }
+
+    const paidTimestamp = Date.parse(String(booking.paidAt || ''));
+    if (!Number.isNaN(paidTimestamp)) {
+      return paidTimestamp;
+    }
+
+    return 0;
+  };
+
+  const isPastSession = (booking: Booking): boolean => {
+    if (booking.status === 'completed') {
+      return true;
+    }
+
+    const sessionDate = parseBookingStartDate(booking);
+    if (!sessionDate) {
+      return false;
+    }
+
+    return sessionDate.getTime() < Date.now();
+  };
+
+  const canStudentManageBeforeStart = (booking: Booking): boolean => {
+    const sessionDate = parseBookingStartDate(booking);
+    if (!sessionDate) {
+      return false;
+    }
+
+    return sessionDate.getTime() > Date.now();
+  };
+
+  const formatTimeLabelFrom24Hour = (value: string): string | null => {
+    const match = String(value || '').trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) {
+      return null;
+    }
+
+    const hoursRaw = Number(match[1]);
+    const minutesRaw = Number(match[2]);
+    if (!Number.isFinite(hoursRaw) || !Number.isFinite(minutesRaw) || hoursRaw < 0 || hoursRaw > 23 || minutesRaw < 0 || minutesRaw > 59) {
+      return null;
+    }
+
+    const meridiem = hoursRaw >= 12 ? 'PM' : 'AM';
+    const hour12 = hoursRaw % 12 || 12;
+    return `${hour12}:${String(minutesRaw).padStart(2, '0')} ${meridiem}`;
+  };
+
+  const toIsoDateString = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   const handleTutorBookingStatusChange = async (booking: Booking, status: Booking['status']) => {
     if (booking.status === status) {
       return;
     }
 
-    if (status === 'confirmed' && !booking.meetingLink) {
-      const meetingLink = prompt('Add meeting link before confirming this booking:')?.trim();
-      if (!meetingLink) {
-        alert('Meeting link is required to confirm the booking.');
+    const paymentStatus = booking.paymentStatus || 'pending';
+    if ((status === 'confirmed' || status === 'completed') && paymentStatus !== 'paid') {
+      alert('Only paid bookings can be confirmed or marked as completed.');
+      return;
+    }
+
+    if (status === 'confirmed' && !isValidMeetingLink(booking.meetingLink)) {
+      const meetingLink = prompt('Add a valid meeting link before confirming this booking (must start with http/https):')?.trim();
+      if (!meetingLink || !isValidMeetingLink(meetingLink)) {
+        alert('A valid meeting link is required to confirm the booking.');
         return;
       }
 
-      await updateTutorBooking(booking.id, { status, meetingLink });
+      await updateTutorBooking(booking.id, { status, meetingLink: meetingLink.trim() });
       return;
     }
 
@@ -2268,12 +2594,24 @@ export default function App() {
   };
 
   const handleTutorMeetingLinkUpdate = async (booking: Booking) => {
+    const paymentStatus = booking.paymentStatus || 'pending';
+    if (paymentStatus !== 'paid') {
+      alert('Meeting links can be added only after successful payment.');
+      return;
+    }
+
     const nextMeetingLink = prompt('Enter meeting link:', booking.meetingLink || '')?.trim();
     if (!nextMeetingLink || nextMeetingLink === booking.meetingLink) {
       return;
     }
 
-    await updateTutorBooking(booking.id, { meetingLink: nextMeetingLink });
+    if (!isValidMeetingLink(nextMeetingLink)) {
+      alert('Please enter a valid meeting URL that starts with http:// or https://');
+      return;
+    }
+
+    const nextStatus: Booking['status'] = booking.status === 'pending' ? 'confirmed' : booking.status;
+    await updateTutorBooking(booking.id, { meetingLink: nextMeetingLink, status: nextStatus });
   };
 
   const handleStudentCancelBooking = async (booking: Booking) => {
@@ -2288,6 +2626,11 @@ export default function App() {
     }
 
     if (booking.status === 'cancelled' || booking.status === 'completed') {
+      return;
+    }
+
+    if (!canStudentManageBeforeStart(booking)) {
+      alert('You can only cancel sessions before the session start time.');
       return;
     }
 
@@ -2306,12 +2649,294 @@ export default function App() {
             : entry
         )
       );
-      alert('Booking cancelled successfully.');
+
+      if ((booking.paymentStatus || 'pending') === 'paid') {
+        setBookingCancelNotice('Booking cancelled successfully. Your payment will be returned to your bank account within 3-5 business days.');
+      } else {
+        setBookingCancelNotice('Booking cancelled successfully.');
+      }
     } catch (error) {
       console.error('Failed to cancel booking:', error);
       alert('Failed to cancel booking. Please try again.');
     } finally {
       setActiveBookingActionId(null);
+    }
+  };
+
+  const handleTutorRescheduleBooking = async (booking: Booking) => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      alert('Only tutor accounts can reschedule sessions.');
+      return;
+    }
+
+    if (booking.status === 'cancelled' || booking.status === 'completed') {
+      alert('Only active sessions can be rescheduled.');
+      return;
+    }
+
+    if (!canStudentManageBeforeStart(booking)) {
+      alert('You can only reschedule sessions before the session start time.');
+      return;
+    }
+
+    const currentStartDate = parseBookingStartDate(booking) || new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const dateInput = prompt('Enter new session date (YYYY-MM-DD):', toIsoDateString(currentStartDate))?.trim();
+    if (!dateInput) {
+      return;
+    }
+
+    const nextDateCandidate = new Date(`${dateInput}T00:00:00`);
+    if (Number.isNaN(nextDateCandidate.getTime())) {
+      alert('Invalid date format. Use YYYY-MM-DD.');
+      return;
+    }
+
+    const defaultTime = String(booking.timeSlot || '').split('-')[0]?.trim();
+    const defaultTime24Match = defaultTime?.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    let defaultTime24 = '09:00';
+    if (defaultTime24Match) {
+      let hours = Number(defaultTime24Match[1]);
+      const minutes = Number(defaultTime24Match[2]);
+      const meridiem = defaultTime24Match[3].toUpperCase();
+      if (hours === 12) {
+        hours = meridiem === 'AM' ? 0 : 12;
+      } else if (meridiem === 'PM') {
+        hours += 12;
+      }
+      defaultTime24 = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+    }
+
+    const timeInput = prompt('Enter new start time (HH:MM in 24-hour format):', defaultTime24)?.trim();
+    if (!timeInput) {
+      return;
+    }
+
+    const startLabel = formatTimeLabelFrom24Hour(timeInput);
+    if (!startLabel) {
+      alert('Invalid time format. Use HH:MM in 24-hour format.');
+      return;
+    }
+
+    const [hoursPart, minutesPart] = timeInput.split(':');
+    const nextSessionStart = new Date(nextDateCandidate);
+    nextSessionStart.setHours(Number(hoursPart), Number(minutesPart), 0, 0);
+
+    if (nextSessionStart.getTime() <= Date.now()) {
+      alert('Rescheduled session must be in the future.');
+      return;
+    }
+
+    const nextSessionEnd = new Date(nextSessionStart.getTime() + 60 * 60 * 1000);
+    const nextEndLabel = formatTimeLabelFrom24Hour(`${String(nextSessionEnd.getHours()).padStart(2, '0')}:${String(nextSessionEnd.getMinutes()).padStart(2, '0')}`) || startLabel;
+    const formattedDate = nextSessionStart.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+
+    await updateTutorBooking(booking.id, {
+      date: formattedDate,
+      timeSlot: `${startLabel} - ${nextEndLabel}`,
+    });
+
+    alert('Session rescheduled successfully.');
+  };
+
+  const handleHideBookingForCurrentUser = async (booking: Booking) => {
+    if (!currentUser) {
+      return;
+    }
+
+    const shouldHide = confirm('Remove this session card from your dashboard view?');
+    if (!shouldHide) {
+      return;
+    }
+
+    const updates: Partial<Booking> =
+      currentUser.role === 'tutor'
+        ? { hiddenForTutor: true }
+        : { hiddenForStudent: true };
+
+    setActiveBookingActionId(booking.id);
+    try {
+      const updatedBooking = await apiService.updateBooking(booking.id, updates);
+      setBookings((prevBookings) =>
+        prevBookings.map((entry) =>
+          entry.id === booking.id
+            ? { ...entry, ...updatedBooking }
+            : entry
+        )
+      );
+    } catch (error) {
+      console.error('Failed to hide booking from dashboard:', error);
+      alert('Failed to update session visibility. Please try again.');
+    } finally {
+      setActiveBookingActionId(null);
+    }
+  };
+
+  const handleSubmitSessionRating = async (booking: Booking) => {
+    if (!currentUser || currentUser.role !== 'student') {
+      return;
+    }
+
+    const draft = sessionRatingDrafts[booking.id] || { rating: 0, feedback: '' };
+    if (!draft.rating || draft.rating < 1 || draft.rating > 5) {
+      alert('Please select a rating between 1 and 5 stars.');
+      return;
+    }
+
+    setActiveRatingActionBookingId(booking.id);
+    try {
+      const review = await apiService.createReview({
+        tutorId: booking.tutorId,
+        studentId: currentUser.id,
+        studentName: `${currentUser.firstName} ${currentUser.lastName}`.trim(),
+        sessionId: booking.id,
+        rating: draft.rating,
+        comment: draft.feedback.trim(),
+        date: new Date().toISOString().split('T')[0],
+      });
+
+      setReviews((prev) => [review, ...prev.filter((entry) => entry.id !== review.id)]);
+      setAllReviews((prev) => [review, ...prev.filter((entry) => entry.id !== review.id)]);
+      setSessionRatingDrafts((prev) => {
+        const next = { ...prev };
+        delete next[booking.id];
+        return next;
+      });
+    } catch (error) {
+      console.error('Failed to submit session rating:', error);
+      alert('Failed to submit rating. Please try again.');
+    } finally {
+      setActiveRatingActionBookingId(null);
+    }
+  };
+
+  const resetWithdrawalForm = () => {
+    setWithdrawalForm({
+      amount: '',
+      payoutMethodType: 'bank_transfer',
+      bankAccountHolder: '',
+      bankName: '',
+      bankBranch: '',
+      bankAccountNumber: '',
+      paypalEmail: '',
+    });
+  };
+
+  const handleOpenWithdrawalModal = () => {
+    setWithdrawalNotice(null);
+    resetWithdrawalForm();
+    setIsWithdrawalModalOpen(true);
+  };
+
+  const handleCloseWithdrawalModal = () => {
+    if (isSubmittingWithdrawal) {
+      return;
+    }
+
+    setIsWithdrawalModalOpen(false);
+    resetWithdrawalForm();
+  };
+
+  const handleSubmitWithdrawalRequest = async (event: React.FormEvent) => {
+    event.preventDefault();
+
+    if (!currentUser || currentUser.role !== 'tutor') {
+      setWithdrawalNotice({ type: 'error', message: 'Only tutor accounts can request withdrawals.' });
+      return;
+    }
+
+    const resolvedTutorId = currentTutor?.id || currentUser.id;
+    const amount = Number(withdrawalForm.amount);
+    const selectedPayoutMethodType = withdrawalForm.payoutMethodType;
+
+    let payoutDetails = '';
+
+    if (selectedPayoutMethodType === 'bank_transfer') {
+      const bankAccountHolder = withdrawalForm.bankAccountHolder.trim();
+      const bankName = withdrawalForm.bankName.trim();
+      const bankBranch = withdrawalForm.bankBranch.trim();
+      const bankAccountNumber = withdrawalForm.bankAccountNumber.trim();
+
+      if (!bankAccountHolder || !bankName || !bankBranch || !bankAccountNumber) {
+        setWithdrawalNotice({
+          type: 'error',
+          message: 'Please fill all bank transfer fields before submitting.',
+        });
+        return;
+      }
+
+      payoutDetails = `Account Holder: ${bankAccountHolder}; Bank Name: ${bankName}; Branch: ${bankBranch}; Account Number: ${bankAccountNumber}`;
+    } else if (selectedPayoutMethodType === 'paypal') {
+      const paypalEmail = withdrawalForm.paypalEmail.trim();
+      const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+      if (!paypalEmail || !emailPattern.test(paypalEmail)) {
+        setWithdrawalNotice({
+          type: 'error',
+          message: 'Please provide a valid PayPal email address.',
+        });
+        return;
+      }
+
+      payoutDetails = `PayPal Email: ${paypalEmail}`;
+    }
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setWithdrawalNotice({ type: 'error', message: 'Please enter a valid withdrawal amount.' });
+      return;
+    }
+
+    if (amount > withdrawalAvailableBalance + 0.0001) {
+      setWithdrawalNotice({
+        type: 'error',
+        message: `Withdrawal amount cannot exceed available balance (${formatLkr(withdrawalAvailableBalance)}).`,
+      });
+      return;
+    }
+
+    if (!payoutDetails) {
+      setWithdrawalNotice({ type: 'error', message: 'Please provide payout method details.' });
+      return;
+    }
+
+    setIsSubmittingWithdrawal(true);
+    try {
+      const createdRequest = await apiService.createWithdrawalRequest({
+        tutorId: resolvedTutorId,
+        amount,
+        payoutMethodType: selectedPayoutMethodType,
+        payoutMethodDetails: payoutDetails,
+      });
+
+      await loadTutorWithdrawalData(resolvedTutorId);
+      setIsWithdrawalModalOpen(false);
+      resetWithdrawalForm();
+
+      if (selectedPayoutMethodType === 'bank_transfer') {
+        setWithdrawalNotice({
+          type: 'success',
+          message: 'Bank transfer withdrawal request submitted successfully.',
+        });
+        setBankTransferEtaNotice('Your bank transfer withdrawal is pending. Money will be sent to your bank account within 24 hours.');
+      } else {
+        setWithdrawalNotice({
+          type: 'success',
+          message:
+            createdRequest.status === 'approved'
+              ? 'PayPal withdrawal approved instantly.'
+              : 'PayPal withdrawal submitted successfully.',
+        });
+      }
+    } catch (error) {
+      console.error('Failed to create withdrawal request:', error);
+      const message = error instanceof Error ? error.message : 'Failed to submit withdrawal request.';
+      setWithdrawalNotice({ type: 'error', message });
+    } finally {
+      setIsSubmittingWithdrawal(false);
     }
   };
 
@@ -2321,6 +2946,438 @@ export default function App() {
     if (status === 'pending') return 'text-amber-700 bg-amber-50 border-amber-200';
     return 'text-rose-700 bg-rose-50 border-rose-200';
   };
+
+  const getBookingPaymentStatus = (booking: Booking): 'pending' | 'paid' | 'failed' => {
+    return booking.paymentStatus || 'pending';
+  };
+
+  const getBookingPaymentPillClassName = (paymentStatus: 'pending' | 'paid' | 'failed') => {
+    if (paymentStatus === 'paid') return 'text-emerald-700 bg-emerald-50 border-emerald-200';
+    if (paymentStatus === 'failed') return 'text-rose-700 bg-rose-50 border-rose-200';
+    return 'text-amber-700 bg-amber-50 border-amber-200';
+  };
+
+  const getTransactionStatusPillClassName = (status: TutorTransactionStatus) => {
+    if (status === 'paid') return 'text-emerald-700 bg-emerald-50 border-emerald-200';
+    if (status === 'refunded_or_cancelled') return 'text-rose-700 bg-rose-50 border-rose-200';
+    return 'text-amber-700 bg-amber-50 border-amber-200';
+  };
+
+  const getTransactionStatusLabel = (status: TutorTransactionStatus) => {
+    if (status === 'paid') return 'Paid';
+    if (status === 'refunded_or_cancelled') return 'Refunded/Cancelled';
+    return 'Pending';
+  };
+
+  const getWithdrawalStatusPillClassName = (status: WithdrawalRequest['status']) => {
+    if (status === 'paid') return 'text-emerald-700 bg-emerald-50 border-emerald-200';
+    if (status === 'approved') return 'text-sky-700 bg-sky-50 border-sky-200';
+    if (status === 'rejected') return 'text-rose-700 bg-rose-50 border-rose-200';
+    return 'text-amber-700 bg-amber-50 border-amber-200';
+  };
+
+  const getWithdrawalStatusLabel = (status: WithdrawalRequest['status']) => {
+    if (status === 'paid') return 'Paid';
+    if (status === 'approved') return 'Approved';
+    if (status === 'rejected') return 'Rejected';
+    return 'Pending';
+  };
+
+  const getWithdrawalPayoutMethodLabel = (method: WithdrawalRequest['payoutMethodType']) => {
+    if (method === 'bank_transfer') return 'Bank Transfer';
+    return 'PayPal';
+  };
+
+  const filterAndSortBookings = (
+    source: Booking[],
+    statusFilter: BookingStatusFilter,
+    timelineFilter: SessionTimelineFilter,
+    hiddenFlag: 'hiddenForTutor' | 'hiddenForStudent'
+  ): Booking[] => {
+    return source
+      .filter((booking) => !Boolean((booking as any)[hiddenFlag]))
+      .filter((booking) => (statusFilter === 'all' ? true : booking.status === statusFilter))
+      .filter((booking) => {
+        if (timelineFilter === 'all') {
+          return true;
+        }
+
+        const past = isPastSession(booking);
+        return timelineFilter === 'past' ? past : !past;
+      })
+      .sort((a, b) => getBookingSortTimestamp(b) - getBookingSortTimestamp(a));
+  };
+
+  const tutorDashboardBookings = useMemo(
+    () => bookings.filter((booking) => !booking.hiddenForTutor),
+    [bookings]
+  );
+
+  const studentDashboardBookings = useMemo(
+    () => bookings.filter((booking) => !booking.hiddenForStudent),
+    [bookings]
+  );
+
+  const filteredTutorBookings = useMemo(
+    () => filterAndSortBookings(bookings, tutorBookingStatusFilter, tutorSessionTimelineFilter, 'hiddenForTutor'),
+    [bookings, tutorBookingStatusFilter, tutorSessionTimelineFilter]
+  );
+
+  const filteredStudentBookings = useMemo(
+    () => filterAndSortBookings(bookings, studentBookingStatusFilter, studentSessionTimelineFilter, 'hiddenForStudent'),
+    [bookings, studentBookingStatusFilter, studentSessionTimelineFilter]
+  );
+
+  const studentReviewsBySessionId = useMemo(() => {
+    const map = new Map<string, Review>();
+    for (const review of reviews) {
+      const sessionId = String(review.sessionId || '').trim();
+      if (!sessionId) {
+        continue;
+      }
+      map.set(sessionId, review);
+    }
+    return map;
+  }, [reviews]);
+
+  const roundMoney = (value: number): number => Math.round(value * 100) / 100;
+
+  const studentNameById = useMemo(() => {
+    const map = new Map<string, string>();
+
+    for (const booking of bookings) {
+      const studentId = String(booking.studentId || '').trim();
+      const studentName = String(booking.studentName || '').trim();
+      if (studentId && studentName) {
+        map.set(studentId, studentName);
+      }
+    }
+
+    for (const review of allReviews) {
+      const studentId = String(review.studentId || '').trim();
+      const studentName = String(review.studentName || '').trim();
+      if (studentId && studentName && !map.has(studentId)) {
+        map.set(studentId, studentName);
+      }
+    }
+
+    return map;
+  }, [bookings, allReviews]);
+
+  const tutorCourseById = useMemo(
+    () => new Map(myTutorCourses.map((course) => [course.id, course])),
+    [myTutorCourses]
+  );
+
+  const resolveCourseEnrollmentAmount = (enrollment: CourseEnrollment): number => {
+    const explicitAmount = Number(enrollment.amountPaid);
+    if (Number.isFinite(explicitAmount) && explicitAmount > 0) {
+      return explicitAmount;
+    }
+
+    const course = tutorCourseById.get(enrollment.courseId);
+    if (!course) {
+      return 0;
+    }
+
+    return course.isFree || course.price <= 0 ? 0 : Number(course.price || 0);
+  };
+
+  const resolveCourseEnrollmentStatus = (enrollment: CourseEnrollment): TutorTransactionStatus => {
+    const rawStatus = String(enrollment.paymentStatus || '').trim().toLowerCase();
+    if (rawStatus === 'refunded' || rawStatus === 'cancelled' || rawStatus === 'failed') {
+      return 'refunded_or_cancelled';
+    }
+
+    if (rawStatus === 'paid') {
+      return 'paid';
+    }
+
+    if (rawStatus === 'pending') {
+      return 'pending';
+    }
+
+    const fallbackAmount = resolveCourseEnrollmentAmount(enrollment);
+    return fallbackAmount > 0 ? 'paid' : 'pending';
+  };
+
+  const tutorSessionEarningAmount = Number(currentTutor?.pricePerHour || 0);
+
+  const tutorCompletedPaidBookings = useMemo(
+    () => bookings.filter((booking) => booking.status === 'completed' && (booking.paymentStatus || 'pending') === 'paid'),
+    [bookings]
+  );
+
+  const tutorSessionTransactions = useMemo<TutorTransactionItem[]>(() => {
+    return bookings.map((booking) => {
+      const paymentStatus = getBookingPaymentStatus(booking);
+      let status: TutorTransactionStatus;
+
+      if (booking.status === 'cancelled' || paymentStatus === 'failed') {
+        status = 'refunded_or_cancelled';
+      } else if (paymentStatus === 'paid' && booking.status === 'completed') {
+        status = 'paid';
+      } else {
+        status = 'pending';
+      }
+
+      const amount = Math.max(0, tutorSessionEarningAmount);
+      const platformFee = status === 'paid' ? roundMoney(amount * PLATFORM_FEE_RATE) : 0;
+      const netEarning = status === 'paid' ? roundMoney(amount - platformFee) : 0;
+
+      const paidTimestamp = Date.parse(String(booking.paidAt || ''));
+      const timestamp = Number.isNaN(paidTimestamp) ? getBookingSortTimestamp(booking) : paidTimestamp;
+      const date = new Date(timestamp);
+      const dateLabel = Number.isNaN(date.getTime())
+        ? 'N/A'
+        : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+      return {
+        id: `session-${booking.id}`,
+        timestamp,
+        dateLabel,
+        itemName: `${booking.subject} Session`,
+        studentName: getBookingStudentName(booking),
+        paymentType: 'session booking',
+        amount,
+        platformFee,
+        netEarning,
+        status,
+        paymentReference: booking.paymentReference,
+      };
+    });
+  }, [bookings, tutorSessionEarningAmount]);
+
+  const tutorCourseTransactions = useMemo<TutorTransactionItem[]>(() => {
+    const enrollmentTransactions: TutorTransactionItem[] = [];
+
+    for (const enrollment of courseEnrollments) {
+      const course = tutorCourseById.get(enrollment.courseId);
+      if (!course) {
+        continue;
+      }
+
+      const amount = resolveCourseEnrollmentAmount(enrollment);
+      if (amount <= 0) {
+        continue;
+      }
+
+      const status = resolveCourseEnrollmentStatus(enrollment);
+      const platformFee = status === 'paid' ? roundMoney(amount * PLATFORM_FEE_RATE) : 0;
+      const netEarning = status === 'paid' ? roundMoney(amount - platformFee) : 0;
+
+      const paidTimestamp = Date.parse(String(enrollment.paidAt || enrollment.enrolledAt || ''));
+      const timestamp = Number.isNaN(paidTimestamp) ? Date.now() : paidTimestamp;
+      const date = new Date(timestamp);
+      const dateLabel = Number.isNaN(date.getTime())
+        ? 'N/A'
+        : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+      const fallbackStudentName = studentNameById.get(enrollment.studentId);
+      const studentName = String(enrollment.studentName || '').trim() || fallbackStudentName || 'Student';
+
+      enrollmentTransactions.push({
+        id: `course-${enrollment.id}`,
+        timestamp,
+        dateLabel,
+        itemName: String(enrollment.courseTitle || '').trim() || course.title || 'Course Purchase',
+        studentName,
+        paymentType: 'course purchase',
+        amount,
+        platformFee,
+        netEarning,
+        status,
+        paymentReference: enrollment.paymentReference,
+      });
+    }
+
+    return enrollmentTransactions;
+  }, [courseEnrollments, tutorCourseById, studentNameById]);
+
+  const tutorTransactions = useMemo<TutorTransactionItem[]>(
+    () => [...tutorSessionTransactions, ...tutorCourseTransactions],
+    [tutorSessionTransactions, tutorCourseTransactions]
+  );
+
+  const filteredTutorTransactions = useMemo(() => {
+    const statusFiltered = tutorTransactions.filter((transaction) =>
+      tutorTransactionFilter === 'all' ? true : transaction.status === tutorTransactionFilter
+    );
+
+    const sorted = [...statusFiltered].sort((a, b) =>
+      tutorTransactionSortOrder === 'newest' ? b.timestamp - a.timestamp : a.timestamp - b.timestamp
+    );
+
+    return sorted;
+  }, [tutorTransactions, tutorTransactionFilter, tutorTransactionSortOrder]);
+
+  const tutorPaidTransactions = useMemo(
+    () => tutorTransactions.filter((transaction) => transaction.status === 'paid'),
+    [tutorTransactions]
+  );
+
+  const tutorPaidSessionTransactions = useMemo(
+    () => tutorPaidTransactions.filter((transaction) => transaction.paymentType === 'session booking'),
+    [tutorPaidTransactions]
+  );
+
+  const tutorPaidCourseTransactions = useMemo(
+    () => tutorPaidTransactions.filter((transaction) => transaction.paymentType === 'course purchase'),
+    [tutorPaidTransactions]
+  );
+
+  const tutorSessionNetEarnings = useMemo(
+    () => roundMoney(tutorPaidSessionTransactions.reduce((sum, transaction) => sum + transaction.netEarning, 0)),
+    [tutorPaidSessionTransactions]
+  );
+
+  const tutorCourseNetEarnings = useMemo(
+    () => roundMoney(tutorPaidCourseTransactions.reduce((sum, transaction) => sum + transaction.netEarning, 0)),
+    [tutorPaidCourseTransactions]
+  );
+
+  const tutorTotalEarnings = useMemo(
+    () => roundMoney(tutorSessionNetEarnings + tutorCourseNetEarnings),
+    [tutorSessionNetEarnings, tutorCourseNetEarnings]
+  );
+
+  const withdrawalTotalEarnings = useMemo(() => {
+    const serverTotal = Number(withdrawalSummary.totalEarnings || 0);
+    if (serverTotal > 0 || tutorTotalEarnings <= 0) {
+      return roundMoney(serverTotal);
+    }
+    return roundMoney(tutorTotalEarnings);
+  }, [withdrawalSummary.totalEarnings, tutorTotalEarnings]);
+
+  const withdrawalWithdrawnAmount = useMemo(
+    () => roundMoney(Math.max(0, Number(withdrawalSummary.withdrawnAmount || 0))),
+    [withdrawalSummary.withdrawnAmount]
+  );
+
+  const withdrawalPendingAmount = useMemo(
+    () => roundMoney(Math.max(0, Number(withdrawalSummary.pendingWithdrawalAmount || 0))),
+    [withdrawalSummary.pendingWithdrawalAmount]
+  );
+
+  const withdrawalAvailableBalance = useMemo(() => {
+    const serverAvailable = Number(withdrawalSummary.availableBalance || 0);
+    const hasServerSummary =
+      Number(withdrawalSummary.totalEarnings || 0) > 0 ||
+      Number(withdrawalSummary.withdrawnAmount || 0) > 0 ||
+      Number(withdrawalSummary.pendingWithdrawalAmount || 0) > 0 ||
+      withdrawalRequests.length > 0;
+
+    if (hasServerSummary) {
+      return roundMoney(Math.max(0, serverAvailable));
+    }
+
+    return roundMoney(Math.max(0, withdrawalTotalEarnings - withdrawalWithdrawnAmount - withdrawalPendingAmount));
+  }, [
+    withdrawalSummary.availableBalance,
+    withdrawalSummary.totalEarnings,
+    withdrawalSummary.withdrawnAmount,
+    withdrawalSummary.pendingWithdrawalAmount,
+    withdrawalRequests.length,
+    withdrawalTotalEarnings,
+    withdrawalWithdrawnAmount,
+    withdrawalPendingAmount,
+  ]);
+
+  const tutorPaidCourseEnrollmentsCount = tutorPaidCourseTransactions.length;
+
+  const tutorMonthlyEarningsSummary = useMemo(() => {
+    const monthMap = new Map<
+      string,
+      {
+        month: string;
+        monthKey: string;
+        timestamp: number;
+        totalNetEarnings: number;
+        sessionNetEarnings: number;
+        courseNetEarnings: number;
+        completedSessions: number;
+        paidCourseEnrollments: number;
+      }
+    >();
+
+    for (const transaction of tutorPaidTransactions) {
+      const date = new Date(transaction.timestamp);
+      if (Number.isNaN(date.getTime())) {
+        continue;
+      }
+
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      const monthLabel = date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+      const existing =
+        monthMap.get(monthKey) ||
+        {
+          month: monthLabel,
+          monthKey,
+          timestamp: date.getTime(),
+          totalNetEarnings: 0,
+          sessionNetEarnings: 0,
+          courseNetEarnings: 0,
+          completedSessions: 0,
+          paidCourseEnrollments: 0,
+        };
+
+      existing.totalNetEarnings += transaction.netEarning;
+      if (transaction.paymentType === 'session booking') {
+        existing.sessionNetEarnings += transaction.netEarning;
+        existing.completedSessions += 1;
+      } else {
+        existing.courseNetEarnings += transaction.netEarning;
+        existing.paidCourseEnrollments += 1;
+      }
+
+      existing.timestamp = Math.max(existing.timestamp, date.getTime());
+      monthMap.set(monthKey, existing);
+    }
+
+    return Array.from(monthMap.values())
+      .map((entry) => ({
+        ...entry,
+        totalNetEarnings: roundMoney(entry.totalNetEarnings),
+        sessionNetEarnings: roundMoney(entry.sessionNetEarnings),
+        courseNetEarnings: roundMoney(entry.courseNetEarnings),
+      }))
+      .sort((a, b) => a.timestamp - b.timestamp);
+  }, [tutorPaidTransactions]);
+
+  const tutorRecentMonthlyEarnings = useMemo(
+    () => tutorMonthlyEarningsSummary.slice(-6),
+    [tutorMonthlyEarningsSummary]
+  );
+
+  const tutorHasSessionEarningMethod = tutorDashboardBookings.length > 0 || tutorPaidSessionTransactions.length > 0;
+  const tutorHasCourseEarningMethod = myTutorCourses.length > 0 || tutorPaidCourseEnrollmentsCount > 0;
+
+  const tutorSessionSharePercent = useMemo(() => {
+    if (tutorTotalEarnings <= 0) {
+      return tutorHasSessionEarningMethod && !tutorHasCourseEarningMethod ? 100 : 0;
+    }
+    return Math.round((tutorSessionNetEarnings / tutorTotalEarnings) * 100);
+  }, [tutorTotalEarnings, tutorSessionNetEarnings, tutorHasSessionEarningMethod, tutorHasCourseEarningMethod]);
+
+  const tutorCourseSharePercent = useMemo(() => {
+    if (tutorTotalEarnings <= 0) {
+      return tutorHasCourseEarningMethod && !tutorHasSessionEarningMethod ? 100 : 0;
+    }
+    return Math.round((tutorCourseNetEarnings / tutorTotalEarnings) * 100);
+  }, [tutorTotalEarnings, tutorCourseNetEarnings, tutorHasCourseEarningMethod, tutorHasSessionEarningMethod]);
+
+  const tutorPerformanceFeedback = useMemo(
+    () => reviews.filter((review) => String(review.comment || '').trim().length > 0).slice(0, 8),
+    [reviews]
+  );
+
+  const tutorAverageRatingFromReviews = useMemo(() => {
+    if (reviews.length === 0) {
+      return currentTutor?.rating || 0;
+    }
+
+    return Number((reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length).toFixed(1));
+  }, [reviews, currentTutor?.rating]);
 
   const getCourseAccessLabel = (course: Course) =>
     course.isFree || course.price <= 0 ? 'Free' : formatLkr(course.price);
@@ -3220,11 +4277,13 @@ export default function App() {
                   setActiveTab('tutorProfile');
                 }
               }}
-              onConfirmBooking={(slotId) => {
+              onConfirmBooking={async (bookingIntent) => {
                 const tutor = tutors.find(t => t.id === bookingTutorId);
-                if (tutor) {
-                  handleBookSession(tutor, slotId);
+                if (!tutor) {
+                  return { ok: false, error: 'Tutor details are unavailable right now.' };
                 }
+
+                return handleBookSession(tutor, bookingIntent);
               }}
             />
           )}
@@ -3742,6 +4801,7 @@ export default function App() {
                   </div>
                 )}
               </div>
+
             </div>
           )}
 
@@ -4120,41 +5180,48 @@ export default function App() {
 
           {activeTab === 'dashboard' && currentUser && isTutor && (
             <div className="space-y-8">
-              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                <h2 className="text-3xl font-black text-slate-900 tracking-tight">Tutor Workspace</h2>
-                <p className="text-slate-500 mt-2">Manage your profile, subjects, schedule, bookings, feedback, and learning content.</p>
-                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-6">
-                  <button onClick={() => setActiveTab('register')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
-                    <p className="font-black text-slate-900">Profile & Qualifications</p>
-                    <p className="text-xs text-slate-500 mt-1">Update tutor profile details</p>
+              <div className="rounded-[2.5rem] border border-slate-800 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 p-8 shadow-xl shadow-slate-900/20">
+                <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6">
+                  <div>
+                    <h2 className="text-3xl font-black text-white tracking-tight">Tutor Workspace</h2>
+                    <p className="text-slate-300 mt-2 max-w-2xl">
+                      Manage your sessions, profile, content, and performance from a clean SaaS-style dashboard.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setActiveTab('earnings')}
+                    className="px-5 py-3 rounded-2xl bg-white text-slate-900 font-black text-sm uppercase tracking-widest hover:bg-slate-100 transition-all"
+                  >
+                    Open Tutor Revenue Dashboard
                   </button>
-                  <button onClick={() => setActiveTab('settings')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
-                    <p className="font-black text-slate-900">Settings</p>
-                    <p className="text-xs text-slate-500 mt-1">Manage subjects and profile settings</p>
+                </div>
+
+                <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-7">
+                  <button onClick={() => setActiveTab('register')} className="text-left p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all">
+                    <p className="font-black text-white">Profile & Qualifications</p>
+                    <p className="text-xs text-slate-300 mt-1">Update professional tutor profile</p>
+                  </button>
+                  <button onClick={() => setActiveTab('settings')} className="text-left p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all">
+                    <p className="font-black text-white">Settings</p>
+                    <p className="text-xs text-slate-300 mt-1">Account and teaching preferences</p>
                   </button>
                   {(profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') && (
-                    <button onClick={() => setActiveTab('manageAvailability')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
-                      <p className="font-black text-slate-900">Manage Availability</p>
-                      <p className="text-xs text-slate-500 mt-1">Configure your tutoring schedule</p>
+                    <button onClick={() => setActiveTab('manageAvailability')} className="text-left p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all">
+                      <p className="font-black text-white">Manage Availability</p>
+                      <p className="text-xs text-slate-300 mt-1">Control session calendar slots</p>
                     </button>
                   )}
-                  <button onClick={() => setActiveTab('courses')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
-                    <p className="font-black text-slate-900">Course Management</p>
-                    <p className="text-xs text-slate-500 mt-1">Upload and manage tutor courses</p>
+                  <button onClick={() => setActiveTab('courses')} className="text-left p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all">
+                    <p className="font-black text-white">Course Management</p>
+                    <p className="text-xs text-slate-300 mt-1">Publish and manage courses</p>
                   </button>
-                  <button onClick={() => setActiveTab('resources')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
-                    <p className="font-black text-slate-900">Resource Management</p>
-                    <p className="text-xs text-slate-500 mt-1">Upload and manage free resources</p>
+                  <button onClick={() => setActiveTab('resources')} className="text-left p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all">
+                    <p className="font-black text-white">Resource Management</p>
+                    <p className="text-xs text-slate-300 mt-1">Upload and manage learning assets</p>
                   </button>
-                  <button
-                    onClick={async () => {
-                      const feedback = await localService.getSessionFeedback('Tutoring Performance', 'Advanced');
-                      alert(`Performance Summary:\n\n${feedback}`);
-                    }}
-                    className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all"
-                  >
-                    <p className="font-black text-slate-900">Feedback & Performance</p>
-                    <p className="text-xs text-slate-500 mt-1">View learner sentiment and AI insights</p>
+                  <button onClick={() => setActiveTab('earnings')} className="text-left p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all">
+                    <p className="font-black text-white">Tutor Revenue Dashboard</p>
+                    <p className="text-xs text-slate-300 mt-1">Open earnings analytics and payment history page</p>
                   </button>
                   <button
                     onClick={() => {
@@ -4166,89 +5233,758 @@ export default function App() {
                       navigator.clipboard.writeText(latestLink);
                       alert('Latest session link copied to clipboard.');
                     }}
-                    className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all"
+                    className="text-left p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all"
                   >
-                    <p className="font-black text-slate-900">Session Link Sharing</p>
-                    <p className="text-xs text-slate-500 mt-1">Copy and share current meeting links</p>
+                    <p className="font-black text-white">Session Link Sharing</p>
+                    <p className="text-xs text-slate-300 mt-1">Copy and share latest meeting link</p>
                   </button>
                 </div>
               </div>
 
-              <div className="grid lg:grid-cols-2 gap-6">
-                <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                  <h3 className="font-black text-xl text-slate-900 mb-4">Booking Management & History</h3>
-                  {bookings.length === 0 ? (
-                    <p className="text-slate-500">No student bookings yet.</p>
-                  ) : (
-                    <div className="space-y-3">
-                      {bookings.slice(0, 8).map((booking) => {
-                        const isLoading = activeBookingActionId === booking.id;
-                        const canConfirm = booking.status === 'pending';
-                        const canComplete = booking.status === 'confirmed';
-                        const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed';
+              <div className="grid sm:grid-cols-2 xl:grid-cols-6 gap-4">
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Total Sessions</p>
+                  <p className="text-2xl font-black text-slate-900 mt-2">{tutorDashboardBookings.length}</p>
+                </div>
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Upcoming Sessions</p>
+                  <p className="text-2xl font-black text-indigo-700 mt-2">
+                    {tutorDashboardBookings.filter((booking) => booking.status !== 'cancelled' && !isPastSession(booking)).length}
+                  </p>
+                </div>
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Pending Actions</p>
+                  <p className="text-2xl font-black text-amber-600 mt-2">
+                    {tutorDashboardBookings.filter((booking) => booking.status === 'pending').length}
+                  </p>
+                </div>
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Active Courses</p>
+                  <p className="text-2xl font-black text-cyan-700 mt-2">{myTutorCourses.length}</p>
+                </div>
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Resources</p>
+                  <p className="text-2xl font-black text-emerald-700 mt-2">{myTutorResources.length}</p>
+                </div>
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Average Rating</p>
+                  <p className="text-2xl font-black text-slate-900 mt-2">{tutorAverageRatingFromReviews.toFixed(1)}</p>
+                </div>
+              </div>
 
-                        return (
-                          <div key={booking.id} className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-3">
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <p className="font-bold text-slate-900">{booking.subject}</p>
-                                <p className="text-xs text-slate-500">{booking.date} • Student ID: {booking.studentId}</p>
-                              </div>
+              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-5">
+                  <div>
+                    <h3 className="font-black text-2xl text-slate-900">Tutor Revenue Dashboard</h3>
+                    <p className="text-slate-500 mt-2 max-w-2xl">
+                      Earnings, payment history, source breakdown, and revenue charts are available on a dedicated page.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setActiveTab('earnings')}
+                    className="px-6 py-3 rounded-2xl bg-indigo-600 text-white font-black text-sm uppercase tracking-widest hover:bg-indigo-700 transition-all"
+                  >
+                    Go to Tutor Revenue Dashboard
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+                  <h3 className="font-black text-2xl text-slate-900">Session Management</h3>
+                  <div className="flex flex-wrap items-end gap-3">
+                    <span className="text-xs font-black uppercase tracking-widest px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
+                      {filteredTutorBookings.length} sessions shown
+                    </span>
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Status</span>
+                      <select
+                        value={tutorBookingStatusFilter}
+                        onChange={(event) => setTutorBookingStatusFilter(event.target.value as BookingStatusFilter)}
+                        className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
+                      >
+                        <option value="all">All Statuses</option>
+                        <option value="pending">Pending</option>
+                        <option value="confirmed">Confirmed</option>
+                        <option value="completed">Completed</option>
+                        <option value="cancelled">Cancelled</option>
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Time</span>
+                      <select
+                        value={tutorSessionTimelineFilter}
+                        onChange={(event) => setTutorSessionTimelineFilter(event.target.value as SessionTimelineFilter)}
+                        className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
+                      >
+                        <option value="all">Any Time</option>
+                        <option value="upcoming">Upcoming</option>
+                        <option value="past">Past</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+
+                {filteredTutorBookings.length === 0 ? (
+                  <div className="text-center py-16 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
+                    <Clock className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                    <p className="font-bold text-slate-500">No sessions match your filters.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {filteredTutorBookings.map((booking) => {
+                      const isLoading = activeBookingActionId === booking.id;
+                      const paymentStatus = getBookingPaymentStatus(booking);
+                      const isPaidBooking = paymentStatus === 'paid';
+                      const canComplete = booking.status === 'confirmed' && isPaidBooking;
+                      const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed';
+                      const canReschedule = booking.status !== 'cancelled' && booking.status !== 'completed' && canStudentManageBeforeStart(booking);
+                      const canSubmitMeetingLink = isPaidBooking && booking.status !== 'cancelled' && booking.status !== 'completed';
+                      const canStartMeeting = booking.status === 'confirmed' && isPaidBooking && isValidMeetingLink(booking.meetingLink);
+
+                      return (
+                        <div key={booking.id} className="relative rounded-3xl border border-slate-200 bg-slate-50 p-5 pr-14 space-y-4">
+                          <button
+                            type="button"
+                            disabled={isLoading}
+                            onClick={() => handleHideBookingForCurrentUser(booking)}
+                            className="absolute right-4 top-4 h-8 w-8 rounded-full border border-slate-300 bg-white text-slate-500 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-60 flex items-center justify-center"
+                            aria-label="Hide session card"
+                            title="Hide session card"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                            <div>
+                              <p className="text-lg font-black text-slate-900">{booking.subject} Session</p>
+                              <p className="text-xs font-semibold text-slate-500 mt-1">Session ID: {booking.id}</p>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getBookingPaymentPillClassName(paymentStatus)}`}>
+                                payment {paymentStatus}
+                              </span>
                               <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getBookingStatusPillClassName(booking.status)}`}>
                                 {booking.status}
                               </span>
                             </div>
+                          </div>
+
+                          <div className="grid sm:grid-cols-2 xl:grid-cols-5 gap-3 text-sm">
+                            <div className="bg-white rounded-xl border border-slate-200 p-3">
+                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Date</p>
+                              <p className="font-bold text-slate-800 mt-1">{booking.date}</p>
+                            </div>
+                            <div className="bg-white rounded-xl border border-slate-200 p-3">
+                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Time Slot</p>
+                              <p className="font-bold text-slate-800 mt-1">{booking.timeSlot || 'Not specified'}</p>
+                            </div>
+                            <div className="bg-white rounded-xl border border-slate-200 p-3 xl:col-span-2">
+                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Student</p>
+                              <p className="font-bold text-slate-800 mt-1">{getBookingStudentName(booking)}</p>
+                            </div>
+                            <div className="bg-white rounded-xl border border-slate-200 p-3">
+                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Meeting Link</p>
+                              <p className={`font-bold mt-1 ${isValidMeetingLink(booking.meetingLink) ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                {isValidMeetingLink(booking.meetingLink) ? 'Ready' : 'Not submitted'}
+                              </p>
+                            </div>
+                          </div>
+
+                          {paymentStatus === 'failed' && (
+                            <p className="text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+                              {booking.paymentFailureReason || 'Payment failed for this booking. Ask the student to retry checkout.'}
+                            </p>
+                          )}
+
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              disabled={isLoading || !canComplete}
+                              onClick={() => handleTutorBookingStatusChange(booking, 'completed')}
+                              className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                            >
+                              Mark as Completed
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isLoading || !canCancel}
+                              onClick={() => handleTutorBookingStatusChange(booking, 'cancelled')}
+                              className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
+                            >
+                              Cancel Booking
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isLoading || !canReschedule}
+                              onClick={() => handleTutorRescheduleBooking(booking)}
+                              className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
+                            >
+                              Reschedule
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isLoading || !canSubmitMeetingLink}
+                              onClick={() => handleTutorMeetingLinkUpdate(booking)}
+                              className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+                            >
+                              Submit Meeting Link
+                            </button>
+                            {canStartMeeting ? (
+                              <a
+                                href={booking.meetingLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-indigo-600 text-white hover:bg-indigo-700"
+                              >
+                                Start Meeting
+                              </a>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled
+                                className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-slate-300 text-slate-600"
+                              >
+                                Start Meeting
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="font-black text-2xl text-slate-900">Performance</h3>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('earnings')}
+                    className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-indigo-50 text-indigo-700 border border-indigo-100 hover:bg-indigo-100"
+                  >
+                    Open Tutor Revenue Dashboard
+                  </button>
+                </div>
+
+                <div className="grid sm:grid-cols-3 gap-4 mb-6">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Sessions Completed</p>
+                    <p className="text-2xl font-black text-emerald-600 mt-2">{tutorCompletedPaidBookings.length}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Average Rating</p>
+                    <p className="text-2xl font-black text-indigo-600 mt-2">{tutorAverageRatingFromReviews.toFixed(1)}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Written Feedback</p>
+                    <p className="text-2xl font-black text-slate-900 mt-2">{tutorPerformanceFeedback.length}</p>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <h4 className="text-sm font-black uppercase tracking-widest text-slate-500">Recent Feedback</h4>
+                  {tutorPerformanceFeedback.length === 0 ? (
+                    <p className="text-sm font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+                      No written feedback yet.
+                    </p>
+                  ) : (
+                    tutorPerformanceFeedback.map((review) => (
+                      <div key={review.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <p className="text-sm font-black text-slate-900">{review.studentName}</p>
+                          <span className="text-xs font-black text-amber-600">{review.rating.toFixed(1)} / 5</span>
+                        </div>
+                        <p className="text-sm text-slate-600">{review.comment}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'dashboard' && currentUser && isStudent && (
+            <div className="space-y-8">
+              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-5">
+                  <div className="flex items-center gap-4">
+                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center font-black text-xl shadow-lg shadow-indigo-200">
+                      {(currentUser.firstName + ' ' + currentUser.lastName).charAt(0)}
+                    </div>
+                    <div>
+                      <h2 className="text-3xl font-black text-slate-900 tracking-tight">Student Dashboard</h2>
+                      <p className="text-slate-500 font-medium">Focus on sessions, courses, certificates, and learning progress.</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setActiveTab('courses')}
+                    className="px-6 py-3 rounded-2xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+                  >
+                    Browse Courses
+                  </button>
+                </div>
+
+                <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4 mt-8">
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
+                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Booked Sessions</p>
+                    <p className="text-3xl font-black text-slate-900 mt-2">{studentDashboardBookings.length}</p>
+                  </div>
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
+                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Ready to Join</p>
+                    <p className="text-3xl font-black text-emerald-600 mt-2">
+                      {studentDashboardBookings.filter((booking) => isValidMeetingLink(booking.meetingLink)).length}
+                    </p>
+                  </div>
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
+                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Enrolled Courses</p>
+                    <p className="text-3xl font-black text-indigo-600 mt-2">{studentEnrolledCourses.length}</p>
+                  </div>
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
+                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Avg. Progress</p>
+                    <p className="text-3xl font-black text-violet-600 mt-2">
+                      {studentEnrolledCourses.length
+                        ? Math.round(
+                          studentEnrolledCourses.reduce((sum, entry) => sum + entry.enrollment.progress, 0) /
+                            studentEnrolledCourses.length
+                        )
+                        : 0}
+                      %
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid xl:grid-cols-5 gap-8">
+                <div className="xl:col-span-3 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-black text-2xl text-slate-900">My Sessions</h3>
+                      <Calendar className="w-5 h-5 text-slate-400" />
+                    </div>
+                    <div className="flex flex-wrap items-end gap-3">
+                      <span className="text-xs font-black uppercase tracking-widest px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
+                        {filteredStudentBookings.length} sessions shown
+                      </span>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Status</span>
+                        <select
+                          value={studentBookingStatusFilter}
+                          onChange={(event) => setStudentBookingStatusFilter(event.target.value as BookingStatusFilter)}
+                          className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
+                        >
+                          <option value="all">All Statuses</option>
+                          <option value="pending">Pending</option>
+                          <option value="confirmed">Confirmed</option>
+                          <option value="completed">Completed</option>
+                          <option value="cancelled">Cancelled</option>
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Time</span>
+                        <select
+                          value={studentSessionTimelineFilter}
+                          onChange={(event) => setStudentSessionTimelineFilter(event.target.value as SessionTimelineFilter)}
+                          className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
+                        >
+                          <option value="all">Any Time</option>
+                          <option value="upcoming">Upcoming</option>
+                          <option value="past">Past</option>
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+
+                  {filteredStudentBookings.length === 0 ? (
+                    <div className="text-center py-16 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
+                      <Clock className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                      <p className="font-bold text-slate-500">No sessions match your filters.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {filteredStudentBookings.map((booking) => {
+                        const isLoading = activeBookingActionId === booking.id;
+                        const isSubmittingRating = activeRatingActionBookingId === booking.id;
+                        const paymentStatus = getBookingPaymentStatus(booking);
+                        const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed' && canStudentManageBeforeStart(booking);
+                        const hasValidMeetingLink = isValidMeetingLink(booking.meetingLink);
+                        const canJoinMeeting = hasValidMeetingLink && booking.status !== 'cancelled';
+                        const existingReview = studentReviewsBySessionId.get(booking.id);
+                        const ratingDraft = sessionRatingDrafts[booking.id] || { rating: 0, feedback: '' };
+
+                        return (
+                          <div key={booking.id} className="relative rounded-3xl border border-slate-200 bg-slate-50 p-5 pr-14 space-y-4">
+                            <button
+                              type="button"
+                              disabled={isLoading}
+                              onClick={() => handleHideBookingForCurrentUser(booking)}
+                              className="absolute right-4 top-4 h-8 w-8 rounded-full border border-slate-300 bg-white text-slate-500 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-60 flex items-center justify-center"
+                              aria-label="Hide session card"
+                              title="Hide session card"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                            <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+                              <div>
+                                <p className="text-lg font-black text-slate-900">{booking.subject} Session</p>
+                                <p className="text-xs text-slate-500 font-semibold mt-1">
+                                  {booking.date}
+                                  {booking.timeSlot ? ` • ${booking.timeSlot}` : ''}
+                                  {' • Tutor: '}
+                                  {getBookingTutorName(booking)}
+                                </p>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getBookingPaymentPillClassName(paymentStatus)}`}>
+                                  payment {paymentStatus}
+                                </span>
+                                <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getBookingStatusPillClassName(booking.status)}`}>
+                                  {booking.status}
+                                </span>
+                              </div>
+                            </div>
+
+                            {!hasValidMeetingLink && paymentStatus === 'paid' && booking.status === 'confirmed' && (
+                              <p className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                                Waiting for tutor to submit a valid meeting link.
+                              </p>
+                            )}
+
+                            {!canStudentManageBeforeStart(booking) && booking.status !== 'cancelled' && booking.status !== 'completed' && (
+                              <p className="text-[11px] font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg px-3 py-2">
+                                Session has started or passed. Cancel action is now disabled.
+                              </p>
+                            )}
 
                             <div className="flex flex-wrap gap-2">
-                              {canConfirm && (
-                                <button
-                                  type="button"
-                                  disabled={isLoading}
-                                  onClick={() => handleTutorBookingStatusChange(booking, 'confirmed')}
-                                  className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
-                                >
-                                  Confirm
-                                </button>
-                              )}
-                              {canComplete && (
-                                <button
-                                  type="button"
-                                  disabled={isLoading}
-                                  onClick={() => handleTutorBookingStatusChange(booking, 'completed')}
-                                  className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
-                                >
-                                  Mark Completed
-                                </button>
-                              )}
                               {canCancel && (
                                 <button
                                   type="button"
                                   disabled={isLoading}
-                                  onClick={() => handleTutorBookingStatusChange(booking, 'cancelled')}
-                                  className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
+                                  onClick={() => handleStudentCancelBooking(booking)}
+                                  className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
                                 >
                                   Cancel Booking
                                 </button>
                               )}
-                              <button
-                                type="button"
-                                disabled={isLoading}
-                                onClick={() => handleTutorMeetingLinkUpdate(booking)}
-                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold border border-slate-200 text-slate-700 bg-white hover:bg-slate-100 disabled:opacity-60"
-                              >
-                                {booking.meetingLink ? 'Edit Link' : 'Add Link'}
-                              </button>
-                              {booking.meetingLink && (
+
+                              {canJoinMeeting ? (
                                 <a
                                   href={booking.meetingLink}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="px-3 py-1.5 rounded-lg text-[11px] font-bold border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+                                  className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-indigo-600 text-white hover:bg-indigo-700"
                                 >
-                                  Open Link
+                                  Join Meeting
                                 </a>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled
+                                  className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-slate-300 text-slate-600"
+                                >
+                                  Join Meeting
+                                </button>
                               )}
                             </div>
+
+                            {booking.status === 'completed' && (
+                              <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+                                <p className="text-xs font-black uppercase tracking-widest text-slate-500">Rate This Session</p>
+
+                                {existingReview ? (
+                                  <div className="space-y-2">
+                                    <div className="flex items-center gap-1">
+                                      {[1, 2, 3, 4, 5].map((value) => (
+                                        <Star
+                                          key={value}
+                                          className={`w-4 h-4 ${value <= existingReview.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-300'}`}
+                                        />
+                                      ))}
+                                    </div>
+                                    <p className="text-sm text-slate-700">{existingReview.comment || 'Rating submitted.'}</p>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <div className="flex items-center gap-1">
+                                      {[1, 2, 3, 4, 5].map((value) => (
+                                        <button
+                                          key={value}
+                                          type="button"
+                                          onClick={() =>
+                                            setSessionRatingDrafts((prev) => ({
+                                              ...prev,
+                                              [booking.id]: {
+                                                rating: value,
+                                                feedback: prev[booking.id]?.feedback || '',
+                                              },
+                                            }))
+                                          }
+                                          className="p-0.5"
+                                        >
+                                          <Star
+                                            className={`w-5 h-5 ${value <= ratingDraft.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-300 hover:text-amber-300'}`}
+                                          />
+                                        </button>
+                                      ))}
+                                    </div>
+                                    <textarea
+                                      value={ratingDraft.feedback}
+                                      onChange={(event) =>
+                                        setSessionRatingDrafts((prev) => ({
+                                          ...prev,
+                                          [booking.id]: {
+                                            rating: prev[booking.id]?.rating || 0,
+                                            feedback: event.target.value,
+                                          },
+                                        }))
+                                      }
+                                      placeholder="Optional feedback"
+                                      rows={3}
+                                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={isSubmittingRating || ratingDraft.rating < 1}
+                                      onClick={() => handleSubmitSessionRating(booking)}
+                                      className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
+                                    >
+                                      {isSubmittingRating ? 'Submitting...' : 'Submit Rating'}
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="xl:col-span-2 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="font-black text-2xl text-slate-900">Course Progress</h3>
+                    <BookOpen className="w-5 h-5 text-slate-400" />
+                  </div>
+
+                  {studentEnrolledCourses.length === 0 ? (
+                    <div className="text-center py-12 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
+                      <BookMarked className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                      <p className="font-bold text-slate-500">No enrolled courses yet.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {studentEnrolledCourses.map(({ course, enrollment }) => {
+                        const isCompleted = enrollment.progress >= 100;
+
+                        return (
+                          <div key={course.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                            <p className="font-bold text-slate-900 line-clamp-2">{course.title}</p>
+                            <p className="text-xs font-semibold text-slate-500 mt-1">{course.subject}</p>
+
+                            <div className="mt-3">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">Progress</span>
+                                <span className="text-sm font-black text-indigo-600">{enrollment.progress}%</span>
+                              </div>
+                              <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full ${isCompleted ? 'bg-emerald-500' : 'bg-indigo-600'}`}
+                                  style={{ width: `${enrollment.progress}%` }}
+                                />
+                              </div>
+                            </div>
+
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenCourseLearning(course.id)}
+                                className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-indigo-600 text-white hover:bg-indigo-700"
+                              >
+                                Continue Learning
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!isCompleted) {
+                                    alert('Complete all modules to unlock your certificate.');
+                                    return;
+                                  }
+                                  handleShowCertificateModal(enrollment, course.title);
+                                }}
+                                disabled={!isCompleted}
+                                className={`px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest ${
+                                  isCompleted
+                                    ? 'bg-amber-500 text-white hover:bg-amber-600'
+                                    : 'bg-slate-300 text-slate-600 cursor-not-allowed'
+                                }`}
+                              >
+                                View Certificate
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'earnings' && currentUser && isTutor && (
+            <div className="space-y-8">
+              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                  <div>
+                    <h2 className="text-3xl font-black text-slate-900 tracking-tight">Tutor Revenue Dashboard</h2>
+                    <p className="text-slate-500 mt-1">
+                      Production-style payout analytics from paid/completed sessions and paid course purchases.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 mt-3">
+                      {tutorHasSessionEarningMethod && (
+                        <span className="text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full border border-indigo-200 bg-indigo-50 text-indigo-700">
+                          Session Revenue
+                        </span>
+                      )}
+                      {tutorHasCourseEarningMethod && (
+                        <span className="text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full border border-cyan-200 bg-cyan-50 text-cyan-700">
+                          Course Revenue
+                        </span>
+                      )}
+                      <span className="text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700">
+                        Net after {(PLATFORM_FEE_RATE * 100).toFixed(0)}% platform fee
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleOpenWithdrawalModal}
+                      disabled={isLoadingWithdrawalData || withdrawalAvailableBalance <= 0}
+                      className={`px-5 py-2.5 rounded-xl font-bold transition-colors ${
+                        isLoadingWithdrawalData || withdrawalAvailableBalance <= 0
+                          ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                          : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                      }`}
+                    >
+                      Withdraw Money
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('dashboard')}
+                      className="px-5 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 font-bold hover:bg-slate-50"
+                    >
+                      Back to Dashboard
+                    </button>
+                  </div>
+                </div>
+
+                {withdrawalNotice && (
+                  <div
+                    className={`mt-5 rounded-2xl border px-4 py-3 ${
+                      withdrawalNotice.type === 'success'
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                        : 'border-rose-200 bg-rose-50 text-rose-700'
+                    }`}
+                  >
+                    <p className="text-sm font-bold">{withdrawalNotice.message}</p>
+                  </div>
+                )}
+
+                <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4 mt-6">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Total Net Earnings</p>
+                    <p className="text-2xl font-black text-slate-900 mt-2">{formatLkr(withdrawalTotalEarnings)}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Withdrawn Amount</p>
+                    <p className="text-2xl font-black text-emerald-700 mt-2">{formatLkr(withdrawalWithdrawnAmount)}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Pending Withdrawals</p>
+                    <p className="text-2xl font-black text-amber-700 mt-2">{formatLkr(withdrawalPendingAmount)}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Available Balance</p>
+                    <p className="text-2xl font-black text-emerald-600 mt-2">{formatLkr(withdrawalAvailableBalance)}</p>
+                  </div>
+                </div>
+
+                {isLoadingWithdrawalData && (
+                  <p className="text-xs font-semibold text-slate-500 mt-3">Loading withdrawal balances...</p>
+                )}
+
+                <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4 mt-4">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Session Earnings</p>
+                    <p className="text-2xl font-black text-indigo-700 mt-2">{formatLkr(tutorSessionNetEarnings)}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Course Earnings</p>
+                    <p className="text-2xl font-black text-cyan-700 mt-2">{formatLkr(tutorCourseNetEarnings)}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Completed Sessions</p>
+                    <p className="text-2xl font-black text-emerald-600 mt-2">{tutorCompletedPaidBookings.length}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Paid Course Sales</p>
+                    <p className="text-2xl font-black text-cyan-600 mt-2">{tutorPaidCourseEnrollmentsCount}</p>
+                  </div>
+                </div>
+
+                {!tutorHasSessionEarningMethod && !tutorHasCourseEarningMethod && (
+                  <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5">
+                    <p className="text-sm font-bold text-slate-700">No earning method is active yet.</p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Start with session bookings, paid course sales, or both. Analytics will appear automatically.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid xl:grid-cols-3 gap-8">
+                <div className="xl:col-span-2 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                  <h3 className="font-black text-2xl text-slate-900 mb-5">Monthly Earnings Trend</h3>
+                  {tutorRecentMonthlyEarnings.length === 0 ? (
+                    <div className="text-center py-14 bg-slate-50 border border-dashed border-slate-200 rounded-3xl">
+                      <Clock className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                      <p className="font-bold text-slate-500">No paid earnings available yet.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4 items-end">
+                      {tutorRecentMonthlyEarnings.map((entry) => {
+                        const chartMax = Math.max(
+                          ...tutorRecentMonthlyEarnings.map((point) => point.totalNetEarnings),
+                          1
+                        );
+                        const sessionHeight = Math.max(10, Math.round((entry.sessionNetEarnings / chartMax) * 150));
+                        const courseHeight = Math.max(10, Math.round((entry.courseNetEarnings / chartMax) * 150));
+
+                        return (
+                          <div key={entry.monthKey} className="flex flex-col items-center gap-2">
+                            <div className="h-44 w-full rounded-xl border border-slate-100 bg-slate-50 p-2 flex items-end justify-center">
+                              <div className="flex items-end gap-1">
+                                {tutorHasSessionEarningMethod && (
+                                  <div
+                                    className="w-4 rounded-md bg-indigo-500"
+                                    style={{ height: `${sessionHeight}px` }}
+                                    title={`Session earnings: ${formatLkr(entry.sessionNetEarnings)}`}
+                                  />
+                                )}
+                                {tutorHasCourseEarningMethod && (
+                                  <div
+                                    className="w-4 rounded-md bg-cyan-500"
+                                    style={{ height: `${courseHeight}px` }}
+                                    title={`Course earnings: ${formatLkr(entry.courseNetEarnings)}`}
+                                  />
+                                )}
+                              </div>
+                            </div>
+                            <p className="text-[11px] font-black text-slate-700">{entry.month}</p>
+                            <p className="text-[10px] font-semibold text-slate-500">{formatLkr(entry.totalNetEarnings)}</p>
                           </div>
                         );
                       })}
@@ -4257,536 +5993,299 @@ export default function App() {
                 </div>
 
                 <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                  <h3 className="font-black text-xl text-slate-900 mb-4">Tutor Performance Snapshot</h3>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                      <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Sessions</p>
-                      <p className="text-3xl font-black text-slate-900">{bookings.length}</p>
-                    </div>
-                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                      <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Reviews</p>
-                      <p className="text-3xl font-black text-slate-900">{currentTutorReviewCount}</p>
-                    </div>
+                  <h3 className="font-black text-2xl text-slate-900 mb-5">Earnings Source Breakdown</h3>
+                  <div className="space-y-4">
+                    {tutorHasSessionEarningMethod && (
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <p className="text-xs font-black uppercase tracking-widest text-slate-500">Sessions</p>
+                          <p className="text-xs font-black text-indigo-700">{tutorSessionSharePercent}%</p>
+                        </div>
+                        <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden">
+                          <div className="h-full rounded-full bg-indigo-500" style={{ width: `${tutorSessionSharePercent}%` }} />
+                        </div>
+                        <p className="text-xs text-slate-500 mt-1">
+                          {formatLkr(tutorSessionNetEarnings)} • {tutorCompletedPaidBookings.length} completed sessions
+                        </p>
+                      </div>
+                    )}
+
+                    {tutorHasCourseEarningMethod && (
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <p className="text-xs font-black uppercase tracking-widest text-slate-500">Course Sales</p>
+                          <p className="text-xs font-black text-cyan-700">{tutorCourseSharePercent}%</p>
+                        </div>
+                        <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden">
+                          <div className="h-full rounded-full bg-cyan-500" style={{ width: `${tutorCourseSharePercent}%` }} />
+                        </div>
+                        <p className="text-xs text-slate-500 mt-1">
+                          {formatLkr(tutorCourseNetEarnings)} • {tutorPaidCourseEnrollmentsCount} paid enrollments
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-6 pt-4 border-t border-slate-100">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Paid Transactions</p>
+                    <p className="text-2xl font-black text-slate-900 mt-1">{tutorPaidTransactions.length}</p>
                   </div>
                 </div>
               </div>
-            </div>
-          )}
 
-          {activeTab === 'dashboard' && currentUser && isStudent && (
-            <div className="space-y-10">
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 bg-white p-8 rounded-[3rem] border border-slate-100 shadow-sm">
-                <div className="flex items-center gap-6">
-                  <div className="relative">
-                    {currentUserAvatarUrl ? (
-                      <img
-                        src={currentUserAvatarUrl}
-                        alt={`${currentUser.firstName} ${currentUser.lastName}`}
-                        className="w-20 h-20 rounded-3xl object-cover shadow-xl shadow-indigo-200"
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                          (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'flex';
-                        }}
-                      />
-                    ) : null}
-                    <div className="w-20 h-20 bg-gradient-to-tr from-indigo-600 to-violet-600 rounded-3xl flex items-center justify-center text-white text-3xl font-black shadow-xl shadow-indigo-200" style={{ display: currentUserAvatarUrl ? 'none' : 'flex' }}>
-                      {(currentUser.firstName + ' ' + currentUser.lastName).charAt(0)}
+              <div className="grid xl:grid-cols-2 gap-8">
+                <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                  <h3 className="font-black text-2xl text-slate-900 mb-5">Earnings by Sessions</h3>
+                  {!tutorHasSessionEarningMethod ? (
+                    <p className="text-sm font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+                      Session-based earning method is not active for this tutor profile.
+                    </p>
+                  ) : tutorPaidSessionTransactions.length === 0 ? (
+                    <p className="text-sm font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+                      No paid and completed session transactions yet.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {[...tutorPaidSessionTransactions]
+                        .sort((a, b) => b.timestamp - a.timestamp)
+                        .slice(0, 8)
+                        .map((transaction) => (
+                          <div key={transaction.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-black text-slate-900">{transaction.itemName}</p>
+                                <p className="text-xs text-slate-500 mt-1">{transaction.dateLabel} • {transaction.studentName}</p>
+                              </div>
+                              <p className="text-sm font-black text-emerald-700">{formatLkr(transaction.netEarning)}</p>
+                            </div>
+                          </div>
+                        ))}
                     </div>
-                  </div>
-                  <div>
-                    <h2 className="text-3xl font-black text-slate-900 tracking-tight">Welcome back, {currentUser.firstName} {currentUser.lastName}!</h2>
-                    <p className="text-slate-500 font-medium">You've completed <span className="text-indigo-600 font-bold">85%</span> of your weekly goals. Keep it up!</p>
-                  </div>
+                  )}
                 </div>
-                <div className="flex items-center gap-4 w-full md:w-auto">
+
+                <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                  <h3 className="font-black text-2xl text-slate-900 mb-5">Earnings by Course Sales</h3>
+                  {!tutorHasCourseEarningMethod ? (
+                    <p className="text-sm font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+                      Course-based earning method is not active for this tutor profile.
+                    </p>
+                  ) : tutorPaidCourseTransactions.length === 0 ? (
+                    <p className="text-sm font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+                      No paid course purchase transactions yet.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {[...tutorPaidCourseTransactions]
+                        .sort((a, b) => b.timestamp - a.timestamp)
+                        .slice(0, 8)
+                        .map((transaction) => (
+                          <div key={transaction.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-black text-slate-900">{transaction.itemName}</p>
+                                <p className="text-xs text-slate-500 mt-1">{transaction.dateLabel} • {transaction.studentName}</p>
+                              </div>
+                              <p className="text-sm font-black text-emerald-700">{formatLkr(transaction.netEarning)}</p>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+                  <div>
+                    <h3 className="font-black text-2xl text-slate-900">Withdrawal History</h3>
+                    <p className="text-sm text-slate-500 mt-1">
+                      Review payout requests, statuses, and processing updates in one place.
+                    </p>
+                  </div>
                   <button
-                    onClick={() => setActiveTab('quizzes')}
-                    className="flex-1 md:flex-none px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+                    type="button"
+                    onClick={handleOpenWithdrawalModal}
+                    disabled={isLoadingWithdrawalData || withdrawalAvailableBalance <= 0}
+                    className={`px-4 py-2 rounded-xl text-sm font-black uppercase tracking-widest transition-colors ${
+                      isLoadingWithdrawalData || withdrawalAvailableBalance <= 0
+                        ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                        : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                    }`}
                   >
-                    New Assessment
+                    Withdraw Money
                   </button>
                 </div>
-              </div>
 
-              <div className="grid lg:grid-cols-3 gap-10">
-                {/* Left Column: Stats & Skills */}
-                <div className="lg:col-span-2 space-y-10">
-                  <div className="grid md:grid-cols-2 gap-8">
-                    <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-indigo-50/50 relative overflow-hidden">
-                      <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50 rounded-full -mr-16 -mt-16" />
-                      <div className="flex items-center justify-between mb-8 relative z-10">
-                        <div className="flex items-center gap-4">
-                          <div className="bg-indigo-600 p-3 rounded-2xl shadow-lg shadow-indigo-200">
-                            <Award className="text-white w-6 h-6" />
-                          </div>
-                          <h3 className="font-black text-xl text-slate-900">Skill Matrix</h3>
-                        </div>
-                      </div>
-                      <div className="space-y-8 relative z-10">
-                        {skills.map((skill, idx) => {
-                          const colors = [
-                            'from-blue-500 to-indigo-500',
-                            'from-purple-500 to-violet-500',
-                            'from-emerald-500 to-teal-500'
-                          ];
+                {isLoadingWithdrawalData ? (
+                  <div className="space-y-3">
+                    {[1, 2, 3].map((row) => (
+                      <div key={row} className="h-14 rounded-xl bg-slate-100 animate-pulse" />
+                    ))}
+                  </div>
+                ) : withdrawalRequests.length === 0 ? (
+                  <div className="text-center py-14 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
+                    <Wallet className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                    <p className="font-bold text-slate-500">No withdrawal requests yet.</p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Submit your first request once your available balance is above zero.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-2xl border border-slate-200">
+                    <table className="w-full min-w-[900px]">
+                      <thead className="bg-slate-50 border-b border-slate-200">
+                        <tr>
+                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Requested</th>
+                          <th className="text-right px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Amount</th>
+                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Payout Method</th>
+                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Details</th>
+                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Status</th>
+                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Processed</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {withdrawalRequests.map((request) => {
+                          const requestedDate = Date.parse(String(request.requestedAt || ''));
+                          const processedDate = Date.parse(String(request.processedAt || ''));
+
                           return (
-                            <div key={skill.subject} className="group">
-                              <div className="flex justify-between text-sm font-black mb-3">
-                                <span className="text-slate-700 group-hover:text-indigo-600 transition-colors">{skill.subject}</span>
-                                <span className="text-indigo-600">{skill.level} • {skill.progress}%</span>
-                              </div>
-                              <div className="h-4 bg-slate-50 rounded-full overflow-hidden border border-slate-100 p-0.5">
-                                <motion.div
-                                  initial={{ width: 0 }}
-                                  animate={{ width: `${skill.progress}%` }}
-                                  transition={{ duration: 1.5, delay: idx * 0.1, ease: "circOut" }}
-                                  className={`h-full bg-gradient-to-r ${colors[idx % colors.length]} rounded-full shadow-lg`}
-                                />
-                              </div>
-                            </div>
+                            <tr key={request.id} className="hover:bg-slate-50 transition-colors">
+                              <td className="px-4 py-3 text-sm font-semibold text-slate-700 whitespace-nowrap">
+                                {Number.isNaN(requestedDate)
+                                  ? 'N/A'
+                                  : new Date(requestedDate).toLocaleDateString('en-US', {
+                                      month: 'short',
+                                      day: 'numeric',
+                                      year: 'numeric',
+                                    })}
+                              </td>
+                              <td className="px-4 py-3 text-sm font-black text-slate-900 text-right whitespace-nowrap">
+                                {formatLkr(request.amount)}
+                              </td>
+                              <td className="px-4 py-3 text-sm font-semibold text-slate-700 whitespace-nowrap">
+                                {getWithdrawalPayoutMethodLabel(request.payoutMethodType)}
+                              </td>
+                              <td className="px-4 py-3 text-xs text-slate-600 max-w-[220px]">
+                                <p className="font-semibold line-clamp-2">{request.payoutMethodDetails || 'N/A'}</p>
+                                {request.note && <p className="mt-1 text-[11px] text-slate-500 line-clamp-2">Note: {request.note}</p>}
+                              </td>
+                              <td className="px-4 py-3">
+                                <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getWithdrawalStatusPillClassName(request.status)}`}>
+                                  {getWithdrawalStatusLabel(request.status)}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-xs font-semibold text-slate-600 whitespace-nowrap">
+                                {Number.isNaN(processedDate)
+                                  ? '--'
+                                  : new Date(processedDate).toLocaleDateString('en-US', {
+                                      month: 'short',
+                                      day: 'numeric',
+                                      year: 'numeric',
+                                    })}
+                              </td>
+                            </tr>
                           );
                         })}
-                      </div>
-                    </div>
-
-                    <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-emerald-50/50 relative overflow-hidden">
-                      <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-50 rounded-full -mr-16 -mt-16" />
-                      <div className="flex items-center gap-4 mb-10 relative z-10">
-                        <div className="bg-emerald-500 p-3 rounded-2xl shadow-lg shadow-emerald-200">
-                          <Calendar className="text-white w-6 h-6" />
-                        </div>
-                        <h3 className="font-black text-xl text-slate-900">Learning Activity</h3>
-                      </div>
-                      <div className="text-center py-6 relative z-10">
-                        <div className="text-7xl font-black text-slate-900 tracking-tighter mb-2">12.5</div>
-                        <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Hours Completed This Week</p>
-                      </div>
-                      <div className="pt-8 relative z-10">
-                        <button
-                          onClick={handleGenerateStudyPlan}
-                          className="w-full bg-slate-900 text-white py-4 rounded-2xl font-black text-sm hover:bg-indigo-600 transition-all shadow-xl shadow-slate-200 flex items-center justify-center gap-2"
-                        >
-                          <Bot className="w-5 h-5" /> Update Study Plan
-                        </button>
-                      </div>
-                    </div>
+                      </tbody>
+                    </table>
                   </div>
+                )}
+              </div>
 
-                  {/* Adaptive Study Plan */}
-                  <AnimatePresence>
-                    {studyPlan && (
-                      <motion.div
-                        initial={{ opacity: 0, y: 30 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="bg-slate-900 text-white p-10 md:p-12 rounded-[3.5rem] shadow-2xl relative overflow-hidden"
+              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+                  <div>
+                    <h3 className="font-black text-2xl text-slate-900">Payment History</h3>
+                    <p className="text-sm text-slate-500 mt-1">
+                      Stripe-style transaction timeline for session bookings and course purchases.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-end gap-3">
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Status</span>
+                      <select
+                        value={tutorTransactionFilter}
+                        onChange={(event) => setTutorTransactionFilter(event.target.value as TutorTransactionFilter)}
+                        className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
                       >
-                        <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/20 rounded-full blur-[100px] -mr-48 -mt-48" />
-                        <div className="absolute bottom-0 left-0 w-64 h-64 bg-violet-500/10 rounded-full blur-[80px] -ml-32 -mb-32" />
+                        <option value="all">All</option>
+                        <option value="paid">Paid</option>
+                        <option value="pending">Pending</option>
+                        <option value="refunded_or_cancelled">Refunded/Cancelled</option>
+                      </select>
+                    </label>
 
-                        <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-12">
-                          <div className="flex items-center gap-5">
-                            <div className="bg-white/10 p-4 rounded-3xl backdrop-blur-md border border-white/10">
-                              <Bot className="text-indigo-400 w-8 h-8" />
-                            </div>
-                            <div>
-                              <h3 className="font-black text-3xl tracking-tight">Adaptive Study Plan</h3>
-                              <p className="text-indigo-300 font-medium">AI-optimized learning path for your goals.</p>
-                            </div>
-                          </div>
-                          <div className="px-4 py-2 bg-indigo-500/20 rounded-full border border-indigo-500/30 text-xs font-black uppercase tracking-widest text-indigo-300">
-                            Updated Today
-                          </div>
-                        </div>
-
-                        <div className="relative z-10 grid md:grid-cols-2 gap-12">
-                          <div className="space-y-6">
-                            <h4 className="font-black text-indigo-300 uppercase text-xs tracking-widest flex items-center gap-2">
-                              <Lightbulb className="w-4 h-4" /> Smart Recommendations
-                            </h4>
-                            <div className="space-y-4">
-                              {studyPlan.recommendations.map((rec, i) => (
-                                <motion.div
-                                  initial={{ opacity: 0, x: -20 }}
-                                  animate={{ opacity: 1, x: 0 }}
-                                  transition={{ delay: i * 0.1 }}
-                                  key={i}
-                                  className="flex items-start gap-4 p-4 bg-white/5 rounded-2xl border border-white/5 hover:bg-white/10 transition-colors group"
-                                >
-                                  <div className="bg-emerald-500/20 p-1 rounded-lg mt-0.5 group-hover:bg-emerald-500 transition-colors">
-                                    <Check className="w-4 h-4 text-emerald-400 group-hover:text-white" />
-                                  </div>
-                                  <span className="text-indigo-50 font-medium leading-relaxed">{rec}</span>
-                                </motion.div>
-                              ))}
-                            </div>
-                          </div>
-                          <div className="space-y-8">
-                            <div className="bg-white/5 p-8 rounded-[2.5rem] border border-white/10 backdrop-blur-sm">
-                              <h4 className="font-black text-indigo-300 uppercase text-[10px] tracking-widest mb-6">Next Major Milestone</h4>
-                              <div className="space-y-6">
-                                <div className="flex justify-between items-end">
-                                  <div>
-                                    <p className="text-2xl font-black text-white">Advanced Calculus</p>
-                                    <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest mt-1">Mathematics Track</p>
-                                  </div>
-                                  <div className="text-right">
-                                    <span className="text-3xl font-black text-indigo-400">75%</span>
-                                  </div>
-                                </div>
-                                <div className="h-3 bg-white/5 rounded-full overflow-hidden p-0.5">
-                                  <motion.div
-                                    initial={{ width: 0 }}
-                                    animate={{ width: '75%' }}
-                                    className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full shadow-lg shadow-indigo-500/20"
-                                  />
-                                </div>
-                                <button className="w-full py-4 bg-white text-slate-900 rounded-2xl font-black text-sm hover:bg-indigo-400 hover:text-white transition-all">
-                                  Continue Learning
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-
-                  {/* My Enrolled Courses - Full Width Premium Design */}
-                  <div className="relative w-full max-w-[1400px] mx-auto">
-                    <div className="bg-white rounded-[3rem] border border-slate-100 shadow-sm overflow-hidden w-full">
-                      {/* Header Section */}
-                      <div className="px-5 sm:px-7 lg:px-10 xl:px-12 py-6">
-                        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                          <div>
-                            <h3 className="font-black text-2xl sm:text-3xl text-slate-900 mb-2">
-                              My Enrolled Courses
-                            </h3>
-                            <p className="text-sm text-slate-500 font-medium">
-                              Continue learning and track your progress
-                            </p>
-                          </div>
-                          <button
-                            onClick={() => setActiveTab('courses')}
-                            className="self-start lg:self-auto px-5 sm:px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-black text-xs sm:text-sm uppercase tracking-wide rounded-xl hover:shadow-lg hover:shadow-indigo-200 transition-all flex items-center gap-2 whitespace-nowrap"
-                          >
-                            <BookOpen className="w-5 h-5" />
-                            <span className="hidden sm:inline">Browse More Courses</span>
-                            <span className="sm:hidden">Browse More</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Course Cards Grid */}
-                      <div className="px-5 sm:px-7 lg:px-10 xl:px-12 py-5 sm:py-7">
-                        {studentEnrolledCourses.length === 0 ? (
-                          <div className="text-center py-16 sm:py-20 bg-gradient-to-br from-slate-50 to-slate-100 rounded-[2rem] border border-dashed border-slate-200">
-                            <BookMarked className="w-12 sm:w-16 h-12 sm:h-16 text-slate-300 mx-auto mb-6" />
-                            <p className="text-slate-600 font-bold text-base sm:text-lg mb-2">
-                              No courses enrolled yet
-                            </p>
-                            <p className="text-slate-400 text-sm">
-                              Start learning by browsing our course catalog
-                            </p>
-                            <button
-                              onClick={() => setActiveTab('courses')}
-                              className="mt-6 px-6 sm:px-8 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-black text-sm uppercase tracking-widest rounded-xl hover:shadow-lg hover:shadow-indigo-200 transition-all flex items-center gap-2"
-                            >
-                              <BookOpen className="w-5 h-5" />
-                              Explore Courses
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="grid [grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr))] gap-6 lg:gap-7 2xl:gap-8">
-                            {studentEnrolledCourses.map(({ course, enrollment }) => {
-                              const tutor = MOCK_TUTORS.find(t => t.id === course.tutorId);
-                              const isCompleted = enrollment.progress >= 100;
-
-                              return (
-                                <motion.div
-                                  key={course.id}
-                                  initial={{ opacity: 0, y: 20 }}
-                                  animate={{ opacity: 1, y: 0 }}
-                                  className="group bg-white rounded-[2rem] border border-slate-100 overflow-hidden hover:border-indigo-200 hover:shadow-2xl hover:shadow-indigo-50/70 transition-all duration-300 flex flex-col min-h-[460px] sm:min-h-[480px] w-full min-w-0"
-                                >
-                                  {/* Thumbnail Section */}
-                                  <div className="relative h-48 sm:h-56 bg-gradient-to-br from-indigo-500 to-violet-600 overflow-hidden">
-                                    {course.thumbnail ? (
-                                      <img
-                                        src={course.thumbnail}
-                                        alt={course.title}
-                                        className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
-                                      />
-                                    ) : (
-                                      <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-indigo-500 via-purple-500 to-violet-600">
-                                        <BookOpen className="w-12 sm:w-16 h-12 sm:h-16 text-white opacity-50" />
-                                      </div>
-                                    )}
-
-                                    {/* Completion Badge */}
-                                    {isCompleted && (
-                                      <div className="absolute top-4 right-4 bg-emerald-500 text-white rounded-full p-2 sm:p-3 shadow-lg">
-                                        <CheckCircle className="w-5 sm:w-6 h-5 sm:h-6" />
-                                      </div>
-                                    )}
-
-                                    {/* Course Type Badge */}
-                                    <div className="absolute top-4 left-4">
-                                      <span className={`inline-block px-3 sm:px-4 py-1 sm:py-2 font-black text-xs uppercase tracking-widest rounded-full ${course.isFree || course.price <= 0
-                                          ? 'bg-emerald-500 text-white'
-                                          : 'bg-amber-500 text-white'
-                                        }`}>
-                                        {course.isFree || course.price <= 0 ? 'Free' : 'Paid'}
-                                      </span>
-                                    </div>
-                                  </div>
-
-                                  {/* Content Section */}
-                                  <div className="p-6 sm:p-8 flex-1 flex flex-col w-full">
-                                    {/* Course Title */}
-                                    <h4 className="font-black text-lg xl:text-xl text-slate-900 leading-tight mb-4 line-clamp-2 min-h-[3.25rem]">
-                                      {course.title}
-                                    </h4>
-
-                                    {/* Instructor Info */}
-                                    {tutor && (
-                                      <div className="flex items-center gap-3 sm:gap-4 mb-4 sm:mb-6 pb-4 sm:pb-6 border-b border-slate-100">
-                                        <img
-                                          src={tutor.avatar}
-                                          alt={tutor.firstName}
-                                          className="w-8 sm:w-10 h-8 sm:h-10 rounded-full object-cover"
-                                          onError={(e) => {
-                                            e.currentTarget.style.display = 'none';
-                                          }}
-                                        />
-                                        <div className="flex-1 min-w-0">
-                                          <p className="text-sm font-black text-slate-700 truncate">
-                                            {tutor.firstName} {tutor.lastName}
-                                          </p>
-                                          <p className="text-xs text-slate-400 font-bold">
-                                            {tutor.rating} ⭐
-                                          </p>
-                                        </div>
-                                      </div>
-                                    )}
-
-                                    {/* Progress Section */}
-                                    <div className="mb-6 sm:mb-8">
-                                      <div className="flex items-center justify-between mb-2 sm:mb-3">
-                                        <span className="text-sm font-black text-slate-700">
-                                          Progress
-                                        </span>
-                                        <span className={`text-base sm:text-lg font-black ${isCompleted
-                                            ? 'text-emerald-600'
-                                            : 'text-indigo-600'
-                                          }`}>
-                                          {enrollment.progress}%
-                                        </span>
-                                      </div>
-                                      <div className="h-2.5 sm:h-3 rounded-full bg-slate-100 overflow-hidden">
-                                        <motion.div
-                                          initial={{ width: 0 }}
-                                          animate={{ width: `${enrollment.progress}%` }}
-                                          transition={{ duration: 0.6, ease: 'easeOut' }}
-                                          className={`h-full rounded-full transition-colors ${isCompleted
-                                              ? 'bg-gradient-to-r from-emerald-500 to-emerald-600'
-                                              : 'bg-gradient-to-r from-indigo-500 to-violet-600'
-                                            }`}
-                                        />
-                                      </div>
-                                    </div>
-
-                                    {/* Action Buttons */}
-                                    <div className="mt-auto grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleOpenCourseLearning(course.id)}
-                                        className="py-3.5 px-4 rounded-xl text-[11px] sm:text-xs lg:text-sm font-black uppercase tracking-wide transition-all flex items-center justify-center gap-2 bg-indigo-50 text-indigo-600 border border-indigo-100 hover:bg-indigo-600 hover:text-white w-full"
-                                      >
-                                        <Play className="w-4 sm:w-5 h-4 sm:h-5 flex-shrink-0" />
-                                        <span className="truncate">Continue Learning</span>
-                                      </button>
-
-                                      <button
-                                        onClick={() => {
-                                          if (!isCompleted) {
-                                            alert('Complete all modules to unlock your certificate.');
-                                            return;
-                                          }
-                                          handleShowCertificateModal(enrollment, course.title);
-                                        }}
-                                        className={`py-3.5 px-4 rounded-xl text-[11px] sm:text-xs lg:text-sm font-black uppercase tracking-wide transition-all flex items-center justify-center gap-2 w-full ${isCompleted
-                                            ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white border border-amber-600 hover:shadow-lg hover:shadow-amber-200'
-                                            : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
-                                          }`}
-                                      >
-                                        <Award className="w-4 sm:w-5 h-4 sm:h-5 flex-shrink-0" />
-                                        <span className="truncate">View Certificate</span>
-                                      </button>
-                                    </div>
-                                  </div>
-                                </motion.div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Bookings List */}
-                  <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-sm">
-                    <div className="flex items-center justify-between mb-8">
-                      <h3 className="font-black text-xl text-slate-900">My Booked Sessions</h3>
-                      <Calendar className="w-5 h-5 text-slate-400" />
-                    </div>
-                    {bookings.length === 0 ? (
-                      <div className="text-center py-12 bg-slate-50 rounded-[2rem] border border-dashed border-slate-200">
-                        <Clock className="w-10 h-10 text-slate-300 mx-auto mb-4" />
-                        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">No sessions booked yet</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-6">
-                        {bookings.map(booking => {
-                          const isLoading = activeBookingActionId === booking.id;
-                          const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed';
-
-                          return (
-                          <div key={booking.id} className="p-6 bg-slate-50 rounded-3xl border border-slate-100 space-y-6 hover:border-indigo-200 transition-all group">
-                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                              <div className="flex items-center gap-5">
-                                <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 group-hover:shadow-md transition-all">
-                                  <Video className="text-indigo-600 w-6 h-6" />
-                                </div>
-                                <div>
-                                  <h4 className="font-black text-slate-900 text-lg leading-tight">{booking.subject} Session</h4>
-                                  <div className="flex items-center gap-2 mt-1">
-                                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">{booking.date}</p>
-                                    <span className="w-1 h-1 bg-slate-300 rounded-full" />
-                                    <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">{booking.status}</span>
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="flex flex-wrap gap-2">
-                                <button
-                                  disabled={isLoading}
-                                  onClick={async () => {
-                                    const feedback = await localService.getSessionFeedback(booking.subject, 'Intermediate');
-                                    alert(`AI Learning Assistant:\n\n${feedback}`);
-                                  }}
-                                  className="bg-white text-indigo-600 border border-indigo-100 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 hover:text-white transition-all flex items-center gap-2 shadow-sm disabled:opacity-60"
-                                >
-                                  <Bot className="w-3.5 h-3.5" /> AI Feedback
-                                </button>
-                                <button
-                                  disabled={isLoading}
-                                  onClick={() => {
-                                    const comment = prompt('Enter your review:');
-                                    const rating = parseInt(prompt('Enter rating (1-5):') || '5');
-                                    if (comment && rating) handleAddReview(booking.tutorId, rating, comment);
-                                  }}
-                                  className="bg-white text-amber-600 border border-amber-100 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-amber-500 hover:text-white transition-all flex items-center gap-2 shadow-sm disabled:opacity-60"
-                                >
-                                  <Star className="w-3.5 h-3.5" /> Review
-                                </button>
-                                {canCancel && (
-                                  <button
-                                    type="button"
-                                    disabled={isLoading}
-                                    onClick={() => handleStudentCancelBooking(booking)}
-                                    className="bg-rose-600 text-white px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-rose-700 transition-all flex items-center gap-2 shadow-sm disabled:opacity-60"
-                                  >
-                                    Cancel Booking
-                                  </button>
-                                )}
-                                <a
-                                  href={booking.meetingLink}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg shadow-indigo-100 flex items-center gap-2 ${booking.status === 'cancelled' ? 'bg-slate-300 text-slate-600 pointer-events-none' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
-                                >
-                                  Join Meeting <ArrowRight className="w-3.5 h-3.5" />
-                                </a>
-                              </div>
-                            </div>
-                          </div>
-                        )})}
-                      </div>
-                    )}
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Sort</span>
+                      <select
+                        value={tutorTransactionSortOrder}
+                        onChange={(event) => setTutorTransactionSortOrder(event.target.value as TutorTransactionSortOrder)}
+                        className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
+                      >
+                        <option value="newest">Newest First</option>
+                        <option value="oldest">Oldest First</option>
+                      </select>
+                    </label>
                   </div>
                 </div>
 
-                {/* Right Column: Profile & Quick Actions */}
-                <div className="space-y-10">
-                  <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl shadow-indigo-50/30 text-center relative overflow-hidden">
-                    <div className="absolute top-0 left-0 w-full h-24 bg-gradient-to-r from-indigo-600 to-violet-600 opacity-10" />
-                    <div className="relative z-10">
-                      {currentUserAvatarUrl ? (
-                        <img
-                          src={currentUserAvatarUrl}
-                          alt="Avatar"
-                          className="w-28 h-28 rounded-[2rem] mx-auto mb-6 border-4 border-white shadow-2xl object-cover"
-                          onError={(e) => {
-                            e.currentTarget.style.display = 'none';
-                            (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'block';
-                          }}
-                        />
-                      ) : null}
-                      <img
-                        src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.firstName + ' ' + currentUser.lastName}`}
-                        alt="Avatar"
-                        className="w-28 h-28 rounded-[2rem] mx-auto mb-6 border-4 border-white shadow-2xl object-cover"
-                        style={{ display: currentUserAvatarUrl ? 'none' : 'block' }}
-                      />
-                      <h3 className="font-black text-2xl text-slate-900 tracking-tight">{currentUser.firstName} {currentUser.lastName}</h3>
-                      <p className="text-slate-400 font-bold text-xs uppercase tracking-widest mt-1">{currentUser.email}</p>
-
-                      <div className="flex justify-center gap-8 mt-10 pt-8 border-t border-slate-50">
-                        <div className="text-center">
-                          <p className="text-2xl font-black text-slate-900">12</p>
-                          <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mt-1">Sessions</p>
-                        </div>
-                        <div className="w-px h-10 bg-slate-100 self-center" />
-                        <div className="text-center">
-                          <p className="text-2xl font-black text-slate-900">{studentEnrolledCourses.length}</p>
-                          <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mt-1">Courses</p>
-                        </div>
-                      </div>
-                    </div>
+                {isLoadingUserData ? (
+                  <div className="space-y-3">
+                    {[1, 2, 3, 4].map((row) => (
+                      <div key={row} className="h-14 rounded-xl bg-slate-100 animate-pulse" />
+                    ))}
                   </div>
-
-                  <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-sm">
-                    <h3 className="font-black text-xl text-slate-900 mb-8">Quick Actions</h3>
-                    <div className="grid gap-3">
-                      <button onClick={() => setActiveTab('tutors')} className="w-full text-left p-5 rounded-2xl bg-slate-50 hover:bg-indigo-50 border border-slate-50 hover:border-indigo-100 transition-all flex items-center gap-4 group">
-                        <div className="bg-white p-3 rounded-xl shadow-sm group-hover:scale-110 transition-transform">
-                          <Search className="w-5 h-5 text-indigo-600" />
-                        </div>
-                        <div>
-                          <p className="font-black text-slate-900 text-sm">Book Session</p>
-                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Find expert tutors</p>
-                        </div>
-                      </button>
-                      <button onClick={() => setActiveTab('questions')} className="w-full text-left p-5 rounded-2xl bg-slate-50 hover:bg-violet-50 border border-slate-50 hover:border-violet-100 transition-all flex items-center gap-4 group">
-                        <div className="bg-white p-3 rounded-xl shadow-sm group-hover:scale-110 transition-transform">
-                          <MessageSquare className="w-5 h-5 text-violet-600" />
-                        </div>
-                        <div>
-                          <p className="font-black text-slate-900 text-sm">Ask AI Tutor</p>
-                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Instant STEM answers</p>
-                        </div>
-                      </button>
-                      <button onClick={() => setActiveTab('quizzes')} className="w-full text-left p-5 rounded-2xl bg-slate-50 hover:bg-emerald-50 border border-slate-50 hover:border-emerald-100 transition-all flex items-center gap-4 group">
-                        <div className="bg-white p-3 rounded-xl shadow-sm group-hover:scale-110 transition-transform">
-                          <Award className="w-5 h-5 text-emerald-600" />
-                        </div>
-                        <div>
-                          <p className="font-black text-slate-900 text-sm">Take Quiz</p>
-                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Test your knowledge</p>
-                        </div>
-                      </button>
-                    </div>
+                ) : filteredTutorTransactions.length === 0 ? (
+                  <div className="text-center py-14 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
+                    <Clock className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                    <p className="font-bold text-slate-500">No transactions found for current filters.</p>
                   </div>
-                </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-2xl border border-slate-200">
+                    <table className="w-full min-w-[960px]">
+                      <thead className="bg-slate-50 border-b border-slate-200">
+                        <tr>
+                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Date</th>
+                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Session/Course</th>
+                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Student</th>
+                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Payment Type</th>
+                          <th className="text-right px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Amount</th>
+                          <th className="text-right px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Platform Fee</th>
+                          <th className="text-right px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Net Earning</th>
+                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {filteredTutorTransactions.map((transaction) => (
+                          <tr key={transaction.id} className="hover:bg-slate-50 transition-colors">
+                            <td className="px-4 py-3 text-sm font-semibold text-slate-700 whitespace-nowrap">{transaction.dateLabel}</td>
+                            <td className="px-4 py-3">
+                              <p className="text-sm font-bold text-slate-900">{transaction.itemName}</p>
+                              {transaction.paymentReference && (
+                                <p className="text-[11px] text-slate-500 mt-1">Ref: {transaction.paymentReference}</p>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-sm font-semibold text-slate-700">{transaction.studentName}</td>
+                            <td className="px-4 py-3">
+                              <span className="text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border border-slate-200 bg-slate-50 text-slate-700">
+                                {transaction.paymentType}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-sm font-black text-slate-900 text-right">{formatLkr(transaction.amount)}</td>
+                            <td className="px-4 py-3 text-sm font-bold text-slate-600 text-right">{formatLkr(transaction.platformFee)}</td>
+                            <td className="px-4 py-3 text-sm font-black text-emerald-700 text-right">{formatLkr(transaction.netEarning)}</td>
+                            <td className="px-4 py-3">
+                              <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getTransactionStatusPillClassName(transaction.status)}`}>
+                                {getTransactionStatusLabel(transaction.status)}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -5699,6 +7198,294 @@ export default function App() {
         courseTitle={certificateModalData?.courseTitle || ''}
         studentName={`${currentUser?.firstName || ''} ${currentUser?.lastName || ''}`.trim()}
       />
+
+      <AnimatePresence>
+        {isWithdrawalModalOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 z-[355] bg-black/45 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={handleCloseWithdrawalModal}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 14 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 14 }}
+              transition={{ type: 'spring', damping: 24, stiffness: 320 }}
+              className="w-full max-w-lg rounded-3xl border border-emerald-200 bg-white shadow-2xl shadow-emerald-100/50 overflow-hidden"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <form onSubmit={handleSubmitWithdrawalRequest}>
+                <div className="p-6 md:p-7">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h3 className="text-2xl font-black text-slate-900">Request Withdrawal</h3>
+                      <p className="text-sm text-slate-500 mt-1">
+                        Submit a payout request from your available balance.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleCloseWithdrawalModal}
+                      disabled={isSubmittingWithdrawal}
+                      className="p-2 rounded-xl text-slate-500 hover:bg-slate-100 transition-colors disabled:opacity-60"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Available Balance</p>
+                    <p className="text-xl font-black text-emerald-700 mt-1">{formatLkr(withdrawalAvailableBalance)}</p>
+                  </div>
+
+                  {withdrawalNotice?.type === 'error' && (
+                    <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
+                      <p className="text-sm font-bold text-rose-700">{withdrawalNotice.message}</p>
+                    </div>
+                  )}
+
+                  <div className="mt-5 space-y-4">
+                    <label className="block">
+                      <span className="text-xs font-black uppercase tracking-widest text-slate-500">Amount (LKR)</span>
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        max={withdrawalAvailableBalance > 0 ? withdrawalAvailableBalance : undefined}
+                        value={withdrawalForm.amount}
+                        onChange={(event) => setWithdrawalForm((prev) => ({ ...prev, amount: event.target.value }))}
+                        placeholder="0.00"
+                        className="mt-2 w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-slate-900 font-bold outline-none focus:ring-4 focus:ring-emerald-500/20 focus:border-emerald-500"
+                        required
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="text-xs font-black uppercase tracking-widest text-slate-500">Payout Method</span>
+                      <select
+                        value={withdrawalForm.payoutMethodType}
+                        onChange={(event) =>
+                          setWithdrawalForm((prev) => ({
+                            ...prev,
+                            payoutMethodType: event.target.value as WithdrawalRequest['payoutMethodType'],
+                          }))
+                        }
+                        className="mt-2 w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-slate-900 font-bold outline-none focus:ring-4 focus:ring-emerald-500/20 focus:border-emerald-500"
+                      >
+                        <option value="bank_transfer">Bank Transfer</option>
+                        <option value="paypal">PayPal</option>
+                      </select>
+                    </label>
+
+                    {withdrawalForm.payoutMethodType === 'bank_transfer' && (
+                      <div className="grid sm:grid-cols-2 gap-4">
+                        <label className="block sm:col-span-2">
+                          <span className="text-xs font-black uppercase tracking-widest text-slate-500">Account Holder Name</span>
+                          <input
+                            type="text"
+                            value={withdrawalForm.bankAccountHolder}
+                            onChange={(event) =>
+                              setWithdrawalForm((prev) => ({
+                                ...prev,
+                                bankAccountHolder: event.target.value,
+                              }))
+                            }
+                            placeholder="Account holder full name"
+                            className="mt-2 w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-slate-900 font-semibold outline-none focus:ring-4 focus:ring-emerald-500/20 focus:border-emerald-500"
+                            required
+                          />
+                        </label>
+
+                        <label className="block">
+                          <span className="text-xs font-black uppercase tracking-widest text-slate-500">Bank Name</span>
+                          <input
+                            type="text"
+                            value={withdrawalForm.bankName}
+                            onChange={(event) =>
+                              setWithdrawalForm((prev) => ({
+                                ...prev,
+                                bankName: event.target.value,
+                              }))
+                            }
+                            placeholder="e.g. Commercial Bank"
+                            className="mt-2 w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-slate-900 font-semibold outline-none focus:ring-4 focus:ring-emerald-500/20 focus:border-emerald-500"
+                            required
+                          />
+                        </label>
+
+                        <label className="block">
+                          <span className="text-xs font-black uppercase tracking-widest text-slate-500">Branch</span>
+                          <input
+                            type="text"
+                            value={withdrawalForm.bankBranch}
+                            onChange={(event) =>
+                              setWithdrawalForm((prev) => ({
+                                ...prev,
+                                bankBranch: event.target.value,
+                              }))
+                            }
+                            placeholder="e.g. Colombo Fort"
+                            className="mt-2 w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-slate-900 font-semibold outline-none focus:ring-4 focus:ring-emerald-500/20 focus:border-emerald-500"
+                            required
+                          />
+                        </label>
+
+                        <label className="block sm:col-span-2">
+                          <span className="text-xs font-black uppercase tracking-widest text-slate-500">Account Number</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={withdrawalForm.bankAccountNumber}
+                            onChange={(event) =>
+                              setWithdrawalForm((prev) => ({
+                                ...prev,
+                                bankAccountNumber: event.target.value,
+                              }))
+                            }
+                            placeholder="Enter account number"
+                            className="mt-2 w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-slate-900 font-semibold outline-none focus:ring-4 focus:ring-emerald-500/20 focus:border-emerald-500"
+                            required
+                          />
+                        </label>
+                      </div>
+                    )}
+
+                    {withdrawalForm.payoutMethodType === 'paypal' && (
+                      <label className="block">
+                        <span className="text-xs font-black uppercase tracking-widest text-slate-500">PayPal Email</span>
+                        <input
+                          type="email"
+                          value={withdrawalForm.paypalEmail}
+                          onChange={(event) =>
+                            setWithdrawalForm((prev) => ({
+                              ...prev,
+                              paypalEmail: event.target.value,
+                            }))
+                          }
+                          placeholder="name@example.com"
+                          className="mt-2 w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-slate-900 font-semibold outline-none focus:ring-4 focus:ring-emerald-500/20 focus:border-emerald-500"
+                          required
+                        />
+                      </label>
+                    )}
+                  </div>
+
+                  <div className="mt-6 flex flex-col sm:flex-row sm:items-center sm:justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={handleCloseWithdrawalModal}
+                      disabled={isSubmittingWithdrawal}
+                      className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-700 font-bold hover:bg-slate-50 disabled:opacity-60"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmittingWithdrawal || isLoadingWithdrawalData || withdrawalAvailableBalance <= 0}
+                      className={`px-5 py-2.5 rounded-xl font-black uppercase tracking-widest transition-colors ${
+                        isSubmittingWithdrawal || isLoadingWithdrawalData || withdrawalAvailableBalance <= 0
+                          ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                          : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                      }`}
+                    >
+                      {isSubmittingWithdrawal ? 'Submitting...' : 'Submit Request'}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {bankTransferEtaNotice && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 z-[358] bg-black/45 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setBankTransferEtaNotice(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 16 }}
+              transition={{ type: 'spring', damping: 24, stiffness: 320 }}
+              className="w-full max-w-md rounded-3xl border border-indigo-200 bg-white shadow-2xl shadow-indigo-100/60 overflow-hidden"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="p-6">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center">
+                  <Clock className="w-6 h-6" />
+                </div>
+
+                <div className="mt-4 space-y-2">
+                  <p className="text-xl font-black text-slate-900">Bank Transfer Requested</p>
+                  <p className="text-sm text-slate-600 leading-relaxed">{bankTransferEtaNotice}</p>
+                </div>
+
+                <div className="mt-6 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBankTransferEtaNotice(null)}
+                    className="px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50 transition-colors"
+                  >
+                    OK
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {bookingCancelNotice && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 z-[360] bg-black/45 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setBookingCancelNotice(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 16 }}
+              transition={{ type: 'spring', damping: 24, stiffness: 320 }}
+              className="w-full max-w-md rounded-3xl border border-emerald-200 bg-white shadow-2xl shadow-emerald-100/60 overflow-hidden"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="p-6">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                  <CheckCircle className="w-6 h-6" />
+                </div>
+
+                <div className="mt-4 space-y-2">
+                  <p className="text-xl font-black text-slate-900">Booking Cancelled</p>
+                  <p className="text-sm text-slate-600 leading-relaxed">{bookingCancelNotice}</p>
+                </div>
+
+                <div className="mt-6 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBookingCancelNotice(null)}
+                    className="px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50 transition-colors"
+                  >
+                    OK
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

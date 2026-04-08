@@ -11,6 +11,9 @@ import {
   Video,
   Star,
   Shield,
+  Lock,
+  CreditCard,
+  AlertTriangle,
   Sunrise,
   Sun,
   Sunset,
@@ -20,10 +23,24 @@ import {
 } from "lucide-react";
 import { formatLkr } from "../../utils/currency";
 
+type BookingCheckoutPayload = {
+  slotId: string;
+  sessionDate: string;
+  sessionTime: string;
+  paymentStatus: 'paid' | 'failed';
+  paymentReference?: string;
+  paymentFailureReason?: string;
+};
+
+type BookingCheckoutResponse = {
+  ok: boolean;
+  error?: string;
+};
+
 interface TutorBookingPageProps {
   tutor: any;
   onBack: () => void;
-  onConfirmBooking: (slotId: string) => void;
+  onConfirmBooking: (payload: BookingCheckoutPayload) => Promise<BookingCheckoutResponse>;
 }
 
 const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -198,12 +215,74 @@ const groupSlotsByPeriod = (slots: BookingSlotOption[]) => {
   return { morning, afternoon, evening };
 };
 
+const getDigitsOnly = (value: string): string => value.replace(/\D/g, '');
+
+const formatCardNumberInput = (value: string): string => {
+  return getDigitsOnly(value)
+    .slice(0, 16)
+    .replace(/(.{4})/g, '$1 ')
+    .trim();
+};
+
+const formatExpiryInput = (value: string): string => {
+  const digits = getDigitsOnly(value).slice(0, 4);
+  if (digits.length <= 2) {
+    return digits;
+  }
+  return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+};
+
+const isValidExpiry = (value: string): boolean => {
+  const match = value.match(/^(\d{2})\/(\d{2})$/);
+  if (!match) {
+    return false;
+  }
+
+  const month = Number(match[1]);
+  const yearSuffix = Number(match[2]);
+
+  if (!Number.isInteger(month) || month < 1 || month > 12) {
+    return false;
+  }
+
+  const now = new Date();
+  const currentYearSuffix = now.getFullYear() % 100;
+  const currentMonth = now.getMonth() + 1;
+
+  if (yearSuffix < currentYearSuffix) {
+    return false;
+  }
+
+  if (yearSuffix === currentYearSuffix && month < currentMonth) {
+    return false;
+  }
+
+  return true;
+};
+
+const createPaymentReference = (): string => {
+  const stamp = Date.now().toString(36).toUpperCase();
+  const nonce = Math.floor(Math.random() * 900 + 100);
+  return `PAY-${stamp}-${nonce}`;
+};
+
 export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBookingPageProps) {
   const [selectedDate, setSelectedDate] = useState<Date>(() => BOOKING_MIN_DATE);
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => startOfMonth(BOOKING_MIN_DATE));
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
-  const [isConfirming, setIsConfirming] = useState(false);
-  const [bookingSuccess, setBookingSuccess] = useState(false);
+  const [bookingStep, setBookingStep] = useState<'schedule' | 'checkout'>('schedule');
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [cardholderName, setCardholderName] = useState('');
+  const [cardNumber, setCardNumber] = useState('');
+  const [expiry, setExpiry] = useState('');
+  const [cvv, setCvv] = useState('');
+  const [bookingResult, setBookingResult] = useState<{
+    status: 'success' | 'failure';
+    title: string;
+    message: string;
+    paymentReference?: string;
+  } | null>(null);
 
   if (!tutor) {
     return (
@@ -274,22 +353,119 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
     [selectedSlotId]
   );
 
-  const handleConfirm = async () => {
-    if (selectedSlotId) {
-      setIsConfirming(true);
-      await new Promise((r) => setTimeout(r, 1200));
-      setIsConfirming(false);
-      setBookingSuccess(true);
-      onConfirmBooking(selectedSlotId);
+  const sessionDateLabel = selectedDate.toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  const selectedSlotLabel = selectedSlot?.label || 'Selected session time';
+
+  const handleContinueToCheckout = () => {
+    if (!selectedSlot) {
+      return;
+    }
+
+    setCheckoutError(null);
+    setBookingStep('checkout');
+  };
+
+  const handleSubmitPayment = async () => {
+    if (!selectedSlot) {
+      setCheckoutError('Please select a time slot before continuing to payment.');
+      setBookingStep('schedule');
+      return;
+    }
+
+    const cleanedCardholder = cardholderName.trim();
+    const cleanedCardNumber = getDigitsOnly(cardNumber);
+    const cleanedCvv = getDigitsOnly(cvv).slice(0, 4);
+
+    if (cleanedCardholder.length < 2) {
+      setCheckoutError('Cardholder name is required.');
+      return;
+    }
+
+    if (cleanedCardNumber.length !== 16) {
+      setCheckoutError('Enter a valid 16-digit card number.');
+      return;
+    }
+
+    if (!isValidExpiry(expiry)) {
+      setCheckoutError('Enter a valid expiry date in MM/YY format.');
+      return;
+    }
+
+    if (cleanedCvv.length < 3) {
+      setCheckoutError('Enter a valid CVV (3 or 4 digits).');
+      return;
+    }
+
+    setIsProcessingPayment(true);
+    setCheckoutError(null);
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+
+      const paymentReference = createPaymentReference();
+      const shouldFailPayment = cleanedCardNumber.endsWith('0000') || cleanedCvv === '000';
+
+      if (shouldFailPayment) {
+        const failureReason = 'Payment authorization was declined by the payment gateway.';
+        const response = await onConfirmBooking({
+          slotId: selectedSlot.id,
+          sessionDate: sessionDateLabel,
+          sessionTime: selectedSlot.label,
+          paymentStatus: 'failed',
+          paymentReference,
+          paymentFailureReason: failureReason,
+        });
+
+        if (!response?.ok) {
+          setCheckoutError(response?.error || 'Payment failed and booking state could not be saved.');
+          return;
+        }
+
+        setBookingResult({
+          status: 'failure',
+          title: 'Payment Failed',
+          message: 'The payment was declined. The failed payment state has been saved in booking history for traceability.',
+          paymentReference,
+        });
+        return;
+      }
+
+      const response = await onConfirmBooking({
+        slotId: selectedSlot.id,
+        sessionDate: sessionDateLabel,
+        sessionTime: selectedSlot.label,
+        paymentStatus: 'paid',
+        paymentReference,
+      });
+
+      if (!response?.ok) {
+        setCheckoutError(response?.error || 'Payment succeeded but booking confirmation failed.');
+        return;
+      }
+
+      setBookingResult({
+        status: 'success',
+        title: 'Booking Confirmed!',
+        message: 'Payment was successful and your session is now confirmed.',
+        paymentReference,
+      });
+    } catch (error) {
+      setCheckoutError(error instanceof Error ? error.message : 'Failed to complete checkout. Please try again.');
+    } finally {
+      setIsProcessingPayment(false);
     }
   };
 
-  // ─── Booking Success State ───
-  // Renders inline within the page layout (no min-h-screen overlay)
-  if (bookingSuccess) {
+  if (bookingResult) {
+    const isSuccess = bookingResult.status === 'success';
+
     return (
       <div className="pb-20">
-        {/* Header — consistent with booking page */}
         <header className="bg-white/80 backdrop-blur-lg border-b border-slate-200/60 sticky top-0 z-40 shadow-sm">
           <div className="max-w-6xl mx-auto px-4 h-20 flex items-center justify-between">
             <button
@@ -301,11 +477,11 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
               </div>
               <span className="hidden sm:inline">Back</span>
             </button>
-            <div className="flex items-center gap-2 text-emerald-600">
-              <CheckCircle className="w-5 h-5" />
-              <span className="font-bold text-sm">Booking Confirmed</span>
+            <div className={`flex items-center gap-2 ${isSuccess ? 'text-emerald-600' : 'text-rose-600'}`}>
+              {isSuccess ? <CheckCircle className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
+              <span className="font-bold text-sm">{isSuccess ? 'Booking Confirmed' : 'Payment Failed'}</span>
             </div>
-            <div className="w-10" /> {/* Spacer for center alignment */}
+            <div className="w-10" />
           </div>
         </header>
 
@@ -316,16 +492,15 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
             transition={{ type: "spring", stiffness: 260, damping: 22 }}
             className="bg-white rounded-[2.5rem] shadow-xl shadow-indigo-50 border border-slate-200/60 overflow-hidden"
           >
-            {/* Success banner */}
-            <div className="bg-gradient-to-r from-emerald-500 to-teal-500 p-8 sm:p-10 text-center relative overflow-hidden">
+            <div className={`${isSuccess ? 'bg-gradient-to-r from-emerald-500 to-teal-500' : 'bg-gradient-to-r from-rose-500 to-orange-500'} p-8 sm:p-10 text-center relative overflow-hidden`}>
               <div className="absolute inset-0 opacity-10">
                 <svg width="100%" height="100%">
                   <defs>
-                    <pattern id="success-dots" x="0" y="0" width="24" height="24" patternUnits="userSpaceOnUse">
+                    <pattern id="booking-result-dots" x="0" y="0" width="24" height="24" patternUnits="userSpaceOnUse">
                       <circle cx="12" cy="12" r="1.5" fill="white" />
                     </pattern>
                   </defs>
-                  <rect width="100%" height="100%" fill="url(#success-dots)" />
+                  <rect width="100%" height="100%" fill="url(#booking-result-dots)" />
                 </svg>
               </div>
               <motion.div
@@ -334,19 +509,13 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
                 transition={{ delay: 0.2, type: "spring", stiffness: 400 }}
                 className="w-16 h-16 bg-white/20 backdrop-blur rounded-full flex items-center justify-center mx-auto mb-4"
               >
-                <PartyPopper className="w-8 h-8 text-white" />
+                {isSuccess ? <PartyPopper className="w-8 h-8 text-white" /> : <AlertTriangle className="w-8 h-8 text-white" />}
               </motion.div>
-              <h2 className="text-2xl sm:text-3xl font-extrabold text-white mb-2">
-                Booking Confirmed!
-              </h2>
-              <p className="text-emerald-50 font-medium text-sm">
-                Your session has been scheduled successfully
-              </p>
+              <h2 className="text-2xl sm:text-3xl font-extrabold text-white mb-2">{bookingResult.title}</h2>
+              <p className="text-white/90 font-medium text-sm">{bookingResult.message}</p>
             </div>
 
-            {/* Booking Details */}
             <div className="p-6 sm:p-10">
-              {/* Tutor Info */}
               <div className="flex items-center gap-4 mb-8 pb-6 border-b border-slate-100">
                 <div className="w-14 h-14 rounded-2xl bg-indigo-100 flex items-center justify-center overflow-hidden border border-indigo-200 shrink-0">
                   {tutor.avatar ? (
@@ -361,7 +530,6 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
                 </div>
               </div>
 
-              {/* Details Grid */}
               <div className="space-y-4 mb-8">
                 <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-2xl">
                   <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center shrink-0 border border-indigo-100">
@@ -369,9 +537,7 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
                   </div>
                   <div>
                     <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Date</div>
-                    <div className="font-bold text-slate-900 text-sm">
-                      {selectedDate.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
-                    </div>
+                    <div className="font-bold text-slate-900 text-sm">{sessionDateLabel}</div>
                   </div>
                 </div>
 
@@ -381,30 +547,55 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
                   </div>
                   <div>
                     <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Time</div>
-                    <div className="font-bold text-slate-900 text-sm">{selectedSlot?.label || 'Selected session time'}</div>
+                    <div className="font-bold text-slate-900 text-sm">{selectedSlotLabel}</div>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-2xl">
                   <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center shrink-0 border border-emerald-100">
-                    <Video className="w-5 h-5 text-emerald-600" />
+                    <CreditCard className="w-5 h-5 text-emerald-600" />
                   </div>
                   <div>
-                    <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Total</div>
-                    <div className="font-bold text-slate-900 text-sm">{formattedHourlyRate} — Video Call</div>
+                    <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Total Charged</div>
+                    <div className="font-bold text-slate-900 text-sm">{formattedHourlyRate}</div>
                   </div>
                 </div>
+
+                {bookingResult.paymentReference && (
+                  <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                    <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center shrink-0 border border-amber-100">
+                      <Lock className="w-5 h-5 text-amber-600" />
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Payment Reference</div>
+                      <div className="font-bold text-slate-900 text-sm">{bookingResult.paymentReference}</div>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* Actions */}
               <div className="flex flex-col gap-3">
-                <button
-                  onClick={onBack}
-                  className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200 flex items-center justify-center gap-2"
-                >
-                  <CalendarCheck className="w-5 h-5" />
-                  Go to Dashboard
-                </button>
+                {isSuccess ? (
+                  <button
+                    onClick={onBack}
+                    className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200 flex items-center justify-center gap-2"
+                  >
+                    <CalendarCheck className="w-5 h-5" />
+                    Go to Dashboard
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setBookingResult(null);
+                      setBookingStep('checkout');
+                      setCheckoutError(null);
+                    }}
+                    className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200"
+                  >
+                    Try Payment Again
+                  </button>
+                )}
+
                 <button
                   onClick={onBack}
                   className="w-full py-3.5 bg-slate-50 text-slate-600 rounded-2xl font-bold hover:bg-slate-100 transition-colors border border-slate-200"
@@ -414,6 +605,197 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
               </div>
             </div>
           </motion.div>
+        </main>
+      </div>
+    );
+  }
+
+  if (bookingStep === 'checkout') {
+    return (
+      <div className="pb-20">
+        <header className="bg-white/80 backdrop-blur-lg border-b border-slate-200/60 sticky top-0 z-40 shadow-sm">
+          <div className="max-w-6xl mx-auto px-4 h-20 flex items-center justify-between">
+            <button
+              onClick={() => {
+                setBookingStep('schedule');
+                setCheckoutError(null);
+              }}
+              className="flex items-center gap-2 text-slate-600 hover:text-indigo-600 font-bold transition-colors group"
+            >
+              <div className="w-10 h-10 rounded-full bg-slate-100 group-hover:bg-indigo-50 flex items-center justify-center transition-colors">
+                <ArrowLeft className="w-5 h-5" />
+              </div>
+              <span className="hidden sm:inline">Back to Schedule</span>
+            </button>
+
+            <div className="hidden md:flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-indigo-600 text-white text-xs font-bold flex items-center justify-center">1</div>
+                <span className="text-xs font-bold text-indigo-600">Select Time</span>
+              </div>
+              <div className="w-8 h-px bg-slate-200" />
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-indigo-600 text-white text-xs font-bold flex items-center justify-center">2</div>
+                <span className="text-xs font-bold text-indigo-600">Checkout</span>
+              </div>
+            </div>
+
+            <div className="w-10" />
+          </div>
+        </header>
+
+        <main className="max-w-6xl mx-auto px-4 mt-8">
+          <div className="grid lg:grid-cols-12 gap-8 items-start">
+            <div className="lg:col-span-8">
+              <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200/60 overflow-hidden">
+                <div className="p-6 sm:p-8 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-indigo-50/30">
+                  <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">Secure Checkout</h1>
+                  <p className="text-slate-500 mt-2 font-medium text-sm">Complete payment to confirm your booking instantly.</p>
+                </div>
+
+                <div className="p-6 sm:p-8 space-y-6">
+                  <div>
+                    <label className="text-xs font-black uppercase tracking-wider text-slate-500">Cardholder Name</label>
+                    <input
+                      value={cardholderName}
+                      onChange={(event) => setCardholderName(event.target.value)}
+                      placeholder="Name on card"
+                      className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-black uppercase tracking-wider text-slate-500">Card Number</label>
+                    <input
+                      value={cardNumber}
+                      onChange={(event) => setCardNumber(formatCardNumberInput(event.target.value))}
+                      inputMode="numeric"
+                      placeholder="4242 4242 4242 4242"
+                      className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium tracking-[0.2em] text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                    />
+                  </div>
+
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-xs font-black uppercase tracking-wider text-slate-500">Expiry</label>
+                      <input
+                        value={expiry}
+                        onChange={(event) => setExpiry(formatExpiryInput(event.target.value))}
+                        inputMode="numeric"
+                        placeholder="MM/YY"
+                        className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-black uppercase tracking-wider text-slate-500">CVV</label>
+                      <input
+                        value={cvv}
+                        onChange={(event) => setCvv(getDigitsOnly(event.target.value).slice(0, 4))}
+                        inputMode="numeric"
+                        placeholder="123"
+                        className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-500">
+                    Test mode: use a card ending with <span className="font-black text-slate-700">0000</span> (or CVV <span className="font-black text-slate-700">000</span>) to simulate a failed payment.
+                  </div>
+
+                  {checkoutError && (
+                    <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-sm font-semibold text-rose-700 flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                      <span>{checkoutError}</span>
+                    </div>
+                  )}
+
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <button
+                      type="button"
+                      disabled={isProcessingPayment}
+                      onClick={handleSubmitPayment}
+                      className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200 flex items-center justify-center gap-2 disabled:opacity-60"
+                    >
+                      {isProcessingPayment ? (
+                        <>
+                          <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Processing Payment...
+                        </>
+                      ) : (
+                        <>
+                          <Lock className="w-5 h-5" />
+                          Pay & Confirm Booking
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isProcessingPayment}
+                      onClick={() => {
+                        setBookingStep('schedule');
+                        setCheckoutError(null);
+                      }}
+                      className="sm:w-52 py-4 bg-slate-50 text-slate-700 rounded-2xl font-bold hover:bg-slate-100 transition-colors border border-slate-200 disabled:opacity-60"
+                    >
+                      Back to Schedule
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="lg:col-span-4">
+              <div className="bg-white rounded-[2rem] shadow-xl shadow-indigo-50 border border-slate-200/60 p-6 sm:p-8 lg:sticky lg:top-28">
+                <h3 className="text-xl font-black text-slate-900 mb-6">Order Summary</h3>
+
+                <div className="space-y-4 mb-6">
+                  <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                    <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center shrink-0 overflow-hidden border border-indigo-200">
+                      {tutor.avatar ? (
+                        <img src={tutor.avatar} alt={displayName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      ) : (
+                        <span className="font-bold text-indigo-600">{displayName.charAt(0)}</span>
+                      )}
+                    </div>
+                    <div>
+                      <p className="font-bold text-slate-900 text-sm">{displayName}</p>
+                      <p className="text-xs font-medium text-slate-500">1-on-1 Video Session</p>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-3">
+                    <div>
+                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-wider">Date</p>
+                      <p className="text-sm font-bold text-slate-900">{sessionDateLabel}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-wider">Time</p>
+                      <p className="text-sm font-bold text-slate-900">{selectedSlotLabel}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t border-slate-100 pt-6 mb-5">
+                  <div className="flex justify-between items-center mb-2.5">
+                    <span className="font-bold text-slate-500 text-sm">Rate per hour</span>
+                    <span className="font-bold text-slate-900">{formattedHourlyRate}</span>
+                  </div>
+                  <div className="flex justify-between items-center mb-4">
+                    <span className="font-bold text-slate-500 text-sm">Service Fee</span>
+                    <span className="font-bold text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-md text-xs uppercase tracking-wider">Free</span>
+                  </div>
+                  <div className="flex justify-between items-end pt-4 border-t border-slate-100">
+                    <span className="font-black text-slate-900 text-lg">Total</span>
+                    <span className="font-black text-slate-900 text-3xl tracking-tight">{formattedHourlyRate}</span>
+                  </div>
+                </div>
+
+                <div className="mt-5 flex items-center justify-center gap-2 text-xs font-bold text-slate-500 bg-slate-50 py-2.5 rounded-xl border border-slate-200">
+                  <Shield className="w-4 h-4 text-emerald-500" /> Secure encrypted checkout
+                </div>
+              </div>
+            </div>
+          </div>
         </main>
       </div>
     );
@@ -488,7 +870,7 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
             <div className="w-8 h-px bg-slate-200" />
             <div className="flex items-center gap-2">
               <div className={`w-8 h-8 rounded-full text-xs font-bold flex items-center justify-center ${selectedSlot ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-400'}`}>2</div>
-              <span className={`text-xs font-bold ${selectedSlot ? 'text-indigo-600' : 'text-slate-400'}`}>Confirm</span>
+              <span className={`text-xs font-bold ${selectedSlot ? 'text-indigo-600' : 'text-slate-400'}`}>Checkout</span>
             </div>
           </div>
 
@@ -768,27 +1150,20 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
 
               {/* Confirm Button */}
               <motion.button
-                whileHover={{ scale: selectedSlot && !isConfirming ? 1.02 : 1 }}
-                whileTap={{ scale: selectedSlot && !isConfirming ? 0.98 : 1 }}
-                onClick={handleConfirm}
-                disabled={!selectedSlotId || isConfirming}
+                whileHover={{ scale: selectedSlot ? 1.02 : 1 }}
+                whileTap={{ scale: selectedSlot ? 0.98 : 1 }}
+                onClick={handleContinueToCheckout}
+                disabled={!selectedSlotId}
                 className={`w-full py-4 rounded-2xl font-bold text-lg flex items-center justify-center gap-2 transition-all duration-300 ${
-                  selectedSlotId && !isConfirming
+                  selectedSlotId
                     ? "bg-indigo-600 hover:bg-indigo-700 text-white shadow-xl shadow-indigo-200"
-                    : isConfirming
-                      ? "bg-indigo-600 text-white shadow-xl shadow-indigo-200"
-                      : "bg-slate-100 text-slate-400 cursor-not-allowed"
+                    : "bg-slate-100 text-slate-400 cursor-not-allowed"
                 }`}
               >
-                {isConfirming ? (
+                {selectedSlotId ? (
                   <>
-                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Confirming...
-                  </>
-                ) : selectedSlotId ? (
-                  <>
-                    <CheckCircle className="w-5 h-5" />
-                    Confirm Booking
+                    <CreditCard className="w-5 h-5" />
+                    Continue to Checkout
                   </>
                 ) : (
                   "Pick a Time"
@@ -796,7 +1171,7 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
               </motion.button>
 
               <div className="mt-5 flex items-center justify-center gap-2 text-xs font-bold text-slate-400 bg-slate-50 py-2.5 rounded-xl">
-                <Shield className="w-4 h-4 text-emerald-400" /> No payment required yet
+                <Shield className="w-4 h-4 text-emerald-400" /> Secure payment is required before booking confirmation
               </div>
             </div>
           </div>

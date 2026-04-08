@@ -72,7 +72,7 @@ import { ForgotPasswordPage } from './components/pages/ForgotPasswordPage';
 
 const STEM_SUBJECTS: string[] = [...ALLOWED_TUTOR_SUBJECTS];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'about';
+type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'earnings' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'about';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
@@ -89,6 +89,7 @@ const NAV_LABELS: Record<Tab, string> = {
   forgotPassword: 'Forgot Password',
   register: 'Profile',
   dashboard: 'Dashboard',
+  earnings: 'Earnings',
   settings: 'Settings',
   tutorProfile: 'Tutor Profile',
   tutorBooking: 'Book Session',
@@ -118,7 +119,7 @@ const getAllowedTabs = (user: AppUser | null): Tab[] => {
   }
 
   if (user.role === 'tutor') {
-    return ['home', 'dashboard', 'manageAvailability', 'register', 'courses', 'resources', 'quizzes', 'settings', 'about'];
+    return ['home', 'dashboard', 'earnings', 'manageAvailability', 'register', 'courses', 'resources', 'quizzes', 'settings', 'about'];
   }
 
   return ['home', 'about'];
@@ -241,6 +242,13 @@ const createInitialResourceForm = () => ({
 type ResourceInputMode = 'url' | 'file';
 type ResourceUploadStatus = 'idle' | 'uploading' | 'uploaded' | 'error';
 type SessionPersistenceMode = 'session' | 'remember';
+type BookingStatusFilter = 'all' | 'pending' | 'confirmed' | 'completed' | 'cancelled';
+type SessionTimelineFilter = 'all' | 'upcoming' | 'past';
+
+type SessionRatingDraft = {
+  rating: number;
+  feedback: string;
+};
 
 const isUploadedResourcePath = (value: string): boolean => value.trim().startsWith('/uploads/');
 const SESSION_STORAGE_KEY = 'session';
@@ -401,6 +409,12 @@ export default function App() {
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [activeBookingActionId, setActiveBookingActionId] = useState<string | null>(null);
+  const [tutorBookingStatusFilter, setTutorBookingStatusFilter] = useState<BookingStatusFilter>('all');
+  const [studentBookingStatusFilter, setStudentBookingStatusFilter] = useState<BookingStatusFilter>('all');
+  const [tutorSessionTimelineFilter, setTutorSessionTimelineFilter] = useState<SessionTimelineFilter>('all');
+  const [studentSessionTimelineFilter, setStudentSessionTimelineFilter] = useState<SessionTimelineFilter>('all');
+  const [sessionRatingDrafts, setSessionRatingDrafts] = useState<Record<string, SessionRatingDraft>>({});
+  const [activeRatingActionBookingId, setActiveRatingActionBookingId] = useState<string | null>(null);
 
   // Courses browsing state
   const [courseSearchQuery, setCourseSearchQuery] = useState('');
@@ -878,6 +892,8 @@ export default function App() {
           paymentStatus:
             booking.paymentStatus ||
             (booking.status === 'confirmed' || booking.status === 'completed' ? 'paid' : 'pending'),
+          hiddenForTutor: Boolean(booking.hiddenForTutor),
+          hiddenForStudent: Boolean(booking.hiddenForStudent),
         }));
         setBookings(
           currentUser.role === 'tutor'
@@ -1022,6 +1038,8 @@ export default function App() {
         paymentReference: bookingIntent.paymentReference,
         paymentFailureReason: isPaid ? undefined : bookingIntent.paymentFailureReason,
         paidAt: isPaid ? new Date().toISOString() : undefined,
+        hiddenForTutor: false,
+        hiddenForStudent: false,
       });
 
       setBookings((prevBookings) => [
@@ -1030,6 +1048,8 @@ export default function App() {
           paymentStatus:
             booking.paymentStatus ||
             (booking.status === 'confirmed' || booking.status === 'completed' ? 'paid' : 'pending'),
+          hiddenForTutor: Boolean(booking.hiddenForTutor),
+          hiddenForStudent: Boolean(booking.hiddenForStudent),
         },
         ...prevBookings,
       ]);
@@ -2308,6 +2328,120 @@ export default function App() {
     return 'Student';
   };
 
+  const parseBookingStartDate = (booking: Booking): Date | null => {
+    const rawDate = String(booking.date || '').trim();
+    if (!rawDate) {
+      return null;
+    }
+
+    const baseDate = new Date(rawDate);
+    if (Number.isNaN(baseDate.getTime())) {
+      return null;
+    }
+
+    const rawStartToken = String(booking.timeSlot || '')
+      .split('-')[0]
+      ?.trim();
+
+    if (!rawStartToken) {
+      baseDate.setHours(0, 0, 0, 0);
+      return baseDate;
+    }
+
+    const twelveHourMatch = rawStartToken.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (twelveHourMatch) {
+      let hours = Number(twelveHourMatch[1]);
+      const minutes = Number(twelveHourMatch[2]);
+      const meridiem = twelveHourMatch[3].toUpperCase();
+
+      if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+        return baseDate;
+      }
+
+      if (hours === 12) {
+        hours = meridiem === 'AM' ? 0 : 12;
+      } else if (meridiem === 'PM') {
+        hours += 12;
+      }
+
+      baseDate.setHours(hours, minutes, 0, 0);
+      return baseDate;
+    }
+
+    const twentyFourHourMatch = rawStartToken.match(/^(\d{1,2}):(\d{2})$/);
+    if (twentyFourHourMatch) {
+      const hours = Number(twentyFourHourMatch[1]);
+      const minutes = Number(twentyFourHourMatch[2]);
+      if (Number.isFinite(hours) && Number.isFinite(minutes)) {
+        baseDate.setHours(hours, minutes, 0, 0);
+      }
+      return baseDate;
+    }
+
+    baseDate.setHours(0, 0, 0, 0);
+    return baseDate;
+  };
+
+  const getBookingSortTimestamp = (booking: Booking): number => {
+    const sessionDate = parseBookingStartDate(booking);
+    if (sessionDate) {
+      return sessionDate.getTime();
+    }
+
+    const paidTimestamp = Date.parse(String(booking.paidAt || ''));
+    if (!Number.isNaN(paidTimestamp)) {
+      return paidTimestamp;
+    }
+
+    return 0;
+  };
+
+  const isPastSession = (booking: Booking): boolean => {
+    if (booking.status === 'completed') {
+      return true;
+    }
+
+    const sessionDate = parseBookingStartDate(booking);
+    if (!sessionDate) {
+      return false;
+    }
+
+    return sessionDate.getTime() < Date.now();
+  };
+
+  const canStudentManageBeforeStart = (booking: Booking): boolean => {
+    const sessionDate = parseBookingStartDate(booking);
+    if (!sessionDate) {
+      return false;
+    }
+
+    return sessionDate.getTime() > Date.now();
+  };
+
+  const formatTimeLabelFrom24Hour = (value: string): string | null => {
+    const match = String(value || '').trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) {
+      return null;
+    }
+
+    const hoursRaw = Number(match[1]);
+    const minutesRaw = Number(match[2]);
+    if (!Number.isFinite(hoursRaw) || !Number.isFinite(minutesRaw) || hoursRaw < 0 || hoursRaw > 23 || minutesRaw < 0 || minutesRaw > 59) {
+      return null;
+    }
+
+    const meridiem = hoursRaw >= 12 ? 'PM' : 'AM';
+    const hour12 = hoursRaw % 12 || 12;
+    return `${hour12}:${String(minutesRaw).padStart(2, '0')} ${meridiem}`;
+  };
+
+  const toIsoDateString = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   const handleTutorBookingStatusChange = async (booking: Booking, status: Booking['status']) => {
     if (booking.status === status) {
       return;
@@ -2350,7 +2484,8 @@ export default function App() {
       return;
     }
 
-    await updateTutorBooking(booking.id, { meetingLink: nextMeetingLink });
+    const nextStatus: Booking['status'] = booking.status === 'pending' ? 'confirmed' : booking.status;
+    await updateTutorBooking(booking.id, { meetingLink: nextMeetingLink, status: nextStatus });
   };
 
   const handleStudentCancelBooking = async (booking: Booking) => {
@@ -2365,6 +2500,11 @@ export default function App() {
     }
 
     if (booking.status === 'cancelled' || booking.status === 'completed') {
+      return;
+    }
+
+    if (!canStudentManageBeforeStart(booking)) {
+      alert('You can only cancel sessions before the session start time.');
       return;
     }
 
@@ -2392,6 +2532,180 @@ export default function App() {
     }
   };
 
+  const handleStudentRescheduleBooking = async (booking: Booking) => {
+    if (!currentUser || currentUser.role !== 'student') {
+      alert('Only student accounts can reschedule booked sessions.');
+      return;
+    }
+
+    if (booking.studentId !== currentUser.id) {
+      alert('You can only reschedule your own bookings.');
+      return;
+    }
+
+    if (booking.status === 'cancelled' || booking.status === 'completed') {
+      alert('Only active sessions can be rescheduled.');
+      return;
+    }
+
+    if (!canStudentManageBeforeStart(booking)) {
+      alert('You can only reschedule sessions before the session start time.');
+      return;
+    }
+
+    const currentStartDate = parseBookingStartDate(booking) || new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const dateInput = prompt('Enter new session date (YYYY-MM-DD):', toIsoDateString(currentStartDate))?.trim();
+    if (!dateInput) {
+      return;
+    }
+
+    const nextDateCandidate = new Date(`${dateInput}T00:00:00`);
+    if (Number.isNaN(nextDateCandidate.getTime())) {
+      alert('Invalid date format. Use YYYY-MM-DD.');
+      return;
+    }
+
+    const defaultTime = String(booking.timeSlot || '').split('-')[0]?.trim();
+    const defaultTime24Match = defaultTime?.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    let defaultTime24 = '09:00';
+    if (defaultTime24Match) {
+      let hours = Number(defaultTime24Match[1]);
+      const minutes = Number(defaultTime24Match[2]);
+      const meridiem = defaultTime24Match[3].toUpperCase();
+      if (hours === 12) {
+        hours = meridiem === 'AM' ? 0 : 12;
+      } else if (meridiem === 'PM') {
+        hours += 12;
+      }
+      defaultTime24 = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+    }
+
+    const timeInput = prompt('Enter new start time (HH:MM in 24-hour format):', defaultTime24)?.trim();
+    if (!timeInput) {
+      return;
+    }
+
+    const startLabel = formatTimeLabelFrom24Hour(timeInput);
+    if (!startLabel) {
+      alert('Invalid time format. Use HH:MM in 24-hour format.');
+      return;
+    }
+
+    const [hoursPart, minutesPart] = timeInput.split(':');
+    const nextSessionStart = new Date(nextDateCandidate);
+    nextSessionStart.setHours(Number(hoursPart), Number(minutesPart), 0, 0);
+
+    if (nextSessionStart.getTime() <= Date.now()) {
+      alert('Rescheduled session must be in the future.');
+      return;
+    }
+
+    const nextSessionEnd = new Date(nextSessionStart.getTime() + 60 * 60 * 1000);
+    const nextEndLabel = formatTimeLabelFrom24Hour(`${String(nextSessionEnd.getHours()).padStart(2, '0')}:${String(nextSessionEnd.getMinutes()).padStart(2, '0')}`) || startLabel;
+    const formattedDate = nextSessionStart.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+
+    setActiveBookingActionId(booking.id);
+    try {
+      const updatedBooking = await apiService.updateBooking(booking.id, {
+        date: formattedDate,
+        timeSlot: `${startLabel} - ${nextEndLabel}`,
+        status: 'pending',
+        meetingLink: '',
+      });
+
+      setBookings((prevBookings) =>
+        prevBookings.map((entry) =>
+          entry.id === booking.id
+            ? { ...entry, ...updatedBooking }
+            : entry
+        )
+      );
+
+      alert('Session rescheduled successfully. Tutor confirmation is required for the updated schedule.');
+    } catch (error) {
+      console.error('Failed to reschedule booking:', error);
+      alert('Failed to reschedule booking. Please try again.');
+    } finally {
+      setActiveBookingActionId(null);
+    }
+  };
+
+  const handleHideBookingForCurrentUser = async (booking: Booking) => {
+    if (!currentUser) {
+      return;
+    }
+
+    const shouldHide = confirm('Remove this session card from your dashboard view?');
+    if (!shouldHide) {
+      return;
+    }
+
+    const updates: Partial<Booking> =
+      currentUser.role === 'tutor'
+        ? { hiddenForTutor: true }
+        : { hiddenForStudent: true };
+
+    setActiveBookingActionId(booking.id);
+    try {
+      const updatedBooking = await apiService.updateBooking(booking.id, updates);
+      setBookings((prevBookings) =>
+        prevBookings.map((entry) =>
+          entry.id === booking.id
+            ? { ...entry, ...updatedBooking }
+            : entry
+        )
+      );
+    } catch (error) {
+      console.error('Failed to hide booking from dashboard:', error);
+      alert('Failed to update session visibility. Please try again.');
+    } finally {
+      setActiveBookingActionId(null);
+    }
+  };
+
+  const handleSubmitSessionRating = async (booking: Booking) => {
+    if (!currentUser || currentUser.role !== 'student') {
+      return;
+    }
+
+    const draft = sessionRatingDrafts[booking.id] || { rating: 0, feedback: '' };
+    if (!draft.rating || draft.rating < 1 || draft.rating > 5) {
+      alert('Please select a rating between 1 and 5 stars.');
+      return;
+    }
+
+    setActiveRatingActionBookingId(booking.id);
+    try {
+      const review = await apiService.createReview({
+        tutorId: booking.tutorId,
+        studentId: currentUser.id,
+        studentName: `${currentUser.firstName} ${currentUser.lastName}`.trim(),
+        sessionId: booking.id,
+        rating: draft.rating,
+        comment: draft.feedback.trim(),
+        date: new Date().toISOString().split('T')[0],
+      });
+
+      setReviews((prev) => [review, ...prev.filter((entry) => entry.id !== review.id)]);
+      setAllReviews((prev) => [review, ...prev.filter((entry) => entry.id !== review.id)]);
+      setSessionRatingDrafts((prev) => {
+        const next = { ...prev };
+        delete next[booking.id];
+        return next;
+      });
+    } catch (error) {
+      console.error('Failed to submit session rating:', error);
+      alert('Failed to submit rating. Please try again.');
+    } finally {
+      setActiveRatingActionBookingId(null);
+    }
+  };
+
   const getBookingStatusPillClassName = (status: Booking['status']) => {
     if (status === 'completed') return 'text-emerald-700 bg-emerald-50 border-emerald-200';
     if (status === 'confirmed') return 'text-indigo-700 bg-indigo-50 border-indigo-200';
@@ -2408,6 +2722,111 @@ export default function App() {
     if (paymentStatus === 'failed') return 'text-rose-700 bg-rose-50 border-rose-200';
     return 'text-amber-700 bg-amber-50 border-amber-200';
   };
+
+  const filterAndSortBookings = (
+    source: Booking[],
+    statusFilter: BookingStatusFilter,
+    timelineFilter: SessionTimelineFilter,
+    hiddenFlag: 'hiddenForTutor' | 'hiddenForStudent'
+  ): Booking[] => {
+    return source
+      .filter((booking) => !Boolean((booking as any)[hiddenFlag]))
+      .filter((booking) => (statusFilter === 'all' ? true : booking.status === statusFilter))
+      .filter((booking) => {
+        if (timelineFilter === 'all') {
+          return true;
+        }
+
+        const past = isPastSession(booking);
+        return timelineFilter === 'past' ? past : !past;
+      })
+      .sort((a, b) => getBookingSortTimestamp(b) - getBookingSortTimestamp(a));
+  };
+
+  const tutorDashboardBookings = useMemo(
+    () => bookings.filter((booking) => !booking.hiddenForTutor),
+    [bookings]
+  );
+
+  const studentDashboardBookings = useMemo(
+    () => bookings.filter((booking) => !booking.hiddenForStudent),
+    [bookings]
+  );
+
+  const filteredTutorBookings = useMemo(
+    () => filterAndSortBookings(bookings, tutorBookingStatusFilter, tutorSessionTimelineFilter, 'hiddenForTutor'),
+    [bookings, tutorBookingStatusFilter, tutorSessionTimelineFilter]
+  );
+
+  const filteredStudentBookings = useMemo(
+    () => filterAndSortBookings(bookings, studentBookingStatusFilter, studentSessionTimelineFilter, 'hiddenForStudent'),
+    [bookings, studentBookingStatusFilter, studentSessionTimelineFilter]
+  );
+
+  const studentReviewsBySessionId = useMemo(() => {
+    const map = new Map<string, Review>();
+    for (const review of reviews) {
+      const sessionId = String(review.sessionId || '').trim();
+      if (!sessionId) {
+        continue;
+      }
+      map.set(sessionId, review);
+    }
+    return map;
+  }, [reviews]);
+
+  const tutorSessionEarningAmount = Number(currentTutor?.pricePerHour || 0);
+
+  const tutorCompletedPaidBookings = useMemo(
+    () => bookings.filter((booking) => booking.status === 'completed' && (booking.paymentStatus || 'pending') === 'paid'),
+    [bookings]
+  );
+
+  const tutorTotalEarnings = useMemo(
+    () => tutorCompletedPaidBookings.reduce((sum) => sum + tutorSessionEarningAmount, 0),
+    [tutorCompletedPaidBookings, tutorSessionEarningAmount]
+  );
+
+  const tutorAverageSessionEarning = useMemo(
+    () => (tutorCompletedPaidBookings.length > 0 ? tutorTotalEarnings / tutorCompletedPaidBookings.length : 0),
+    [tutorCompletedPaidBookings.length, tutorTotalEarnings]
+  );
+
+  const tutorMonthlyEarningsSummary = useMemo(() => {
+    const monthMap = new Map<string, { sessions: number; earnings: number; timestamp: number }>();
+
+    for (const booking of tutorCompletedPaidBookings) {
+      const bookingDate = parseBookingStartDate(booking) || new Date(getBookingSortTimestamp(booking));
+      if (Number.isNaN(bookingDate.getTime())) {
+        continue;
+      }
+
+      const key = bookingDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+      const existing = monthMap.get(key) || { sessions: 0, earnings: 0, timestamp: bookingDate.getTime() };
+      monthMap.set(key, {
+        sessions: existing.sessions + 1,
+        earnings: existing.earnings + tutorSessionEarningAmount,
+        timestamp: Math.max(existing.timestamp, bookingDate.getTime()),
+      });
+    }
+
+    return Array.from(monthMap.entries())
+      .map(([month, data]) => ({ month, ...data }))
+      .sort((a, b) => b.timestamp - a.timestamp);
+  }, [tutorCompletedPaidBookings, tutorSessionEarningAmount]);
+
+  const tutorPerformanceFeedback = useMemo(
+    () => reviews.filter((review) => String(review.comment || '').trim().length > 0).slice(0, 8),
+    [reviews]
+  );
+
+  const tutorAverageRatingFromReviews = useMemo(() => {
+    if (reviews.length === 0) {
+      return currentTutor?.rating || 0;
+    }
+
+    return Number((reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length).toFixed(1));
+  }, [reviews, currentTutor?.rating]);
 
   const getCourseAccessLabel = (course: Course) =>
     course.isFree || course.price <= 0 ? 'Free' : formatLkr(course.price);
@@ -3831,6 +4250,7 @@ export default function App() {
                   </div>
                 )}
               </div>
+
             </div>
           )}
 
@@ -4235,15 +4655,9 @@ export default function App() {
                     <p className="font-black text-slate-900">Resource Management</p>
                     <p className="text-xs text-slate-500 mt-1">Upload and manage free resources</p>
                   </button>
-                  <button
-                    onClick={async () => {
-                      const feedback = await localService.getSessionFeedback('Tutoring Performance', 'Advanced');
-                      alert(`Performance Summary:\n\n${feedback}`);
-                    }}
-                    className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all"
-                  >
-                    <p className="font-black text-slate-900">Feedback & Performance</p>
-                    <p className="text-xs text-slate-500 mt-1">View learner sentiment and AI insights</p>
+                  <button onClick={() => setActiveTab('earnings')} className="text-left p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all">
+                    <p className="font-black text-slate-900">Earnings</p>
+                    <p className="text-xs text-slate-500 mt-1">Track income and monthly summaries</p>
                   </button>
                   <button
                     onClick={() => {
@@ -4266,42 +4680,64 @@ export default function App() {
               <div className="grid lg:grid-cols-4 gap-6">
                 <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
                   <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Sessions</p>
-                  <p className="text-3xl font-black text-slate-900 mt-2">{bookings.length}</p>
+                  <p className="text-3xl font-black text-slate-900 mt-2">{tutorDashboardBookings.length}</p>
                 </div>
                 <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
                   <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Paid Sessions</p>
                   <p className="text-3xl font-black text-emerald-600 mt-2">
-                    {bookings.filter((booking) => getBookingPaymentStatus(booking) === 'paid').length}
+                    {tutorDashboardBookings.filter((booking) => getBookingPaymentStatus(booking) === 'paid').length}
                   </p>
                 </div>
                 <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
-                  <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Active Sessions</p>
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Completed Sessions</p>
                   <p className="text-3xl font-black text-indigo-600 mt-2">
-                    {bookings.filter((booking) => booking.status === 'confirmed').length}
+                    {tutorCompletedPaidBookings.length}
                   </p>
                 </div>
                 <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
-                  <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Reviews</p>
-                  <p className="text-3xl font-black text-slate-900 mt-2">{currentTutorReviewCount}</p>
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Earnings</p>
+                  <p className="text-3xl font-black text-slate-900 mt-2">{formatLkr(tutorTotalEarnings)}</p>
                 </div>
               </div>
 
               <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
                   <h3 className="font-black text-2xl text-slate-900">Session Management</h3>
-                  <span className="text-xs font-black uppercase tracking-widest px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
-                    {bookings.length} booked sessions
-                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-black uppercase tracking-widest px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
+                      {filteredTutorBookings.length} sessions shown
+                    </span>
+                    <select
+                      value={tutorBookingStatusFilter}
+                      onChange={(event) => setTutorBookingStatusFilter(event.target.value as BookingStatusFilter)}
+                      className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
+                    >
+                      <option value="all">All</option>
+                      <option value="pending">Pending</option>
+                      <option value="confirmed">Confirmed</option>
+                      <option value="completed">Completed</option>
+                      <option value="cancelled">Cancelled</option>
+                    </select>
+                    <select
+                      value={tutorSessionTimelineFilter}
+                      onChange={(event) => setTutorSessionTimelineFilter(event.target.value as SessionTimelineFilter)}
+                      className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
+                    >
+                      <option value="all">All Sessions</option>
+                      <option value="upcoming">Upcoming Sessions</option>
+                      <option value="past">Past Sessions</option>
+                    </select>
+                  </div>
                 </div>
 
-                {bookings.length === 0 ? (
+                {filteredTutorBookings.length === 0 ? (
                   <div className="text-center py-16 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
                     <Clock className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                    <p className="font-bold text-slate-500">No booked sessions yet.</p>
+                    <p className="font-bold text-slate-500">No sessions match your filters.</p>
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {bookings.map((booking) => {
+                    {filteredTutorBookings.map((booking) => {
                       const isLoading = activeBookingActionId === booking.id;
                       const paymentStatus = getBookingPaymentStatus(booking);
                       const isPaidBooking = paymentStatus === 'paid';
@@ -4338,10 +4774,7 @@ export default function App() {
                             </div>
                             <div className="bg-white rounded-xl border border-slate-200 p-3 xl:col-span-2">
                               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Student</p>
-                              <p className="font-bold text-slate-800 mt-1">
-                                {getBookingStudentName(booking)}
-                                <span className="font-semibold text-slate-500"> • ID: {booking.studentId}</span>
-                              </p>
+                              <p className="font-bold text-slate-800 mt-1">{getBookingStudentName(booking)}</p>
                             </div>
                             <div className="bg-white rounded-xl border border-slate-200 p-3">
                               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Meeting Link</p>
@@ -4400,12 +4833,67 @@ export default function App() {
                                 Start Meeting
                               </button>
                             )}
+                            <button
+                              type="button"
+                              disabled={isLoading}
+                              onClick={() => handleHideBookingForCurrentUser(booking)}
+                              className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+                            >
+                              Close Session
+                            </button>
                           </div>
                         </div>
                       );
                     })}
                   </div>
                 )}
+              </div>
+
+              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="font-black text-2xl text-slate-900">Performance</h3>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('earnings')}
+                    className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-indigo-50 text-indigo-700 border border-indigo-100 hover:bg-indigo-100"
+                  >
+                    Open Earnings
+                  </button>
+                </div>
+
+                <div className="grid sm:grid-cols-3 gap-4 mb-6">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Sessions Completed</p>
+                    <p className="text-2xl font-black text-emerald-600 mt-2">{tutorCompletedPaidBookings.length}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Average Rating</p>
+                    <p className="text-2xl font-black text-indigo-600 mt-2">{tutorAverageRatingFromReviews.toFixed(1)}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Total Earnings</p>
+                    <p className="text-2xl font-black text-slate-900 mt-2">{formatLkr(tutorTotalEarnings)}</p>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <h4 className="text-sm font-black uppercase tracking-widest text-slate-500">Recent Feedback</h4>
+                  {tutorPerformanceFeedback.length === 0 ? (
+                    <p className="text-sm font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+                      No written feedback yet.
+                    </p>
+                  ) : (
+                    tutorPerformanceFeedback.map((review) => (
+                      <div key={review.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <p className="text-sm font-black text-slate-900">{review.studentName}</p>
+                          <span className="text-xs font-black text-amber-600">{review.rating.toFixed(1)} / 5</span>
+                        </div>
+                        <p className="text-sm text-slate-600">{review.comment}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -4434,12 +4922,12 @@ export default function App() {
                 <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4 mt-8">
                   <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
                     <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Booked Sessions</p>
-                    <p className="text-3xl font-black text-slate-900 mt-2">{bookings.length}</p>
+                    <p className="text-3xl font-black text-slate-900 mt-2">{studentDashboardBookings.length}</p>
                   </div>
                   <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
                     <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Ready to Join</p>
                     <p className="text-3xl font-black text-emerald-600 mt-2">
-                      {bookings.filter((booking) => booking.status === 'confirmed' && getBookingPaymentStatus(booking) === 'paid' && isValidMeetingLink(booking.meetingLink)).length}
+                      {studentDashboardBookings.filter((booking) => isValidMeetingLink(booking.meetingLink)).length}
                     </p>
                   </div>
                   <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
@@ -4463,24 +4951,52 @@ export default function App() {
 
               <div className="grid xl:grid-cols-5 gap-8">
                 <div className="xl:col-span-3 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                  <div className="flex items-center justify-between mb-6">
-                    <h3 className="font-black text-2xl text-slate-900">My Sessions</h3>
-                    <Calendar className="w-5 h-5 text-slate-400" />
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-black text-2xl text-slate-900">My Sessions</h3>
+                      <Calendar className="w-5 h-5 text-slate-400" />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <select
+                        value={studentBookingStatusFilter}
+                        onChange={(event) => setStudentBookingStatusFilter(event.target.value as BookingStatusFilter)}
+                        className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
+                      >
+                        <option value="all">All</option>
+                        <option value="pending">Pending</option>
+                        <option value="confirmed">Confirmed</option>
+                        <option value="completed">Completed</option>
+                        <option value="cancelled">Cancelled</option>
+                      </select>
+                      <select
+                        value={studentSessionTimelineFilter}
+                        onChange={(event) => setStudentSessionTimelineFilter(event.target.value as SessionTimelineFilter)}
+                        className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
+                      >
+                        <option value="all">All Sessions</option>
+                        <option value="upcoming">Upcoming Sessions</option>
+                        <option value="past">Past Sessions</option>
+                      </select>
+                    </div>
                   </div>
 
-                  {bookings.length === 0 ? (
+                  {filteredStudentBookings.length === 0 ? (
                     <div className="text-center py-16 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
                       <Clock className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                      <p className="font-bold text-slate-500">No sessions booked yet.</p>
+                      <p className="font-bold text-slate-500">No sessions match your filters.</p>
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {bookings.map((booking) => {
+                      {filteredStudentBookings.map((booking) => {
                         const isLoading = activeBookingActionId === booking.id;
+                        const isSubmittingRating = activeRatingActionBookingId === booking.id;
                         const paymentStatus = getBookingPaymentStatus(booking);
-                        const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed';
+                        const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed' && canStudentManageBeforeStart(booking);
+                        const canReschedule = booking.status !== 'cancelled' && booking.status !== 'completed' && canStudentManageBeforeStart(booking);
                         const hasValidMeetingLink = isValidMeetingLink(booking.meetingLink);
-                        const canJoinMeeting = booking.status === 'confirmed' && paymentStatus === 'paid' && hasValidMeetingLink;
+                        const canJoinMeeting = hasValidMeetingLink && booking.status !== 'cancelled';
+                        const existingReview = studentReviewsBySessionId.get(booking.id);
+                        const ratingDraft = sessionRatingDrafts[booking.id] || { rating: 0, feedback: '' };
 
                         return (
                           <div key={booking.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-5 space-y-4">
@@ -4510,6 +5026,12 @@ export default function App() {
                               </p>
                             )}
 
+                            {!canStudentManageBeforeStart(booking) && booking.status !== 'cancelled' && booking.status !== 'completed' && (
+                              <p className="text-[11px] font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg px-3 py-2">
+                                Session has started or passed. Reschedule/cancel actions are now disabled.
+                              </p>
+                            )}
+
                             <div className="flex flex-wrap gap-2">
                               {canCancel && (
                                 <button
@@ -4519,6 +5041,17 @@ export default function App() {
                                   className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
                                 >
                                   Cancel Booking
+                                </button>
+                              )}
+
+                              {canReschedule && (
+                                <button
+                                  type="button"
+                                  disabled={isLoading}
+                                  onClick={() => handleStudentRescheduleBooking(booking)}
+                                  className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
+                                >
+                                  Reschedule
                                 </button>
                               )}
 
@@ -4540,7 +5073,84 @@ export default function App() {
                                   Join Meeting
                                 </button>
                               )}
+
+                              <button
+                                type="button"
+                                disabled={isLoading}
+                                onClick={() => handleHideBookingForCurrentUser(booking)}
+                                className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+                              >
+                                Close Session
+                              </button>
                             </div>
+
+                            {booking.status === 'completed' && (
+                              <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+                                <p className="text-xs font-black uppercase tracking-widest text-slate-500">Rate This Session</p>
+
+                                {existingReview ? (
+                                  <div className="space-y-2">
+                                    <div className="flex items-center gap-1">
+                                      {[1, 2, 3, 4, 5].map((value) => (
+                                        <Star
+                                          key={value}
+                                          className={`w-4 h-4 ${value <= existingReview.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-300'}`}
+                                        />
+                                      ))}
+                                    </div>
+                                    <p className="text-sm text-slate-700">{existingReview.comment || 'Rating submitted.'}</p>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <div className="flex items-center gap-1">
+                                      {[1, 2, 3, 4, 5].map((value) => (
+                                        <button
+                                          key={value}
+                                          type="button"
+                                          onClick={() =>
+                                            setSessionRatingDrafts((prev) => ({
+                                              ...prev,
+                                              [booking.id]: {
+                                                rating: value,
+                                                feedback: prev[booking.id]?.feedback || '',
+                                              },
+                                            }))
+                                          }
+                                          className="p-0.5"
+                                        >
+                                          <Star
+                                            className={`w-5 h-5 ${value <= ratingDraft.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-300 hover:text-amber-300'}`}
+                                          />
+                                        </button>
+                                      ))}
+                                    </div>
+                                    <textarea
+                                      value={ratingDraft.feedback}
+                                      onChange={(event) =>
+                                        setSessionRatingDrafts((prev) => ({
+                                          ...prev,
+                                          [booking.id]: {
+                                            rating: prev[booking.id]?.rating || 0,
+                                            feedback: event.target.value,
+                                          },
+                                        }))
+                                      }
+                                      placeholder="Optional feedback"
+                                      rows={3}
+                                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={isSubmittingRating || ratingDraft.rating < 1}
+                                      onClick={() => handleSubmitSessionRating(booking)}
+                                      className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
+                                    >
+                                      {isSubmittingRating ? 'Submitting...' : 'Submit Rating'}
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -4612,6 +5222,94 @@ export default function App() {
                           </div>
                         );
                       })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'earnings' && currentUser && isTutor && (
+            <div className="space-y-8">
+              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                  <div>
+                    <h2 className="text-3xl font-black text-slate-900 tracking-tight">Earnings</h2>
+                    <p className="text-slate-500 mt-1">Completed and paid sessions contribute to your earnings.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('dashboard')}
+                    className="px-5 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 font-bold hover:bg-slate-50"
+                  >
+                    Back to Dashboard
+                  </button>
+                </div>
+
+                <div className="grid sm:grid-cols-3 gap-4 mt-6">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Total Earnings</p>
+                    <p className="text-2xl font-black text-slate-900 mt-2">{formatLkr(tutorTotalEarnings)}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Earnings / Session</p>
+                    <p className="text-2xl font-black text-indigo-600 mt-2">{formatLkr(tutorAverageSessionEarning)}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Completed Sessions</p>
+                    <p className="text-2xl font-black text-emerald-600 mt-2">{tutorCompletedPaidBookings.length}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid xl:grid-cols-3 gap-8">
+                <div className="xl:col-span-1 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                  <h3 className="font-black text-2xl text-slate-900 mb-5">Monthly Summary</h3>
+                  {tutorMonthlyEarningsSummary.length === 0 ? (
+                    <p className="text-sm font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+                      No monthly earnings yet.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {tutorMonthlyEarningsSummary.map((entry) => (
+                        <div key={entry.month} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-black text-slate-900">{entry.month}</p>
+                            <p className="text-sm font-black text-emerald-700">{formatLkr(entry.earnings)}</p>
+                          </div>
+                          <p className="text-xs font-semibold text-slate-500 mt-1">{entry.sessions} completed session{entry.sessions > 1 ? 's' : ''}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="xl:col-span-2 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                  <h3 className="font-black text-2xl text-slate-900 mb-5">Earnings Per Session</h3>
+                  {tutorCompletedPaidBookings.length === 0 ? (
+                    <p className="text-sm font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+                      No completed paid sessions available.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {[...tutorCompletedPaidBookings]
+                        .sort((a, b) => getBookingSortTimestamp(b) - getBookingSortTimestamp(a))
+                        .map((booking) => (
+                          <div key={booking.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                              <div>
+                                <p className="text-sm font-black text-slate-900">{booking.subject} Session</p>
+                                <p className="text-xs font-semibold text-slate-500 mt-1">
+                                  {booking.date}
+                                  {booking.timeSlot ? ` • ${booking.timeSlot}` : ''}
+                                  {' • '}
+                                  {getBookingStudentName(booking)}
+                                </p>
+                              </div>
+                              <p className="text-sm font-black text-emerald-700">{formatLkr(tutorSessionEarningAmount)}</p>
+                            </div>
+                          </div>
+                        ))}
                     </div>
                   )}
                 </div>

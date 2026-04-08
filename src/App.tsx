@@ -415,6 +415,7 @@ export default function App() {
   const [studentSessionTimelineFilter, setStudentSessionTimelineFilter] = useState<SessionTimelineFilter>('all');
   const [sessionRatingDrafts, setSessionRatingDrafts] = useState<Record<string, SessionRatingDraft>>({});
   const [activeRatingActionBookingId, setActiveRatingActionBookingId] = useState<string | null>(null);
+  const [bookingCancelNotice, setBookingCancelNotice] = useState<string | null>(null);
 
   // Courses browsing state
   const [courseSearchQuery, setCourseSearchQuery] = useState('');
@@ -495,6 +496,20 @@ export default function App() {
       setAuthMode('login');
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!bookingCancelNotice) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setBookingCancelNotice(null);
+    }, 6500);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [bookingCancelNotice]);
 
   // Cycle through subjects for live session animation
   const DISPLAY_SUBJECTS = ['Science', 'Technology', 'Engineering', 'Mathematics', 'ICT'];
@@ -2328,6 +2343,15 @@ export default function App() {
     return 'Student';
   };
 
+  const getBookingTutorName = (booking: Booking): string => {
+    const matchedTutor = tutors.find((tutor) => tutor.id === booking.tutorId);
+    if (matchedTutor) {
+      return getTutorDisplayName(matchedTutor);
+    }
+
+    return 'Tutor';
+  };
+
   const parseBookingStartDate = (booking: Booking): Date | null => {
     const rawDate = String(booking.date || '').trim();
     if (!rawDate) {
@@ -2523,7 +2547,12 @@ export default function App() {
             : entry
         )
       );
-      alert('Booking cancelled successfully.');
+
+      if ((booking.paymentStatus || 'pending') === 'paid') {
+        setBookingCancelNotice('Booking cancelled successfully. Your payment will be returned to your bank account within 3-5 business days.');
+      } else {
+        setBookingCancelNotice('Booking cancelled successfully.');
+      }
     } catch (error) {
       console.error('Failed to cancel booking:', error);
       alert('Failed to cancel booking. Please try again.');
@@ -2532,14 +2561,9 @@ export default function App() {
     }
   };
 
-  const handleStudentRescheduleBooking = async (booking: Booking) => {
-    if (!currentUser || currentUser.role !== 'student') {
-      alert('Only student accounts can reschedule booked sessions.');
-      return;
-    }
-
-    if (booking.studentId !== currentUser.id) {
-      alert('You can only reschedule your own bookings.');
+  const handleTutorRescheduleBooking = async (booking: Booking) => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      alert('Only tutor accounts can reschedule sessions.');
       return;
     }
 
@@ -2609,30 +2633,12 @@ export default function App() {
       day: 'numeric',
     });
 
-    setActiveBookingActionId(booking.id);
-    try {
-      const updatedBooking = await apiService.updateBooking(booking.id, {
-        date: formattedDate,
-        timeSlot: `${startLabel} - ${nextEndLabel}`,
-        status: 'pending',
-        meetingLink: '',
-      });
+    await updateTutorBooking(booking.id, {
+      date: formattedDate,
+      timeSlot: `${startLabel} - ${nextEndLabel}`,
+    });
 
-      setBookings((prevBookings) =>
-        prevBookings.map((entry) =>
-          entry.id === booking.id
-            ? { ...entry, ...updatedBooking }
-            : entry
-        )
-      );
-
-      alert('Session rescheduled successfully. Tutor confirmation is required for the updated schedule.');
-    } catch (error) {
-      console.error('Failed to reschedule booking:', error);
-      alert('Failed to reschedule booking. Please try again.');
-    } finally {
-      setActiveBookingActionId(null);
-    }
+    alert('Session rescheduled successfully.');
   };
 
   const handleHideBookingForCurrentUser = async (booking: Booking) => {
@@ -4703,30 +4709,36 @@ export default function App() {
               <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
                   <h3 className="font-black text-2xl text-slate-900">Session Management</h3>
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap items-end gap-3">
                     <span className="text-xs font-black uppercase tracking-widest px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
                       {filteredTutorBookings.length} sessions shown
                     </span>
-                    <select
-                      value={tutorBookingStatusFilter}
-                      onChange={(event) => setTutorBookingStatusFilter(event.target.value as BookingStatusFilter)}
-                      className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
-                    >
-                      <option value="all">All</option>
-                      <option value="pending">Pending</option>
-                      <option value="confirmed">Confirmed</option>
-                      <option value="completed">Completed</option>
-                      <option value="cancelled">Cancelled</option>
-                    </select>
-                    <select
-                      value={tutorSessionTimelineFilter}
-                      onChange={(event) => setTutorSessionTimelineFilter(event.target.value as SessionTimelineFilter)}
-                      className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
-                    >
-                      <option value="all">All Sessions</option>
-                      <option value="upcoming">Upcoming Sessions</option>
-                      <option value="past">Past Sessions</option>
-                    </select>
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Status</span>
+                      <select
+                        value={tutorBookingStatusFilter}
+                        onChange={(event) => setTutorBookingStatusFilter(event.target.value as BookingStatusFilter)}
+                        className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
+                      >
+                        <option value="all">All Statuses</option>
+                        <option value="pending">Pending</option>
+                        <option value="confirmed">Confirmed</option>
+                        <option value="completed">Completed</option>
+                        <option value="cancelled">Cancelled</option>
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Time</span>
+                      <select
+                        value={tutorSessionTimelineFilter}
+                        onChange={(event) => setTutorSessionTimelineFilter(event.target.value as SessionTimelineFilter)}
+                        className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
+                      >
+                        <option value="all">Any Time</option>
+                        <option value="upcoming">Upcoming</option>
+                        <option value="past">Past</option>
+                      </select>
+                    </label>
                   </div>
                 </div>
 
@@ -4743,11 +4755,22 @@ export default function App() {
                       const isPaidBooking = paymentStatus === 'paid';
                       const canComplete = booking.status === 'confirmed' && isPaidBooking;
                       const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed';
+                      const canReschedule = booking.status !== 'cancelled' && booking.status !== 'completed' && canStudentManageBeforeStart(booking);
                       const canSubmitMeetingLink = isPaidBooking && booking.status !== 'cancelled' && booking.status !== 'completed';
                       const canStartMeeting = booking.status === 'confirmed' && isPaidBooking && isValidMeetingLink(booking.meetingLink);
 
                       return (
-                        <div key={booking.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-5 space-y-4">
+                        <div key={booking.id} className="relative rounded-3xl border border-slate-200 bg-slate-50 p-5 pr-14 space-y-4">
+                          <button
+                            type="button"
+                            disabled={isLoading}
+                            onClick={() => handleHideBookingForCurrentUser(booking)}
+                            className="absolute right-4 top-4 h-8 w-8 rounded-full border border-slate-300 bg-white text-slate-500 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-60 flex items-center justify-center"
+                            aria-label="Hide session card"
+                            title="Hide session card"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
                           <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
                             <div>
                               <p className="text-lg font-black text-slate-900">{booking.subject} Session</p>
@@ -4809,6 +4832,14 @@ export default function App() {
                             </button>
                             <button
                               type="button"
+                              disabled={isLoading || !canReschedule}
+                              onClick={() => handleTutorRescheduleBooking(booking)}
+                              className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
+                            >
+                              Reschedule
+                            </button>
+                            <button
+                              type="button"
                               disabled={isLoading || !canSubmitMeetingLink}
                               onClick={() => handleTutorMeetingLinkUpdate(booking)}
                               className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-60"
@@ -4833,14 +4864,6 @@ export default function App() {
                                 Start Meeting
                               </button>
                             )}
-                            <button
-                              type="button"
-                              disabled={isLoading}
-                              onClick={() => handleHideBookingForCurrentUser(booking)}
-                              className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-60"
-                            >
-                              Close Session
-                            </button>
                           </div>
                         </div>
                       );
@@ -4956,27 +4979,36 @@ export default function App() {
                       <h3 className="font-black text-2xl text-slate-900">My Sessions</h3>
                       <Calendar className="w-5 h-5 text-slate-400" />
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      <select
-                        value={studentBookingStatusFilter}
-                        onChange={(event) => setStudentBookingStatusFilter(event.target.value as BookingStatusFilter)}
-                        className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
-                      >
-                        <option value="all">All</option>
-                        <option value="pending">Pending</option>
-                        <option value="confirmed">Confirmed</option>
-                        <option value="completed">Completed</option>
-                        <option value="cancelled">Cancelled</option>
-                      </select>
-                      <select
-                        value={studentSessionTimelineFilter}
-                        onChange={(event) => setStudentSessionTimelineFilter(event.target.value as SessionTimelineFilter)}
-                        className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
-                      >
-                        <option value="all">All Sessions</option>
-                        <option value="upcoming">Upcoming Sessions</option>
-                        <option value="past">Past Sessions</option>
-                      </select>
+                    <div className="flex flex-wrap items-end gap-3">
+                      <span className="text-xs font-black uppercase tracking-widest px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
+                        {filteredStudentBookings.length} sessions shown
+                      </span>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Status</span>
+                        <select
+                          value={studentBookingStatusFilter}
+                          onChange={(event) => setStudentBookingStatusFilter(event.target.value as BookingStatusFilter)}
+                          className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
+                        >
+                          <option value="all">All Statuses</option>
+                          <option value="pending">Pending</option>
+                          <option value="confirmed">Confirmed</option>
+                          <option value="completed">Completed</option>
+                          <option value="cancelled">Cancelled</option>
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Time</span>
+                        <select
+                          value={studentSessionTimelineFilter}
+                          onChange={(event) => setStudentSessionTimelineFilter(event.target.value as SessionTimelineFilter)}
+                          className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
+                        >
+                          <option value="all">Any Time</option>
+                          <option value="upcoming">Upcoming</option>
+                          <option value="past">Past</option>
+                        </select>
+                      </label>
                     </div>
                   </div>
 
@@ -4992,22 +5024,31 @@ export default function App() {
                         const isSubmittingRating = activeRatingActionBookingId === booking.id;
                         const paymentStatus = getBookingPaymentStatus(booking);
                         const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed' && canStudentManageBeforeStart(booking);
-                        const canReschedule = booking.status !== 'cancelled' && booking.status !== 'completed' && canStudentManageBeforeStart(booking);
                         const hasValidMeetingLink = isValidMeetingLink(booking.meetingLink);
                         const canJoinMeeting = hasValidMeetingLink && booking.status !== 'cancelled';
                         const existingReview = studentReviewsBySessionId.get(booking.id);
                         const ratingDraft = sessionRatingDrafts[booking.id] || { rating: 0, feedback: '' };
 
                         return (
-                          <div key={booking.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-5 space-y-4">
+                          <div key={booking.id} className="relative rounded-3xl border border-slate-200 bg-slate-50 p-5 pr-14 space-y-4">
+                            <button
+                              type="button"
+                              disabled={isLoading}
+                              onClick={() => handleHideBookingForCurrentUser(booking)}
+                              className="absolute right-4 top-4 h-8 w-8 rounded-full border border-slate-300 bg-white text-slate-500 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-60 flex items-center justify-center"
+                              aria-label="Hide session card"
+                              title="Hide session card"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
                             <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
                               <div>
                                 <p className="text-lg font-black text-slate-900">{booking.subject} Session</p>
                                 <p className="text-xs text-slate-500 font-semibold mt-1">
                                   {booking.date}
                                   {booking.timeSlot ? ` • ${booking.timeSlot}` : ''}
-                                  {' • Tutor ID: '}
-                                  {booking.tutorId}
+                                  {' • Tutor: '}
+                                  {getBookingTutorName(booking)}
                                 </p>
                               </div>
                               <div className="flex flex-wrap gap-2">
@@ -5028,7 +5069,7 @@ export default function App() {
 
                             {!canStudentManageBeforeStart(booking) && booking.status !== 'cancelled' && booking.status !== 'completed' && (
                               <p className="text-[11px] font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg px-3 py-2">
-                                Session has started or passed. Reschedule/cancel actions are now disabled.
+                                Session has started or passed. Cancel action is now disabled.
                               </p>
                             )}
 
@@ -5041,17 +5082,6 @@ export default function App() {
                                   className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
                                 >
                                   Cancel Booking
-                                </button>
-                              )}
-
-                              {canReschedule && (
-                                <button
-                                  type="button"
-                                  disabled={isLoading}
-                                  onClick={() => handleStudentRescheduleBooking(booking)}
-                                  className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
-                                >
-                                  Reschedule
                                 </button>
                               )}
 
@@ -5073,15 +5103,6 @@ export default function App() {
                                   Join Meeting
                                 </button>
                               )}
-
-                              <button
-                                type="button"
-                                disabled={isLoading}
-                                onClick={() => handleHideBookingForCurrentUser(booking)}
-                                className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-60"
-                              >
-                                Close Session
-                              </button>
                             </div>
 
                             {booking.status === 'completed' && (
@@ -6225,6 +6246,49 @@ export default function App() {
         courseTitle={certificateModalData?.courseTitle || ''}
         studentName={`${currentUser?.firstName || ''} ${currentUser?.lastName || ''}`.trim()}
       />
+
+      <AnimatePresence>
+        {bookingCancelNotice && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 z-[360] bg-black/45 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setBookingCancelNotice(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 16 }}
+              transition={{ type: 'spring', damping: 24, stiffness: 320 }}
+              className="w-full max-w-md rounded-3xl border border-emerald-200 bg-white shadow-2xl shadow-emerald-100/60 overflow-hidden"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="p-6">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                  <CheckCircle className="w-6 h-6" />
+                </div>
+
+                <div className="mt-4 space-y-2">
+                  <p className="text-xl font-black text-slate-900">Booking Cancelled</p>
+                  <p className="text-sm text-slate-600 leading-relaxed">{bookingCancelNotice}</p>
+                </div>
+
+                <div className="mt-6 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBookingCancelNotice(null)}
+                    className="px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50 transition-colors"
+                  >
+                    OK
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

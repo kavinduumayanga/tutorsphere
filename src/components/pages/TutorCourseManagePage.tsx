@@ -24,8 +24,14 @@ import {
   Sparkles,
   Settings2,
   Link as LinkIcon,
+  TicketPercent,
+  ToggleLeft,
+  ToggleRight,
+  Calendar,
+  Hash,
+  Percent,
 } from 'lucide-react';
-import { Course, CourseEnrollment, Tutor } from '../../types';
+import { Course, CourseCoupon, CourseEnrollment, Tutor } from '../../types';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { EmptyState } from '../common/EmptyState';
 import { SkeletonCard, SkeletonGrid } from '../common/SkeletonCard';
@@ -91,6 +97,34 @@ export interface TutorCourseManagePageProps {
   onRemoveCourseModuleResource: (moduleIndex: number, resourceIndex: number) => void;
   onAddUrlModuleResource: (moduleIndex: number) => void;
   getEditableModuleKey: (module: EditableCourseModule, moduleIndex: number) => string;
+  onGetCourseCoupons: (courseId: string) => Promise<CourseCoupon[]>;
+  onCreateCourseCoupon: (
+    courseId: string,
+    payload: {
+      code: string;
+      discountPercentage: number;
+      isActive?: boolean;
+      expiresAt?: string;
+      usageLimit?: number;
+    }
+  ) => Promise<CourseCoupon>;
+  onUpdateCourseCoupon: (
+    courseId: string,
+    couponId: string,
+    payload: {
+      code?: string;
+      discountPercentage?: number;
+      isActive?: boolean;
+      expiresAt?: string | null;
+      usageLimit?: number | null;
+    }
+  ) => Promise<CourseCoupon>;
+  onToggleCourseCouponStatus: (
+    courseId: string,
+    couponId: string,
+    isActive: boolean
+  ) => Promise<CourseCoupon>;
+  onDeleteCourseCoupon: (courseId: string, couponId: string) => Promise<void>;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -129,6 +163,49 @@ const LEVEL_COLORS: Record<string, string> = {
 };
 
 const ITEMS_PER_PAGE = 6;
+
+type CouponFormData = {
+  code: string;
+  discountPercentage: string;
+  expiresAt: string;
+  usageLimit: string;
+  isActive: boolean;
+};
+
+const INITIAL_COUPON_FORM: CouponFormData = {
+  code: '',
+  discountPercentage: '',
+  expiresAt: '',
+  usageLimit: '',
+  isActive: true,
+};
+
+const toDateTimeLocalInput = (value?: string): string => {
+  if (!value) {
+    return '';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  const timezoneOffset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - timezoneOffset).toISOString().slice(0, 16);
+};
+
+const formatDateTimeLabel = (value?: string): string => {
+  if (!value) {
+    return 'No expiry';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return 'Invalid date';
+  }
+
+  return date.toLocaleString();
+};
 
 // ─── Stat Card ────────────────────────────────────────────────────────────────
 
@@ -672,7 +749,8 @@ const CourseCard: React.FC<{
   onEdit: () => void;
   onDelete: () => void;
   onView: () => void;
-}> = ({ course, enrolledCount, onEdit, onDelete, onView }) => {
+  onManageCoupons: () => void;
+}> = ({ course, enrolledCount, onEdit, onDelete, onView, onManageCoupons }) => {
   const level = getCourseLevel(course.modules.length);
   const rating = getCourseRating(course.id, enrolledCount);
   const isFreeCourse = course.isFree || course.price <= 0;
@@ -770,6 +848,18 @@ const CourseCard: React.FC<{
             View
           </button>
           <button
+            onClick={onManageCoupons}
+            disabled={isFreeCourse}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-colors ${
+              isFreeCourse
+                ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+            }`}
+          >
+            <TicketPercent className="w-3.5 h-3.5" />
+            Coupons
+          </button>
+          <button
             onClick={onDelete}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-50 text-rose-600 text-xs font-bold hover:bg-rose-100 transition-colors ml-auto"
           >
@@ -812,6 +902,11 @@ export const TutorCourseManagePage: React.FC<TutorCourseManagePageProps> = ({
   onRemoveCourseModuleResource,
   onAddUrlModuleResource,
   getEditableModuleKey,
+  onGetCourseCoupons,
+  onCreateCourseCoupon,
+  onUpdateCourseCoupon,
+  onToggleCourseCouponStatus,
+  onDeleteCourseCoupon,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [subjectFilter, setSubjectFilter] = useState('All');
@@ -820,6 +915,15 @@ export const TutorCourseManagePage: React.FC<TutorCourseManagePageProps> = ({
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
   const [previewCourse, setPreviewCourse] = useState<Course | null>(null);
+  const [couponCourse, setCouponCourse] = useState<Course | null>(null);
+  const [courseCoupons, setCourseCoupons] = useState<CourseCoupon[]>([]);
+  const [couponForm, setCouponForm] = useState<CouponFormData>(INITIAL_COUPON_FORM);
+  const [editingCouponId, setEditingCouponId] = useState<string | null>(null);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [couponSuccess, setCouponSuccess] = useState<string | null>(null);
+  const [isLoadingCoupons, setIsLoadingCoupons] = useState(false);
+  const [isSavingCoupon, setIsSavingCoupon] = useState(false);
+  const [couponDeleteTarget, setCouponDeleteTarget] = useState<CourseCoupon | null>(null);
 
   // Tutor's own courses
   const myCourses = useMemo(
@@ -926,6 +1030,178 @@ export const TutorCourseManagePage: React.FC<TutorCourseManagePageProps> = ({
       if (didDelete) {
         setDeleteTarget(null);
       }
+    }
+  };
+
+  const resetCouponForm = () => {
+    setCouponForm(INITIAL_COUPON_FORM);
+    setEditingCouponId(null);
+  };
+
+  const loadCourseCoupons = async (courseId: string) => {
+    setCouponError(null);
+    setIsLoadingCoupons(true);
+    try {
+      const coupons = await onGetCourseCoupons(courseId);
+      setCourseCoupons(coupons);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load coupons.';
+      setCouponError(message);
+      setCourseCoupons([]);
+    } finally {
+      setIsLoadingCoupons(false);
+    }
+  };
+
+  const openCouponManager = async (course: Course) => {
+    if (course.isFree || course.price <= 0) {
+      return;
+    }
+
+    setCouponCourse(course);
+    setCouponSuccess(null);
+    setCouponError(null);
+    setCouponDeleteTarget(null);
+    resetCouponForm();
+    await loadCourseCoupons(course.id);
+  };
+
+  const closeCouponManager = () => {
+    setCouponCourse(null);
+    setCourseCoupons([]);
+    setCouponError(null);
+    setCouponSuccess(null);
+    setCouponDeleteTarget(null);
+    resetCouponForm();
+  };
+
+  const startEditCoupon = (coupon: CourseCoupon) => {
+    setCouponError(null);
+    setCouponSuccess(null);
+    setEditingCouponId(coupon.id);
+    setCouponForm({
+      code: coupon.code,
+      discountPercentage: String(coupon.discountPercentage),
+      expiresAt: toDateTimeLocalInput(coupon.expiresAt),
+      usageLimit: coupon.usageLimit ? String(coupon.usageLimit) : '',
+      isActive: coupon.isActive,
+    });
+  };
+
+  const handleSaveCoupon = async (event: React.FormEvent) => {
+    event.preventDefault();
+
+    if (!couponCourse) {
+      return;
+    }
+
+    const code = couponForm.code.trim().toUpperCase();
+    const discountPercentage = Number(couponForm.discountPercentage);
+    const usageLimitValue = couponForm.usageLimit.trim();
+    const usageLimit = usageLimitValue ? Number(usageLimitValue) : undefined;
+
+    if (!code) {
+      setCouponError('Coupon code is required.');
+      return;
+    }
+
+    if (!Number.isFinite(discountPercentage) || discountPercentage < 1 || discountPercentage > 100) {
+      setCouponError('Discount percentage must be between 1 and 100.');
+      return;
+    }
+
+    if (usageLimitValue && (!Number.isInteger(usageLimit) || Number(usageLimit) <= 0)) {
+      setCouponError('Usage limit must be a positive whole number.');
+      return;
+    }
+
+    const expiresAt = couponForm.expiresAt
+      ? new Date(couponForm.expiresAt).toISOString()
+      : undefined;
+
+    setCouponError(null);
+    setCouponSuccess(null);
+    setIsSavingCoupon(true);
+
+    try {
+      if (editingCouponId) {
+        const updatedCoupon = await onUpdateCourseCoupon(couponCourse.id, editingCouponId, {
+          code,
+          discountPercentage,
+          isActive: couponForm.isActive,
+          expiresAt: expiresAt ?? null,
+          usageLimit: usageLimit ?? null,
+        });
+
+        setCourseCoupons((prev) => prev.map((coupon) => (
+          coupon.id === updatedCoupon.id ? updatedCoupon : coupon
+        )));
+        setCouponSuccess(`Coupon ${updatedCoupon.code} updated.`);
+      } else {
+        const createdCoupon = await onCreateCourseCoupon(couponCourse.id, {
+          code,
+          discountPercentage,
+          isActive: couponForm.isActive,
+          expiresAt,
+          usageLimit,
+        });
+
+        setCourseCoupons((prev) => [createdCoupon, ...prev]);
+        setCouponSuccess(`Coupon ${createdCoupon.code} created.`);
+      }
+
+      resetCouponForm();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save coupon.';
+      setCouponError(message);
+    } finally {
+      setIsSavingCoupon(false);
+    }
+  };
+
+  const handleToggleCouponStatus = async (coupon: CourseCoupon) => {
+    if (!couponCourse) {
+      return;
+    }
+
+    setCouponError(null);
+    setCouponSuccess(null);
+
+    try {
+      const updatedCoupon = await onToggleCourseCouponStatus(
+        couponCourse.id,
+        coupon.id,
+        !coupon.isActive
+      );
+      setCourseCoupons((prev) => prev.map((item) => (
+        item.id === updatedCoupon.id ? updatedCoupon : item
+      )));
+      setCouponSuccess(`Coupon ${updatedCoupon.code} ${updatedCoupon.isActive ? 'activated' : 'paused'}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update coupon status.';
+      setCouponError(message);
+    }
+  };
+
+  const handleConfirmCouponDelete = async () => {
+    if (!couponCourse || !couponDeleteTarget) {
+      return;
+    }
+
+    setCouponError(null);
+    setCouponSuccess(null);
+
+    try {
+      await onDeleteCourseCoupon(couponCourse.id, couponDeleteTarget.id);
+      setCourseCoupons((prev) => prev.filter((coupon) => coupon.id !== couponDeleteTarget.id));
+      setCouponSuccess(`Coupon ${couponDeleteTarget.code} deleted.`);
+      setCouponDeleteTarget(null);
+      if (editingCouponId === couponDeleteTarget.id) {
+        resetCouponForm();
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete coupon.';
+      setCouponError(message);
     }
   };
 
@@ -1054,6 +1330,9 @@ export const TutorCourseManagePage: React.FC<TutorCourseManagePageProps> = ({
                   onEdit={() => handleEditCourse(course)}
                   onDelete={() => setDeleteTarget({ id: course.id, title: course.title })}
                   onView={() => setPreviewCourse(course)}
+                  onManageCoupons={() => {
+                    void openCouponManager(course);
+                  }}
                 />
               );
             })}
@@ -1095,6 +1374,279 @@ export const TutorCourseManagePage: React.FC<TutorCourseManagePageProps> = ({
         getEditableModuleKey={getEditableModuleKey}
       />
 
+      {/* ═══ Coupon Manager ═══ */}
+      <AnimatePresence>
+        {couponCourse && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[210] bg-black/45 backdrop-blur-sm"
+              onClick={closeCouponManager}
+            />
+
+            <motion.div
+              initial={{ opacity: 0, y: 20, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 20, scale: 0.98 }}
+              transition={{ type: 'spring', damping: 24, stiffness: 280 }}
+              className="fixed inset-x-4 top-6 z-[211] mx-auto max-w-5xl rounded-3xl border border-slate-200 bg-white shadow-2xl"
+            >
+              <div className="flex max-h-[88vh] flex-col overflow-hidden">
+                <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
+                  <div>
+                    <p className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1 text-[10px] font-extrabold uppercase tracking-widest text-amber-700">
+                      <TicketPercent className="h-3.5 w-3.5" />
+                      Coupon Manager
+                    </p>
+                    <h3 className="mt-2 text-xl font-extrabold text-slate-900">{couponCourse.title}</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Configure private coupon codes for this paid course.
+                    </p>
+                  </div>
+                  <button
+                    onClick={closeCouponManager}
+                    className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+
+                <div className="grid flex-1 grid-cols-1 gap-0 overflow-y-auto lg:grid-cols-[360px_1fr]">
+                  <div className="border-b border-slate-100 p-6 lg:border-b-0 lg:border-r">
+                    <h4 className="text-sm font-extrabold text-slate-900">
+                      {editingCouponId ? 'Edit Coupon' : 'Create Coupon'}
+                    </h4>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Codes are hidden from students until they enter one at checkout.
+                    </p>
+
+                    <form onSubmit={handleSaveCoupon} className="mt-4 space-y-3">
+                      <div>
+                        <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                          Coupon Code
+                        </label>
+                        <input
+                          type="text"
+                          value={couponForm.code}
+                          onChange={(event) => setCouponForm((prev) => ({
+                            ...prev,
+                            code: event.target.value.toUpperCase(),
+                          }))}
+                          placeholder="e.g., STEM25"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold tracking-wide uppercase text-slate-700 outline-none transition-all focus:border-amber-400 focus:ring-2 focus:ring-amber-500/20"
+                          maxLength={32}
+                          required
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                          Discount Percentage
+                        </label>
+                        <div className="relative">
+                          <Percent className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                          <input
+                            type="number"
+                            min="1"
+                            max="100"
+                            value={couponForm.discountPercentage}
+                            onChange={(event) => setCouponForm((prev) => ({
+                              ...prev,
+                              discountPercentage: event.target.value,
+                            }))}
+                            placeholder="10"
+                            className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm font-semibold text-slate-700 outline-none transition-all focus:border-amber-400 focus:ring-2 focus:ring-amber-500/20"
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                          Expiry (Optional)
+                        </label>
+                        <div className="relative">
+                          <Calendar className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                          <input
+                            type="datetime-local"
+                            value={couponForm.expiresAt}
+                            onChange={(event) => setCouponForm((prev) => ({
+                              ...prev,
+                              expiresAt: event.target.value,
+                            }))}
+                            className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-700 outline-none transition-all focus:border-amber-400 focus:ring-2 focus:ring-amber-500/20"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                          Usage Limit (Optional)
+                        </label>
+                        <div className="relative">
+                          <Hash className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                          <input
+                            type="number"
+                            min="1"
+                            value={couponForm.usageLimit}
+                            onChange={(event) => setCouponForm((prev) => ({
+                              ...prev,
+                              usageLimit: event.target.value,
+                            }))}
+                            placeholder="Unlimited"
+                            className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-700 outline-none transition-all focus:border-amber-400 focus:ring-2 focus:ring-amber-500/20"
+                          />
+                        </div>
+                      </div>
+
+                      <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-semibold text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={couponForm.isActive}
+                          onChange={(event) => setCouponForm((prev) => ({
+                            ...prev,
+                            isActive: event.target.checked,
+                          }))}
+                          className="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500"
+                        />
+                        Coupon is active
+                      </label>
+
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <button
+                          type="submit"
+                          disabled={isSavingCoupon}
+                          className="inline-flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isSavingCoupon && (
+                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                          )}
+                          {editingCouponId ? 'Update Coupon' : 'Create Coupon'}
+                        </button>
+                        {editingCouponId && (
+                          <button
+                            type="button"
+                            onClick={resetCouponForm}
+                            className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50"
+                          >
+                            Cancel Edit
+                          </button>
+                        )}
+                      </div>
+                    </form>
+                  </div>
+
+                  <div className="flex flex-col p-6">
+                    {(couponError || couponSuccess) && (
+                      <div
+                        className={`mb-4 rounded-xl border px-4 py-3 text-sm font-medium ${
+                          couponError
+                            ? 'border-rose-200 bg-rose-50 text-rose-700'
+                            : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                        }`}
+                      >
+                        {couponError || couponSuccess}
+                      </div>
+                    )}
+
+                    {isLoadingCoupons ? (
+                      <div className="flex flex-1 items-center justify-center">
+                        <div className="flex items-center gap-2 text-sm font-semibold text-slate-500">
+                          <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-slate-500" />
+                          Loading coupons...
+                        </div>
+                      </div>
+                    ) : courseCoupons.length === 0 ? (
+                      <div className="flex flex-1 items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center">
+                        <div>
+                          <p className="text-sm font-bold text-slate-700">No coupons yet</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Create your first coupon to drive enrollments for this course.
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-3 overflow-y-auto pr-1">
+                        {courseCoupons.map((coupon) => {
+                          const usageLabel = coupon.usageLimit
+                            ? `${coupon.usageCount} / ${coupon.usageLimit} used`
+                            : `${coupon.usageCount} used`;
+
+                          return (
+                            <div
+                              key={coupon.id}
+                              className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+                            >
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div>
+                                  <p className="text-lg font-black tracking-wide text-slate-900">{coupon.code}</p>
+                                  <p className="text-xs font-semibold text-slate-500">
+                                    {coupon.discountPercentage}% off • {usageLabel}
+                                  </p>
+                                </div>
+                                <span
+                                  className={`rounded-full px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-widest ${
+                                    coupon.isActive
+                                      ? 'bg-emerald-100 text-emerald-700'
+                                      : 'bg-slate-200 text-slate-600'
+                                  }`}
+                                >
+                                  {coupon.isActive ? 'Active' : 'Paused'}
+                                </span>
+                              </div>
+
+                              <p className="mt-2 text-xs text-slate-500">
+                                Expires: {formatDateTimeLabel(coupon.expiresAt)}
+                              </p>
+
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <button
+                                  onClick={() => startEditCoupon(coupon)}
+                                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-50"
+                                >
+                                  <Edit3 className="h-3.5 w-3.5" />
+                                  Edit
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    void handleToggleCouponStatus(coupon);
+                                  }}
+                                  className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold transition-colors ${
+                                    coupon.isActive
+                                      ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                      : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                  }`}
+                                >
+                                  {coupon.isActive ? (
+                                    <ToggleRight className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <ToggleLeft className="h-3.5 w-3.5" />
+                                  )}
+                                  {coupon.isActive ? 'Pause' : 'Activate'}
+                                </button>
+                                <button
+                                  onClick={() => setCouponDeleteTarget(coupon)}
+                                  className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-700 transition-colors hover:bg-rose-100"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                  Delete
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
       {/* ═══ Delete Confirm Dialog ═══ */}
       <ConfirmDialog
         isOpen={!!deleteTarget}
@@ -1104,6 +1656,16 @@ export const TutorCourseManagePage: React.FC<TutorCourseManagePageProps> = ({
         variant="danger"
         onConfirm={handleConfirmDelete}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      <ConfirmDialog
+        isOpen={!!couponDeleteTarget}
+        title="Delete Coupon"
+        message={`Delete coupon "${couponDeleteTarget?.code}"? Students will no longer be able to use it.`}
+        confirmLabel="Delete Coupon"
+        variant="danger"
+        onConfirm={handleConfirmCouponDelete}
+        onCancel={() => setCouponDeleteTarget(null)}
       />
 
       {/* ═══ Quick Preview Modal ═══ */}

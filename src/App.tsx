@@ -52,7 +52,7 @@ import { localService } from './services/localService';
 import { apiService } from './services/apiService';
 import { formatLkr } from './utils/currency';
 
-import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz, TimeSlot, CourseEnrollment, WithdrawalRequest, WithdrawalSummary } from './types';
+import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz, TimeSlot, CourseEnrollment, CourseCoupon, WithdrawalRequest, WithdrawalSummary } from './types';
 import { TutorProfilePage } from './components/pages/TutorProfilePage';
 import { GetStartedSection } from "./components/pages/GetStartedSection";
 import { TutorBookingPage } from './components/pages/TutorBookingPage';
@@ -268,6 +268,11 @@ type TutorTransactionItem = {
   netEarning: number;
   status: TutorTransactionStatus;
   paymentReference?: string;
+};
+
+type CourseCheckoutSubmission = {
+  paymentReference?: string;
+  couponCode?: string;
 };
 
 const isUploadedResourcePath = (value: string): boolean => value.trim().startsWith('/uploads/');
@@ -1431,53 +1436,42 @@ export default function App() {
     }
   };
 
-  const handleEnrollCourse = async (courseId: string) => {
+  const handleEnrollCourse = async (
+    courseId: string,
+    checkout?: CourseCheckoutSubmission
+  ): Promise<{ ok: boolean; error?: string }> => {
     if (!currentUser) {
       setShowAuthModal(true);
-      return;
+      return { ok: false, error: 'Please sign in to continue.' };
     }
     if (currentUser.role !== 'student') {
-      alert('Only student accounts can enroll in courses.');
-      return;
+      return { ok: false, error: 'Only student accounts can enroll in courses.' };
     }
     if (userCourses.includes(courseId)) {
       handleOpenCourseLearning(courseId);
-      return;
+      return { ok: true };
     }
 
     const selectedCourse = courses.find((course) => course.id === courseId);
     if (!selectedCourse) {
-      alert('Course not found. Please refresh and try again.');
-      return;
+      return { ok: false, error: 'Course not found. Please refresh and try again.' };
     }
 
     const isFreeCourse = selectedCourse.isFree || selectedCourse.price <= 0;
-    let paymentConfirmed = false;
-    let paymentReference = '';
+    const paymentReference = checkout?.paymentReference?.trim() || '';
+    const couponCode = checkout?.couponCode?.trim() || '';
 
     if (!isFreeCourse) {
-      const proceedToPayment = confirm(
-        `This is a paid course (${formatLkr(selectedCourse.price)}). Do you want to proceed to payment?`
-      );
-
-      if (!proceedToPayment) {
-        return;
+      if (!paymentReference && !couponCode) {
+        return { ok: false, error: 'Payment completion is required for paid course enrollment.' };
       }
-
-      const reference = prompt('Enter payment reference/transaction ID to confirm enrollment:')?.trim();
-      if (!reference) {
-        alert('Payment reference is required for paid course enrollment.');
-        return;
-      }
-
-      paymentConfirmed = true;
-      paymentReference = reference;
     }
 
     try {
       const updatedCourse = await apiService.enrollInCourse(courseId, currentUser.id, {
-        paymentConfirmed: isFreeCourse ? true : paymentConfirmed,
+        paymentConfirmed: true,
         paymentReference,
+        couponCode: couponCode || undefined,
       });
       setCourses((prevCourses) =>
         prevCourses.map((course) => (course.id === updatedCourse.id ? updatedCourse : course))
@@ -1490,16 +1484,11 @@ export default function App() {
       setActiveLearningCourseId(courseId);
       setActiveVideoModuleId(null);
       setActiveTab('courseLearning');
-
-      alert(
-        isFreeCourse
-          ? 'Successfully enrolled in this free course!'
-          : 'Payment confirmed. Enrollment successful!'
-      );
+      return { ok: true };
     } catch (error) {
       console.error('Failed to enroll in course:', error);
       const message = error instanceof Error ? error.message : 'Failed to enroll in course. Please try again.';
-      alert(message);
+      return { ok: false, error: message };
     }
   };
 
@@ -1906,6 +1895,100 @@ export default function App() {
       alert(message);
       return false;
     }
+  };
+
+  const handleGetCourseCoupons = async (courseId: string): Promise<CourseCoupon[]> => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      throw new Error('Only tutor accounts can manage coupons.');
+    }
+
+    const actorId = currentUser.id;
+    return apiService.getCourseCoupons(courseId, actorId);
+  };
+
+  const handleCreateCourseCoupon = async (
+    courseId: string,
+    payload: {
+      code: string;
+      discountPercentage: number;
+      isActive?: boolean;
+      expiresAt?: string;
+      usageLimit?: number;
+    }
+  ): Promise<CourseCoupon> => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      throw new Error('Only tutor accounts can manage coupons.');
+    }
+
+    return apiService.createCourseCoupon(courseId, {
+      actorId: currentUser.id,
+      ...payload,
+    });
+  };
+
+  const handleUpdateCourseCoupon = async (
+    courseId: string,
+    couponId: string,
+    payload: {
+      code?: string;
+      discountPercentage?: number;
+      isActive?: boolean;
+      expiresAt?: string | null;
+      usageLimit?: number | null;
+    }
+  ): Promise<CourseCoupon> => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      throw new Error('Only tutor accounts can manage coupons.');
+    }
+
+    return apiService.updateCourseCoupon(courseId, couponId, {
+      actorId: currentUser.id,
+      ...payload,
+    });
+  };
+
+  const handleToggleCourseCouponStatus = async (
+    courseId: string,
+    couponId: string,
+    isActive: boolean
+  ): Promise<CourseCoupon> => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      throw new Error('Only tutor accounts can manage coupons.');
+    }
+
+    return apiService.toggleCourseCouponStatus(courseId, couponId, {
+      actorId: currentUser.id,
+      isActive,
+    });
+  };
+
+  const handleDeleteCourseCoupon = async (courseId: string, couponId: string): Promise<void> => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      throw new Error('Only tutor accounts can manage coupons.');
+    }
+
+    return apiService.deleteCourseCoupon(courseId, couponId, currentUser.id);
+  };
+
+  const handleValidateCourseCoupon = async (
+    courseId: string,
+    couponCode: string
+  ): Promise<{
+    valid: boolean;
+    couponCode: string;
+    discountPercentage: number;
+    originalPrice: number;
+    discountAmount: number;
+    finalPrice: number;
+  }> => {
+    if (!currentUser || currentUser.role !== 'student') {
+      throw new Error('Only student accounts can apply coupons.');
+    }
+
+    return apiService.validateCourseCoupon(courseId, {
+      studentId: currentUser.id,
+      couponCode,
+    });
   };
 
   const clearResourceUploadFeedback = () => {
@@ -4627,6 +4710,11 @@ export default function App() {
                   onRemoveCourseModuleResource={handleRemoveCourseModuleResource}
                   onAddUrlModuleResource={handleAddUrlModuleResource}
                   getEditableModuleKey={getEditableModuleKey}
+                  onGetCourseCoupons={handleGetCourseCoupons}
+                  onCreateCourseCoupon={handleCreateCourseCoupon}
+                  onUpdateCourseCoupon={handleUpdateCourseCoupon}
+                  onToggleCourseCouponStatus={handleToggleCourseCouponStatus}
+                  onDeleteCourseCoupon={handleDeleteCourseCoupon}
                 />
               ) : (
                 <CourseBrowsingPage
@@ -4642,6 +4730,7 @@ export default function App() {
                   onSetCourseSearchQuery={setCourseSearchQuery}
                   onSetCourseCategoryFilter={setCourseCategoryFilter}
                   onEnrollCourse={handleEnrollCourse}
+                  onValidateCourseCoupon={handleValidateCourseCoupon}
                   onOpenCourseLearning={handleOpenCourseLearning}
                   onViewCertificate={handleShowCertificateModal}
                   stemSubjects={STEM_SUBJECTS}

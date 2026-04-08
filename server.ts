@@ -21,6 +21,8 @@ import { Quiz } from "./src/models/Quiz.js";
 import { StudyPlan } from "./src/models/StudyPlan.js";
 import { SkillLevel } from "./src/models/SkillLevel.js";
 import { CourseEnrollment } from "./src/models/CourseEnrollment.js";
+import { CourseCoupon } from "./src/models/CourseCoupon.js";
+import { CourseCouponUsage } from "./src/models/CourseCouponUsage.js";
 import { WithdrawalRequest } from "./src/models/WithdrawalRequest.js";
 import { quizChatbotRouter } from "./src/server/quiz-chatbot/chatController.js";
 import { faqChatbotRouter } from "./src/server/faq-chatbot/chatController.js";
@@ -396,6 +398,94 @@ const resolveCourseIsFree = (value: unknown, fallbackPrice: number): boolean => 
     return value;
   }
   return fallbackPrice <= 0;
+};
+
+const normalizeCouponCode = (value: unknown): string => {
+  return String(value || '').trim().toUpperCase();
+};
+
+const isCouponExpired = (value: unknown): boolean => {
+  if (!value) {
+    return false;
+  }
+
+  const expiresAt = new Date(String(value));
+  if (Number.isNaN(expiresAt.getTime())) {
+    return false;
+  }
+
+  return expiresAt.getTime() < Date.now();
+};
+
+const normalizeCouponForResponse = (coupon: any) => {
+  const plainCoupon = typeof coupon?.toObject === 'function' ? coupon.toObject() : coupon;
+  return {
+    ...plainCoupon,
+    code: normalizeCouponCode(plainCoupon?.code),
+  };
+};
+
+const calculateCouponPriceBreakdown = (originalPrice: number, discountPercentage: number) => {
+  const normalizedOriginal = Math.max(0, roundCurrency(originalPrice));
+  const normalizedDiscountPercentage = Math.min(100, Math.max(0, Number(discountPercentage) || 0));
+
+  const discountAmount = roundCurrency((normalizedOriginal * normalizedDiscountPercentage) / 100);
+  const finalPrice = roundCurrency(Math.max(0, normalizedOriginal - discountAmount));
+
+  return {
+    originalPrice: normalizedOriginal,
+    discountPercentage: normalizedDiscountPercentage,
+    discountAmount,
+    finalPrice,
+  };
+};
+
+const resolveApplicableCouponForStudent = async (args: {
+  courseId: string;
+  studentId: string;
+  couponCode: string;
+  originalPrice: number;
+}) => {
+  const normalizedCode = normalizeCouponCode(args.couponCode);
+  if (!normalizedCode) {
+    return null;
+  }
+
+  const coupon = await CourseCoupon.findOne({ courseId: args.courseId, code: normalizedCode });
+  if (!coupon) {
+    throw new Error('Invalid coupon code for this course.');
+  }
+
+  if (!coupon.isActive) {
+    throw new Error('This coupon is currently inactive.');
+  }
+
+  if (isCouponExpired(coupon.expiresAt)) {
+    throw new Error('This coupon has expired.');
+  }
+
+  const usageLimit = Number(coupon.usageLimit);
+  if (Number.isFinite(usageLimit) && usageLimit > 0 && Number(coupon.usageCount || 0) >= usageLimit) {
+    throw new Error('This coupon usage limit has been reached.');
+  }
+
+  const alreadyUsed = await CourseCouponUsage.findOne({
+    userId: args.studentId,
+    courseId: args.courseId,
+    couponCode: normalizedCode,
+  });
+
+  if (alreadyUsed) {
+    throw new Error('You have already used this coupon for this course.');
+  }
+
+  const pricing = calculateCouponPriceBreakdown(args.originalPrice, Number(coupon.discountPercentage || 0));
+
+  return {
+    coupon,
+    couponCode: normalizedCode,
+    ...pricing,
+  };
 };
 
 const normalizeWithdrawalStatus = (value: unknown): 'pending' | 'approved' | 'rejected' | 'paid' => {
@@ -1730,6 +1820,8 @@ async function startServer() {
       const course = await Course.findOneAndDelete({ id: req.params.id });
       if (course) {
         await CourseEnrollment.deleteMany({ courseId: req.params.id });
+        await CourseCoupon.deleteMany({ courseId: req.params.id });
+        await CourseCouponUsage.deleteMany({ courseId: req.params.id });
         res.json({ message: "Course deleted successfully" });
       } else {
         res.status(404).json({ error: "Course not found" });
@@ -1740,9 +1832,347 @@ async function startServer() {
     }
   });
 
+  app.get('/api/courses/:id/coupons', async (req, res) => {
+    try {
+      const actorId = typeof req.query.actorId === 'string' ? req.query.actorId.trim() : '';
+      if (!actorId) {
+        return res.status(401).json({ error: 'actorId is required to view course coupons.' });
+      }
+
+      const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
+      if (!actorUser) {
+        return res.status(403).json({ error: 'Only tutor accounts can manage course coupons.' });
+      }
+
+      const course = await Course.findOne({ id: req.params.id });
+      if (!course) {
+        return res.status(404).json({ error: 'Course not found.' });
+      }
+
+      if (course.tutorId !== actorId) {
+        return res.status(403).json({ error: 'You can only manage coupons for your own courses.' });
+      }
+
+      const coupons = await CourseCoupon.find({ courseId: req.params.id }).sort({ createdAt: -1 });
+      return res.json(coupons.map((coupon) => normalizeCouponForResponse(coupon)));
+    } catch (error) {
+      console.error('Get course coupons error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.post('/api/courses/:id/coupons', async (req, res) => {
+    try {
+      const actorId = String(req.body?.actorId || '').trim();
+      if (!actorId) {
+        return res.status(401).json({ error: 'actorId is required to create a coupon.' });
+      }
+
+      const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
+      if (!actorUser) {
+        return res.status(403).json({ error: 'Only tutor accounts can manage course coupons.' });
+      }
+
+      const course = await Course.findOne({ id: req.params.id });
+      if (!course) {
+        return res.status(404).json({ error: 'Course not found.' });
+      }
+
+      if (course.tutorId !== actorId) {
+        return res.status(403).json({ error: 'You can only manage coupons for your own courses.' });
+      }
+
+      const code = normalizeCouponCode(req.body?.code);
+      if (!code) {
+        return res.status(400).json({ error: 'Coupon code is required.' });
+      }
+
+      const discountPercentage = Number(req.body?.discountPercentage);
+      if (!Number.isFinite(discountPercentage) || discountPercentage < 1 || discountPercentage > 100) {
+        return res.status(400).json({ error: 'Discount percentage must be between 1 and 100.' });
+      }
+
+      let expiresAt: Date | undefined;
+      if (req.body?.expiresAt) {
+        const parsedExpiresAt = new Date(String(req.body.expiresAt));
+        if (Number.isNaN(parsedExpiresAt.getTime())) {
+          return res.status(400).json({ error: 'Invalid coupon expiry date.' });
+        }
+        expiresAt = parsedExpiresAt;
+      }
+
+      let usageLimit: number | undefined;
+      if (req.body?.usageLimit !== undefined && req.body?.usageLimit !== null && String(req.body.usageLimit).trim() !== '') {
+        const parsedUsageLimit = Number(req.body.usageLimit);
+        if (!Number.isInteger(parsedUsageLimit) || parsedUsageLimit <= 0) {
+          return res.status(400).json({ error: 'Usage limit must be a positive whole number.' });
+        }
+        usageLimit = parsedUsageLimit;
+      }
+
+      const coupon = await CourseCoupon.create({
+        id: createEntityId(),
+        courseId: req.params.id,
+        code,
+        discountPercentage: roundCurrency(discountPercentage),
+        isActive: req.body?.isActive !== undefined ? Boolean(req.body.isActive) : true,
+        expiresAt,
+        usageLimit,
+        usageCount: 0,
+      });
+
+      return res.status(201).json(normalizeCouponForResponse(coupon));
+    } catch (error: any) {
+      if (error?.code === 11000) {
+        return res.status(409).json({ error: 'Coupon code must be unique within this course.' });
+      }
+
+      console.error('Create course coupon error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.put('/api/courses/:id/coupons/:couponId', async (req, res) => {
+    try {
+      const actorId = String(req.body?.actorId || '').trim();
+      if (!actorId) {
+        return res.status(401).json({ error: 'actorId is required to update a coupon.' });
+      }
+
+      const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
+      if (!actorUser) {
+        return res.status(403).json({ error: 'Only tutor accounts can manage course coupons.' });
+      }
+
+      const course = await Course.findOne({ id: req.params.id });
+      if (!course) {
+        return res.status(404).json({ error: 'Course not found.' });
+      }
+
+      if (course.tutorId !== actorId) {
+        return res.status(403).json({ error: 'You can only manage coupons for your own courses.' });
+      }
+
+      const existingCoupon = await CourseCoupon.findOne({ id: req.params.couponId, courseId: req.params.id });
+      if (!existingCoupon) {
+        return res.status(404).json({ error: 'Coupon not found.' });
+      }
+
+      const updatePayload: any = {};
+      const unsetPayload: any = {};
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'code')) {
+        const code = normalizeCouponCode(req.body.code);
+        if (!code) {
+          return res.status(400).json({ error: 'Coupon code is required.' });
+        }
+        updatePayload.code = code;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'discountPercentage')) {
+        const discountPercentage = Number(req.body.discountPercentage);
+        if (!Number.isFinite(discountPercentage) || discountPercentage < 1 || discountPercentage > 100) {
+          return res.status(400).json({ error: 'Discount percentage must be between 1 and 100.' });
+        }
+        updatePayload.discountPercentage = roundCurrency(discountPercentage);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'isActive')) {
+        updatePayload.isActive = Boolean(req.body.isActive);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'expiresAt')) {
+        if (req.body.expiresAt === null || String(req.body.expiresAt).trim() === '') {
+          unsetPayload.expiresAt = '';
+        } else {
+          const parsedExpiresAt = new Date(String(req.body.expiresAt));
+          if (Number.isNaN(parsedExpiresAt.getTime())) {
+            return res.status(400).json({ error: 'Invalid coupon expiry date.' });
+          }
+          updatePayload.expiresAt = parsedExpiresAt;
+        }
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'usageLimit')) {
+        if (req.body.usageLimit === null || String(req.body.usageLimit).trim() === '') {
+          unsetPayload.usageLimit = '';
+        } else {
+          const usageLimit = Number(req.body.usageLimit);
+          if (!Number.isInteger(usageLimit) || usageLimit <= 0) {
+            return res.status(400).json({ error: 'Usage limit must be a positive whole number.' });
+          }
+          if (usageLimit < Number(existingCoupon.usageCount || 0)) {
+            return res.status(400).json({ error: 'Usage limit cannot be lower than current usage count.' });
+          }
+          updatePayload.usageLimit = usageLimit;
+        }
+      }
+
+      const nextUpdate: any = {};
+      if (Object.keys(updatePayload).length > 0) {
+        nextUpdate.$set = updatePayload;
+      }
+      if (Object.keys(unsetPayload).length > 0) {
+        nextUpdate.$unset = unsetPayload;
+      }
+
+      if (!nextUpdate.$set && !nextUpdate.$unset) {
+        return res.json(normalizeCouponForResponse(existingCoupon));
+      }
+
+      const updatedCoupon = await CourseCoupon.findOneAndUpdate(
+        { id: req.params.couponId, courseId: req.params.id },
+        nextUpdate,
+        { new: true }
+      );
+
+      if (!updatedCoupon) {
+        return res.status(404).json({ error: 'Coupon not found.' });
+      }
+
+      return res.json(normalizeCouponForResponse(updatedCoupon));
+    } catch (error: any) {
+      if (error?.code === 11000) {
+        return res.status(409).json({ error: 'Coupon code must be unique within this course.' });
+      }
+
+      console.error('Update course coupon error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.patch('/api/courses/:id/coupons/:couponId/status', async (req, res) => {
+    try {
+      const actorId = String(req.body?.actorId || '').trim();
+      if (!actorId) {
+        return res.status(401).json({ error: 'actorId is required to update coupon status.' });
+      }
+
+      const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
+      if (!actorUser) {
+        return res.status(403).json({ error: 'Only tutor accounts can manage course coupons.' });
+      }
+
+      const course = await Course.findOne({ id: req.params.id });
+      if (!course) {
+        return res.status(404).json({ error: 'Course not found.' });
+      }
+
+      if (course.tutorId !== actorId) {
+        return res.status(403).json({ error: 'You can only manage coupons for your own courses.' });
+      }
+
+      if (typeof req.body?.isActive !== 'boolean') {
+        return res.status(400).json({ error: 'isActive boolean value is required.' });
+      }
+
+      const updatedCoupon = await CourseCoupon.findOneAndUpdate(
+        { id: req.params.couponId, courseId: req.params.id },
+        { $set: { isActive: req.body.isActive } },
+        { new: true }
+      );
+
+      if (!updatedCoupon) {
+        return res.status(404).json({ error: 'Coupon not found.' });
+      }
+
+      return res.json(normalizeCouponForResponse(updatedCoupon));
+    } catch (error) {
+      console.error('Toggle course coupon status error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.delete('/api/courses/:id/coupons/:couponId', async (req, res) => {
+    try {
+      const actorId = typeof req.query.actorId === 'string' ? req.query.actorId.trim() : '';
+      if (!actorId) {
+        return res.status(401).json({ error: 'actorId is required to delete a coupon.' });
+      }
+
+      const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
+      if (!actorUser) {
+        return res.status(403).json({ error: 'Only tutor accounts can manage course coupons.' });
+      }
+
+      const course = await Course.findOne({ id: req.params.id });
+      if (!course) {
+        return res.status(404).json({ error: 'Course not found.' });
+      }
+
+      if (course.tutorId !== actorId) {
+        return res.status(403).json({ error: 'You can only manage coupons for your own courses.' });
+      }
+
+      const deletedCoupon = await CourseCoupon.findOneAndDelete({ id: req.params.couponId, courseId: req.params.id });
+      if (!deletedCoupon) {
+        return res.status(404).json({ error: 'Coupon not found.' });
+      }
+
+      return res.json({ message: 'Coupon deleted successfully.' });
+    } catch (error) {
+      console.error('Delete course coupon error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.post('/api/courses/:id/coupons/validate', async (req, res) => {
+    try {
+      const studentId = String(req.body?.studentId || '').trim();
+      const couponCode = normalizeCouponCode(req.body?.couponCode);
+
+      if (!studentId) {
+        return res.status(400).json({ error: 'studentId is required to validate a coupon.' });
+      }
+
+      if (!couponCode) {
+        return res.status(400).json({ error: 'Coupon code is required.' });
+      }
+
+      const student = await User.findOne({ id: studentId, role: 'student' });
+      if (!student) {
+        return res.status(400).json({ error: 'Invalid student account.' });
+      }
+
+      const course = await Course.findOne({ id: req.params.id });
+      if (!course) {
+        return res.status(404).json({ error: 'Course not found.' });
+      }
+
+      const originalPrice = toFinitePrice(course.price);
+      const isFreeCourse = resolveCourseIsFree((course as any).isFree, originalPrice);
+      if (isFreeCourse || originalPrice <= 0) {
+        return res.status(400).json({ error: 'Coupons can only be used with paid courses.' });
+      }
+
+      const couponResult = await resolveApplicableCouponForStudent({
+        courseId: course.id,
+        studentId,
+        couponCode,
+        originalPrice,
+      });
+
+      if (!couponResult) {
+        return res.status(400).json({ error: 'Coupon code is required.' });
+      }
+
+      return res.json({
+        valid: true,
+        couponCode: couponResult.couponCode,
+        discountPercentage: couponResult.discountPercentage,
+        originalPrice: couponResult.originalPrice,
+        discountAmount: couponResult.discountAmount,
+        finalPrice: couponResult.finalPrice,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to validate coupon.';
+      return res.status(400).json({ error: message });
+    }
+  });
+
   app.post("/api/courses/:id/enroll", async (req, res) => {
     try {
-      const { studentId, paymentConfirmed, paymentReference } = req.body;
+      const { studentId, paymentConfirmed, paymentReference, couponCode } = req.body;
 
       if (!studentId) {
         return res.status(400).json({ error: "studentId is required for enrollment" });
@@ -1760,7 +2190,53 @@ async function startServer() {
 
       const normalizedCoursePrice = toFinitePrice(existingCourse.price);
       const isFreeCourse = resolveCourseIsFree((existingCourse as any).isFree, normalizedCoursePrice);
-      if (!isFreeCourse) {
+
+      let couponApplication:
+        | {
+          coupon: any;
+          couponCode: string;
+          originalPrice: number;
+          discountPercentage: number;
+          discountAmount: number;
+          finalPrice: number;
+        }
+        | null = null;
+
+      if (!isFreeCourse && normalizeCouponCode(couponCode)) {
+        try {
+          couponApplication = await resolveApplicableCouponForStudent({
+            courseId: req.params.id,
+            studentId,
+            couponCode: String(couponCode || ''),
+            originalPrice: normalizedCoursePrice,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Invalid coupon for this course.';
+          return res.status(400).json({ error: message });
+        }
+      }
+
+      const priceBreakdown = isFreeCourse
+        ? {
+          originalPrice: 0,
+          discountAmount: 0,
+          finalPrice: 0,
+        }
+        : couponApplication
+          ? {
+            originalPrice: couponApplication.originalPrice,
+            discountAmount: couponApplication.discountAmount,
+            finalPrice: couponApplication.finalPrice,
+          }
+          : {
+            originalPrice: roundCurrency(normalizedCoursePrice),
+            discountAmount: 0,
+            finalPrice: roundCurrency(normalizedCoursePrice),
+          };
+
+      const requiresPayment = !isFreeCourse && priceBreakdown.finalPrice > 0;
+
+      if (requiresPayment) {
         if (!paymentConfirmed) {
           return res.status(402).json({ error: "This is a paid course. Payment is required before enrollment." });
         }
@@ -1778,12 +2254,16 @@ async function startServer() {
 
       const existingEnrollment = await CourseEnrollment.findOne({ courseId: req.params.id, studentId });
       const nextPaymentStatus: 'pending' | 'paid' = isFreeCourse ? 'paid' : 'paid';
-      const nextAmountPaid = isFreeCourse ? 0 : normalizedCoursePrice;
+      const nextOriginalPrice = isFreeCourse ? 0 : priceBreakdown.originalPrice;
+      const nextDiscountAmount = isFreeCourse ? 0 : priceBreakdown.discountAmount;
+      const nextFinalPaidAmount = isFreeCourse ? 0 : priceBreakdown.finalPrice;
+      const nextAmountPaid = nextFinalPaidAmount;
+      const nextCouponCode = isFreeCourse ? undefined : couponApplication?.couponCode;
       const nextPaidAt = nextPaymentStatus === 'paid' ? new Date() : undefined;
       const normalizedPaymentReference = String(paymentReference || '').trim();
 
       if (!existingEnrollment) {
-        await CourseEnrollment.create({
+        const createdEnrollment = await CourseEnrollment.create({
           id: createEntityId(),
           courseId: req.params.id,
           studentId,
@@ -1794,7 +2274,65 @@ async function startServer() {
           paymentReference: normalizedPaymentReference || undefined,
           paidAt: nextPaidAt,
           amountPaid: nextAmountPaid,
+          originalPrice: nextOriginalPrice,
+          couponCode: nextCouponCode,
+          discountAmount: nextDiscountAmount,
+          finalPaidAmount: nextFinalPaidAmount,
         });
+
+        if (couponApplication) {
+          try {
+            await CourseCouponUsage.create({
+              id: createEntityId(),
+              userId: studentId,
+              courseId: req.params.id,
+              couponCode: couponApplication.couponCode,
+              enrollmentId: createdEnrollment.id,
+              usedAt: new Date(),
+            });
+          } catch (error: any) {
+            if (error?.code === 11000) {
+              await CourseEnrollment.deleteOne({ id: createdEnrollment.id });
+              await Course.updateOne(
+                { id: req.params.id },
+                { $pull: { enrolledStudents: studentId } }
+              );
+              return res.status(400).json({ error: 'You have already used this coupon for this course.' });
+            }
+
+            throw error;
+          }
+
+          const usageLimit = Number(couponApplication.coupon.usageLimit);
+          const couponIncrementQuery: any = {
+            id: couponApplication.coupon.id,
+            courseId: req.params.id,
+          };
+
+          if (Number.isFinite(usageLimit) && usageLimit > 0) {
+            couponIncrementQuery.usageCount = { $lt: usageLimit };
+          }
+
+          const incrementedCoupon = await CourseCoupon.findOneAndUpdate(
+            couponIncrementQuery,
+            { $inc: { usageCount: 1 } },
+            { new: true }
+          );
+
+          if (!incrementedCoupon) {
+            await CourseCouponUsage.deleteOne({
+              userId: studentId,
+              courseId: req.params.id,
+              couponCode: couponApplication.couponCode,
+            });
+            await CourseEnrollment.deleteOne({ id: createdEnrollment.id });
+            await Course.updateOne(
+              { id: req.params.id },
+              { $pull: { enrolledStudents: studentId } }
+            );
+            return res.status(400).json({ error: 'This coupon usage limit has been reached.' });
+          }
+        }
       } else {
         const shouldBackfillPaymentMetadata =
           !existingEnrollment.paymentStatus ||
@@ -1810,6 +2348,10 @@ async function startServer() {
                 paymentReference: normalizedPaymentReference || undefined,
                 paidAt: nextPaidAt,
                 amountPaid: nextAmountPaid,
+                originalPrice: nextOriginalPrice,
+                couponCode: nextCouponCode,
+                discountAmount: nextDiscountAmount,
+                finalPaidAmount: nextFinalPaidAmount,
               },
             }
           );
@@ -1901,12 +2443,30 @@ async function startServer() {
           ? Math.max(0, Number(enrollment.amountPaid))
           : fallbackAmountPaid;
 
+        const normalizedOriginalPrice = Number.isFinite(Number(enrollment.originalPrice))
+          ? Math.max(0, Number(enrollment.originalPrice))
+          : resolvedPrice;
+
+        const normalizedDiscountAmount = Number.isFinite(Number(enrollment.discountAmount))
+          ? Math.max(0, Number(enrollment.discountAmount))
+          : Math.max(0, normalizedOriginalPrice - normalizedAmountPaid);
+
+        const normalizedFinalPaidAmount = Number.isFinite(Number(enrollment.finalPaidAmount))
+          ? Math.max(0, Number(enrollment.finalPaidAmount))
+          : normalizedAmountPaid;
+
+        const normalizedCouponCode = normalizeCouponCode(enrollment.couponCode);
+
         const studentName = studentNameById.get(enrollment.studentId) || 'Student';
 
         return {
           ...enrollment,
           paymentStatus,
-          amountPaid: normalizedAmountPaid,
+          amountPaid: normalizedFinalPaidAmount,
+          originalPrice: normalizedOriginalPrice,
+          couponCode: normalizedCouponCode || undefined,
+          discountAmount: normalizedDiscountAmount,
+          finalPaidAmount: normalizedFinalPaidAmount,
           paidAt: enrollment.paidAt || (paymentStatus === 'paid' ? enrollment.enrolledAt : undefined),
           studentName,
           courseTitle: course?.title || undefined,

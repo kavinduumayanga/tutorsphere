@@ -13,6 +13,10 @@ export interface ICourseEnrollment extends Document {
   paymentReference?: string;
   paidAt?: Date;
   amountPaid?: number;
+  originalPrice?: number;
+  couponCode?: string;
+  discountAmount?: number;
+  finalPaidAmount?: number;
 }
 
 const CourseEnrollmentSchema: Schema = new Schema(
@@ -34,6 +38,10 @@ const CourseEnrollmentSchema: Schema = new Schema(
     paymentReference: { type: String },
     paidAt: { type: Date },
     amountPaid: { type: Number, min: 0, default: 0 },
+    originalPrice: { type: Number, min: 0, default: 0 },
+    couponCode: { type: String },
+    discountAmount: { type: Number, min: 0, default: 0 },
+    finalPaidAmount: { type: Number, min: 0, default: 0 },
   },
   {
     timestamps: true,

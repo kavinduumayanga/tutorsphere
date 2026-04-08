@@ -70,6 +70,8 @@ import { QuizChatbotPage } from './components/pages/QuizChatbotPage';
 import { FindTutorsPage } from './components/pages/FindTutorsPage';
 import { CertificateModal } from './components/common/CertificateModal';
 import { ForgotPasswordPage } from './components/pages/ForgotPasswordPage';
+import { TutorDashboardPage } from './components/pages/TutorDashboardPage';
+import { TutorEarningsPage } from './components/pages/TutorEarningsPage';
 
 const STEM_SUBJECTS: string[] = [...ALLOWED_TUTOR_SUBJECTS];
 
@@ -5268,329 +5270,35 @@ export default function App() {
           )}
 
           {activeTab === 'dashboard' && currentUser && isTutor && (
-            <div className="space-y-8">
-              <div className="rounded-[2.5rem] border border-slate-800 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 p-8 shadow-xl shadow-slate-900/20">
-                <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6">
-                  <div>
-                    <h2 className="text-3xl font-black text-white tracking-tight">Tutor Workspace</h2>
-                    <p className="text-slate-300 mt-2 max-w-2xl">
-                      Manage your sessions, profile, content, and performance from a clean SaaS-style dashboard.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setActiveTab('earnings')}
-                    className="px-5 py-3 rounded-2xl bg-white text-slate-900 font-black text-sm uppercase tracking-widest hover:bg-slate-100 transition-all"
-                  >
-                    Open Tutor Revenue Dashboard
-                  </button>
-                </div>
-
-                <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-7">
-                  <button onClick={() => setActiveTab('register')} className="text-left p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all">
-                    <p className="font-black text-white">Profile & Qualifications</p>
-                    <p className="text-xs text-slate-300 mt-1">Update professional tutor profile</p>
-                  </button>
-                  <button onClick={() => setActiveTab('settings')} className="text-left p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all">
-                    <p className="font-black text-white">Settings</p>
-                    <p className="text-xs text-slate-300 mt-1">Account and teaching preferences</p>
-                  </button>
-                  {(profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University') && (
-                    <button onClick={() => setActiveTab('manageAvailability')} className="text-left p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all">
-                      <p className="font-black text-white">Manage Availability</p>
-                      <p className="text-xs text-slate-300 mt-1">Control session calendar slots</p>
-                    </button>
-                  )}
-                  <button onClick={() => setActiveTab('courses')} className="text-left p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all">
-                    <p className="font-black text-white">Course Management</p>
-                    <p className="text-xs text-slate-300 mt-1">Publish and manage courses</p>
-                  </button>
-                  <button onClick={() => setActiveTab('resources')} className="text-left p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all">
-                    <p className="font-black text-white">Resource Management</p>
-                    <p className="text-xs text-slate-300 mt-1">Upload and manage learning assets</p>
-                  </button>
-                  <button onClick={() => setActiveTab('earnings')} className="text-left p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all">
-                    <p className="font-black text-white">Tutor Revenue Dashboard</p>
-                    <p className="text-xs text-slate-300 mt-1">Open earnings analytics and payment history page</p>
-                  </button>
-                  <button
-                    onClick={() => {
-                      const latestLink = bookings[0]?.meetingLink;
-                      if (!latestLink) {
-                        alert('No session link available yet.');
-                        return;
-                      }
-                      navigator.clipboard.writeText(latestLink);
-                      alert('Latest session link copied to clipboard.');
-                    }}
-                    className="text-left p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all"
-                  >
-                    <p className="font-black text-white">Session Link Sharing</p>
-                    <p className="text-xs text-slate-300 mt-1">Copy and share latest meeting link</p>
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid sm:grid-cols-2 xl:grid-cols-6 gap-4">
-                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Total Sessions</p>
-                  <p className="text-2xl font-black text-slate-900 mt-2">{tutorDashboardBookings.length}</p>
-                </div>
-                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Upcoming Sessions</p>
-                  <p className="text-2xl font-black text-indigo-700 mt-2">
-                    {tutorDashboardBookings.filter((booking) => booking.status !== 'cancelled' && !isPastSession(booking)).length}
-                  </p>
-                </div>
-                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Pending Actions</p>
-                  <p className="text-2xl font-black text-amber-600 mt-2">
-                    {tutorDashboardBookings.filter((booking) => booking.status === 'pending').length}
-                  </p>
-                </div>
-                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Active Courses</p>
-                  <p className="text-2xl font-black text-cyan-700 mt-2">{myTutorCourses.length}</p>
-                </div>
-                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Resources</p>
-                  <p className="text-2xl font-black text-emerald-700 mt-2">{myTutorResources.length}</p>
-                </div>
-                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Average Rating</p>
-                  <p className="text-2xl font-black text-slate-900 mt-2">{tutorAverageRatingFromReviews.toFixed(1)}</p>
-                </div>
-              </div>
-
-              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-5">
-                  <div>
-                    <h3 className="font-black text-2xl text-slate-900">Tutor Revenue Dashboard</h3>
-                    <p className="text-slate-500 mt-2 max-w-2xl">
-                      Earnings, payment history, source breakdown, and revenue charts are available on a dedicated page.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setActiveTab('earnings')}
-                    className="px-6 py-3 rounded-2xl bg-indigo-600 text-white font-black text-sm uppercase tracking-widest hover:bg-indigo-700 transition-all"
-                  >
-                    Go to Tutor Revenue Dashboard
-                  </button>
-                </div>
-              </div>
-
-              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
-                  <h3 className="font-black text-2xl text-slate-900">Session Management</h3>
-                  <div className="flex flex-wrap items-end gap-3">
-                    <span className="text-xs font-black uppercase tracking-widest px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
-                      {filteredTutorBookings.length} sessions shown
-                    </span>
-                    <label className="flex flex-col gap-1">
-                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Status</span>
-                      <select
-                        value={tutorBookingStatusFilter}
-                        onChange={(event) => setTutorBookingStatusFilter(event.target.value as BookingStatusFilter)}
-                        className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
-                      >
-                        <option value="all">All Statuses</option>
-                        <option value="pending">Pending</option>
-                        <option value="confirmed">Confirmed</option>
-                        <option value="completed">Completed</option>
-                        <option value="cancelled">Cancelled</option>
-                      </select>
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Time</span>
-                      <select
-                        value={tutorSessionTimelineFilter}
-                        onChange={(event) => setTutorSessionTimelineFilter(event.target.value as SessionTimelineFilter)}
-                        className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
-                      >
-                        <option value="all">Any Time</option>
-                        <option value="upcoming">Upcoming</option>
-                        <option value="past">Past</option>
-                      </select>
-                    </label>
-                  </div>
-                </div>
-
-                {filteredTutorBookings.length === 0 ? (
-                  <div className="text-center py-16 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
-                    <Clock className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                    <p className="font-bold text-slate-500">No sessions match your filters.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {filteredTutorBookings.map((booking) => {
-                      const isLoading = activeBookingActionId === booking.id;
-                      const paymentStatus = getBookingPaymentStatus(booking);
-                      const isPaidBooking = paymentStatus === 'paid';
-                      const canComplete = booking.status === 'confirmed' && isPaidBooking;
-                      const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed';
-                      const canReschedule = booking.status !== 'cancelled' && booking.status !== 'completed' && canStudentManageBeforeStart(booking);
-                      const canSubmitMeetingLink = isPaidBooking && booking.status !== 'cancelled' && booking.status !== 'completed';
-                      const canStartMeeting = booking.status === 'confirmed' && isPaidBooking && isValidMeetingLink(booking.meetingLink);
-
-                      return (
-                        <div key={booking.id} className="relative rounded-3xl border border-slate-200 bg-slate-50 p-5 pr-14 space-y-4">
-                          <button
-                            type="button"
-                            disabled={isLoading}
-                            onClick={() => handleHideBookingForCurrentUser(booking)}
-                            className="absolute right-4 top-4 h-8 w-8 rounded-full border border-slate-300 bg-white text-slate-500 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-60 flex items-center justify-center"
-                            aria-label="Hide session card"
-                            title="Hide session card"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
-                            <div>
-                              <p className="text-lg font-black text-slate-900">{booking.subject} Session</p>
-                              <p className="text-xs font-semibold text-slate-500 mt-1">Session ID: {booking.id}</p>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getBookingPaymentPillClassName(paymentStatus)}`}>
-                                payment {paymentStatus}
-                              </span>
-                              <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getBookingStatusPillClassName(booking.status)}`}>
-                                {booking.status}
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="grid sm:grid-cols-2 xl:grid-cols-5 gap-3 text-sm">
-                            <div className="bg-white rounded-xl border border-slate-200 p-3">
-                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Date</p>
-                              <p className="font-bold text-slate-800 mt-1">{booking.date}</p>
-                            </div>
-                            <div className="bg-white rounded-xl border border-slate-200 p-3">
-                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Time Slot</p>
-                              <p className="font-bold text-slate-800 mt-1">{booking.timeSlot || 'Not specified'}</p>
-                            </div>
-                            <div className="bg-white rounded-xl border border-slate-200 p-3 xl:col-span-2">
-                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Student</p>
-                              <p className="font-bold text-slate-800 mt-1">{getBookingStudentName(booking)}</p>
-                            </div>
-                            <div className="bg-white rounded-xl border border-slate-200 p-3">
-                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Meeting Link</p>
-                              <p className={`font-bold mt-1 ${isValidMeetingLink(booking.meetingLink) ? 'text-emerald-600' : 'text-amber-600'}`}>
-                                {isValidMeetingLink(booking.meetingLink) ? 'Ready' : 'Not submitted'}
-                              </p>
-                            </div>
-                          </div>
-
-                          {paymentStatus === 'failed' && (
-                            <p className="text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
-                              {booking.paymentFailureReason || 'Payment failed for this booking. Ask the student to retry checkout.'}
-                            </p>
-                          )}
-
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              disabled={isLoading || !canComplete}
-                              onClick={() => handleTutorBookingStatusChange(booking, 'completed')}
-                              className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
-                            >
-                              Mark as Completed
-                            </button>
-                            <button
-                              type="button"
-                              disabled={isLoading || !canCancel}
-                              onClick={() => handleTutorBookingStatusChange(booking, 'cancelled')}
-                              className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
-                            >
-                              Cancel Booking
-                            </button>
-                            <button
-                              type="button"
-                              disabled={isLoading || !canReschedule}
-                              onClick={() => handleTutorRescheduleBooking(booking)}
-                              className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
-                            >
-                              Reschedule
-                            </button>
-                            <button
-                              type="button"
-                              disabled={isLoading || !canSubmitMeetingLink}
-                              onClick={() => handleTutorMeetingLinkUpdate(booking)}
-                              className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-60"
-                            >
-                              Submit Meeting Link
-                            </button>
-                            {canStartMeeting ? (
-                              <a
-                                href={booking.meetingLink}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-indigo-600 text-white hover:bg-indigo-700"
-                              >
-                                Start Meeting
-                              </a>
-                            ) : (
-                              <button
-                                type="button"
-                                disabled
-                                className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-slate-300 text-slate-600"
-                              >
-                                Start Meeting
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                <div className="flex items-center justify-between mb-6">
-                  <h3 className="font-black text-2xl text-slate-900">Performance</h3>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('earnings')}
-                    className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-indigo-50 text-indigo-700 border border-indigo-100 hover:bg-indigo-100"
-                  >
-                    Open Tutor Revenue Dashboard
-                  </button>
-                </div>
-
-                <div className="grid sm:grid-cols-3 gap-4 mb-6">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Sessions Completed</p>
-                    <p className="text-2xl font-black text-emerald-600 mt-2">{tutorCompletedPaidBookings.length}</p>
-                  </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Average Rating</p>
-                    <p className="text-2xl font-black text-indigo-600 mt-2">{tutorAverageRatingFromReviews.toFixed(1)}</p>
-                  </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Written Feedback</p>
-                    <p className="text-2xl font-black text-slate-900 mt-2">{tutorPerformanceFeedback.length}</p>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <h4 className="text-sm font-black uppercase tracking-widest text-slate-500">Recent Feedback</h4>
-                  {tutorPerformanceFeedback.length === 0 ? (
-                    <p className="text-sm font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
-                      No written feedback yet.
-                    </p>
-                  ) : (
-                    tutorPerformanceFeedback.map((review) => (
-                      <div key={review.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                        <div className="flex items-center justify-between gap-2 mb-1">
-                          <p className="text-sm font-black text-slate-900">{review.studentName}</p>
-                          <span className="text-xs font-black text-amber-600">{review.rating.toFixed(1)} / 5</span>
-                        </div>
-                        <p className="text-sm text-slate-600">{review.comment}</p>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
+            <TutorDashboardPage
+              currentUser={currentUser}
+              profileData={profileData}
+              setActiveTab={(tab: string) => setActiveTab(tab as Tab)}
+              tutorDashboardBookings={tutorDashboardBookings}
+              filteredTutorBookings={filteredTutorBookings}
+              tutorBookingStatusFilter={tutorBookingStatusFilter}
+              setTutorBookingStatusFilter={setTutorBookingStatusFilter}
+              tutorSessionTimelineFilter={tutorSessionTimelineFilter}
+              setTutorSessionTimelineFilter={setTutorSessionTimelineFilter}
+              activeBookingActionId={activeBookingActionId}
+              handleTutorBookingStatusChange={handleTutorBookingStatusChange}
+              handleTutorRescheduleBooking={handleTutorRescheduleBooking}
+              handleTutorMeetingLinkUpdate={handleTutorMeetingLinkUpdate}
+              handleHideBookingForCurrentUser={handleHideBookingForCurrentUser}
+              getBookingPaymentStatus={getBookingPaymentStatus}
+              getBookingStatusPillClassName={getBookingStatusPillClassName}
+              getBookingPaymentPillClassName={getBookingPaymentPillClassName}
+              getBookingStudentName={getBookingStudentName}
+              isValidMeetingLink={isValidMeetingLink}
+              isPastSession={isPastSession}
+              canStudentManageBeforeStart={canStudentManageBeforeStart}
+              myTutorCourses={myTutorCourses}
+              myTutorResources={myTutorResources}
+              tutorAverageRatingFromReviews={tutorAverageRatingFromReviews}
+              tutorCompletedPaidBookings={tutorCompletedPaidBookings}
+              tutorPerformanceFeedback={tutorPerformanceFeedback}
+              bookings={bookings}
+            />
           )}
 
           {activeTab === 'dashboard' && currentUser && isStudent && (
@@ -5923,460 +5631,41 @@ export default function App() {
           )}
 
           {activeTab === 'earnings' && currentUser && isTutor && (
-            <div className="space-y-8">
-              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                  <div>
-                    <h2 className="text-3xl font-black text-slate-900 tracking-tight">Tutor Revenue Dashboard</h2>
-                    <p className="text-slate-500 mt-1">
-                      Production-style payout analytics from paid/completed sessions and paid course purchases.
-                    </p>
-                    <div className="flex flex-wrap items-center gap-2 mt-3">
-                      {tutorHasSessionEarningMethod && (
-                        <span className="text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full border border-indigo-200 bg-indigo-50 text-indigo-700">
-                          Session Revenue
-                        </span>
-                      )}
-                      {tutorHasCourseEarningMethod && (
-                        <span className="text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full border border-cyan-200 bg-cyan-50 text-cyan-700">
-                          Course Revenue
-                        </span>
-                      )}
-                      <span className="text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700">
-                        Net after {(PLATFORM_FEE_RATE * 100).toFixed(0)}% platform fee
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={handleOpenWithdrawalModal}
-                      disabled={isLoadingWithdrawalData || withdrawalAvailableBalance <= 0}
-                      className={`px-5 py-2.5 rounded-xl font-bold transition-colors ${
-                        isLoadingWithdrawalData || withdrawalAvailableBalance <= 0
-                          ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
-                          : 'bg-emerald-600 text-white hover:bg-emerald-700'
-                      }`}
-                    >
-                      Withdraw Money
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('dashboard')}
-                      className="px-5 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 font-bold hover:bg-slate-50"
-                    >
-                      Back to Dashboard
-                    </button>
-                  </div>
-                </div>
-
-                {withdrawalNotice && (
-                  <div
-                    className={`mt-5 rounded-2xl border px-4 py-3 ${
-                      withdrawalNotice.type === 'success'
-                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                        : 'border-rose-200 bg-rose-50 text-rose-700'
-                    }`}
-                  >
-                    <p className="text-sm font-bold">{withdrawalNotice.message}</p>
-                  </div>
-                )}
-
-                <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4 mt-6">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Total Net Earnings</p>
-                    <p className="text-2xl font-black text-slate-900 mt-2">{formatLkr(withdrawalTotalEarnings)}</p>
-                  </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Withdrawn Amount</p>
-                    <p className="text-2xl font-black text-emerald-700 mt-2">{formatLkr(withdrawalWithdrawnAmount)}</p>
-                  </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Pending Withdrawals</p>
-                    <p className="text-2xl font-black text-amber-700 mt-2">{formatLkr(withdrawalPendingAmount)}</p>
-                  </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Available Balance</p>
-                    <p className="text-2xl font-black text-emerald-600 mt-2">{formatLkr(withdrawalAvailableBalance)}</p>
-                  </div>
-                </div>
-
-                {isLoadingWithdrawalData && (
-                  <p className="text-xs font-semibold text-slate-500 mt-3">Loading withdrawal balances...</p>
-                )}
-
-                <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4 mt-4">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Session Earnings</p>
-                    <p className="text-2xl font-black text-indigo-700 mt-2">{formatLkr(tutorSessionNetEarnings)}</p>
-                  </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Course Earnings</p>
-                    <p className="text-2xl font-black text-cyan-700 mt-2">{formatLkr(tutorCourseNetEarnings)}</p>
-                  </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Completed Sessions</p>
-                    <p className="text-2xl font-black text-emerald-600 mt-2">{tutorCompletedPaidBookings.length}</p>
-                  </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Paid Course Sales</p>
-                    <p className="text-2xl font-black text-cyan-600 mt-2">{tutorPaidCourseEnrollmentsCount}</p>
-                  </div>
-                </div>
-
-                {!tutorHasSessionEarningMethod && !tutorHasCourseEarningMethod && (
-                  <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5">
-                    <p className="text-sm font-bold text-slate-700">No earning method is active yet.</p>
-                    <p className="text-xs text-slate-500 mt-1">
-                      Start with session bookings, paid course sales, or both. Analytics will appear automatically.
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              <div className="grid xl:grid-cols-3 gap-8">
-                <div className="xl:col-span-2 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                  <h3 className="font-black text-2xl text-slate-900 mb-5">Monthly Earnings Trend</h3>
-                  {tutorRecentMonthlyEarnings.length === 0 ? (
-                    <div className="text-center py-14 bg-slate-50 border border-dashed border-slate-200 rounded-3xl">
-                      <Clock className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                      <p className="font-bold text-slate-500">No paid earnings available yet.</p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4 items-end">
-                      {tutorRecentMonthlyEarnings.map((entry) => {
-                        const chartMax = Math.max(
-                          ...tutorRecentMonthlyEarnings.map((point) => point.totalNetEarnings),
-                          1
-                        );
-                        const sessionHeight = Math.max(10, Math.round((entry.sessionNetEarnings / chartMax) * 150));
-                        const courseHeight = Math.max(10, Math.round((entry.courseNetEarnings / chartMax) * 150));
-
-                        return (
-                          <div key={entry.monthKey} className="flex flex-col items-center gap-2">
-                            <div className="h-44 w-full rounded-xl border border-slate-100 bg-slate-50 p-2 flex items-end justify-center">
-                              <div className="flex items-end gap-1">
-                                {tutorHasSessionEarningMethod && (
-                                  <div
-                                    className="w-4 rounded-md bg-indigo-500"
-                                    style={{ height: `${sessionHeight}px` }}
-                                    title={`Session earnings: ${formatLkr(entry.sessionNetEarnings)}`}
-                                  />
-                                )}
-                                {tutorHasCourseEarningMethod && (
-                                  <div
-                                    className="w-4 rounded-md bg-cyan-500"
-                                    style={{ height: `${courseHeight}px` }}
-                                    title={`Course earnings: ${formatLkr(entry.courseNetEarnings)}`}
-                                  />
-                                )}
-                              </div>
-                            </div>
-                            <p className="text-[11px] font-black text-slate-700">{entry.month}</p>
-                            <p className="text-[10px] font-semibold text-slate-500">{formatLkr(entry.totalNetEarnings)}</p>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                  <h3 className="font-black text-2xl text-slate-900 mb-5">Earnings Source Breakdown</h3>
-                  <div className="space-y-4">
-                    {tutorHasSessionEarningMethod && (
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <p className="text-xs font-black uppercase tracking-widest text-slate-500">Sessions</p>
-                          <p className="text-xs font-black text-indigo-700">{tutorSessionSharePercent}%</p>
-                        </div>
-                        <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden">
-                          <div className="h-full rounded-full bg-indigo-500" style={{ width: `${tutorSessionSharePercent}%` }} />
-                        </div>
-                        <p className="text-xs text-slate-500 mt-1">
-                          {formatLkr(tutorSessionNetEarnings)} • {tutorCompletedPaidBookings.length} completed sessions
-                        </p>
-                      </div>
-                    )}
-
-                    {tutorHasCourseEarningMethod && (
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <p className="text-xs font-black uppercase tracking-widest text-slate-500">Course Sales</p>
-                          <p className="text-xs font-black text-cyan-700">{tutorCourseSharePercent}%</p>
-                        </div>
-                        <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden">
-                          <div className="h-full rounded-full bg-cyan-500" style={{ width: `${tutorCourseSharePercent}%` }} />
-                        </div>
-                        <p className="text-xs text-slate-500 mt-1">
-                          {formatLkr(tutorCourseNetEarnings)} • {tutorPaidCourseEnrollmentsCount} paid enrollments
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="mt-6 pt-4 border-t border-slate-100">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Paid Transactions</p>
-                    <p className="text-2xl font-black text-slate-900 mt-1">{tutorPaidTransactions.length}</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid xl:grid-cols-2 gap-8">
-                <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                  <h3 className="font-black text-2xl text-slate-900 mb-5">Earnings by Sessions</h3>
-                  {!tutorHasSessionEarningMethod ? (
-                    <p className="text-sm font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
-                      Session-based earning method is not active for this tutor profile.
-                    </p>
-                  ) : tutorPaidSessionTransactions.length === 0 ? (
-                    <p className="text-sm font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
-                      No paid and completed session transactions yet.
-                    </p>
-                  ) : (
-                    <div className="space-y-3">
-                      {[...tutorPaidSessionTransactions]
-                        .sort((a, b) => b.timestamp - a.timestamp)
-                        .slice(0, 8)
-                        .map((transaction) => (
-                          <div key={transaction.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <p className="text-sm font-black text-slate-900">{transaction.itemName}</p>
-                                <p className="text-xs text-slate-500 mt-1">{transaction.dateLabel} • {transaction.studentName}</p>
-                              </div>
-                              <p className="text-sm font-black text-emerald-700">{formatLkr(transaction.netEarning)}</p>
-                            </div>
-                          </div>
-                        ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                  <h3 className="font-black text-2xl text-slate-900 mb-5">Earnings by Course Sales</h3>
-                  {!tutorHasCourseEarningMethod ? (
-                    <p className="text-sm font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
-                      Course-based earning method is not active for this tutor profile.
-                    </p>
-                  ) : tutorPaidCourseTransactions.length === 0 ? (
-                    <p className="text-sm font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
-                      No paid course purchase transactions yet.
-                    </p>
-                  ) : (
-                    <div className="space-y-3">
-                      {[...tutorPaidCourseTransactions]
-                        .sort((a, b) => b.timestamp - a.timestamp)
-                        .slice(0, 8)
-                        .map((transaction) => (
-                          <div key={transaction.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <p className="text-sm font-black text-slate-900">{transaction.itemName}</p>
-                                <p className="text-xs text-slate-500 mt-1">{transaction.dateLabel} • {transaction.studentName}</p>
-                              </div>
-                              <p className="text-sm font-black text-emerald-700">{formatLkr(transaction.netEarning)}</p>
-                            </div>
-                          </div>
-                        ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
-                  <div>
-                    <h3 className="font-black text-2xl text-slate-900">Withdrawal History</h3>
-                    <p className="text-sm text-slate-500 mt-1">
-                      Review payout requests, statuses, and processing updates in one place.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleOpenWithdrawalModal}
-                    disabled={isLoadingWithdrawalData || withdrawalAvailableBalance <= 0}
-                    className={`px-4 py-2 rounded-xl text-sm font-black uppercase tracking-widest transition-colors ${
-                      isLoadingWithdrawalData || withdrawalAvailableBalance <= 0
-                        ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
-                        : 'bg-emerald-600 text-white hover:bg-emerald-700'
-                    }`}
-                  >
-                    Withdraw Money
-                  </button>
-                </div>
-
-                {isLoadingWithdrawalData ? (
-                  <div className="space-y-3">
-                    {[1, 2, 3].map((row) => (
-                      <div key={row} className="h-14 rounded-xl bg-slate-100 animate-pulse" />
-                    ))}
-                  </div>
-                ) : withdrawalRequests.length === 0 ? (
-                  <div className="text-center py-14 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
-                    <Wallet className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                    <p className="font-bold text-slate-500">No withdrawal requests yet.</p>
-                    <p className="text-xs text-slate-500 mt-1">
-                      Submit your first request once your available balance is above zero.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto rounded-2xl border border-slate-200">
-                    <table className="w-full min-w-[900px]">
-                      <thead className="bg-slate-50 border-b border-slate-200">
-                        <tr>
-                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Requested</th>
-                          <th className="text-right px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Amount</th>
-                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Payout Method</th>
-                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Details</th>
-                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Status</th>
-                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Processed</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 bg-white">
-                        {withdrawalRequests.map((request) => {
-                          const requestedDate = Date.parse(String(request.requestedAt || ''));
-                          const processedDate = Date.parse(String(request.processedAt || ''));
-
-                          return (
-                            <tr key={request.id} className="hover:bg-slate-50 transition-colors">
-                              <td className="px-4 py-3 text-sm font-semibold text-slate-700 whitespace-nowrap">
-                                {Number.isNaN(requestedDate)
-                                  ? 'N/A'
-                                  : new Date(requestedDate).toLocaleDateString('en-US', {
-                                      month: 'short',
-                                      day: 'numeric',
-                                      year: 'numeric',
-                                    })}
-                              </td>
-                              <td className="px-4 py-3 text-sm font-black text-slate-900 text-right whitespace-nowrap">
-                                {formatLkr(request.amount)}
-                              </td>
-                              <td className="px-4 py-3 text-sm font-semibold text-slate-700 whitespace-nowrap">
-                                {getWithdrawalPayoutMethodLabel(request.payoutMethodType)}
-                              </td>
-                              <td className="px-4 py-3 text-xs text-slate-600 max-w-[220px]">
-                                <p className="font-semibold line-clamp-2">{request.payoutMethodDetails || 'N/A'}</p>
-                                {request.note && <p className="mt-1 text-[11px] text-slate-500 line-clamp-2">Note: {request.note}</p>}
-                              </td>
-                              <td className="px-4 py-3">
-                                <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getWithdrawalStatusPillClassName(request.status)}`}>
-                                  {getWithdrawalStatusLabel(request.status)}
-                                </span>
-                              </td>
-                              <td className="px-4 py-3 text-xs font-semibold text-slate-600 whitespace-nowrap">
-                                {Number.isNaN(processedDate)
-                                  ? '--'
-                                  : new Date(processedDate).toLocaleDateString('en-US', {
-                                      month: 'short',
-                                      day: 'numeric',
-                                      year: 'numeric',
-                                    })}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-
-              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
-                  <div>
-                    <h3 className="font-black text-2xl text-slate-900">Payment History</h3>
-                    <p className="text-sm text-slate-500 mt-1">
-                      Stripe-style transaction timeline for session bookings and course purchases.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-end gap-3">
-                    <label className="flex flex-col gap-1">
-                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Status</span>
-                      <select
-                        value={tutorTransactionFilter}
-                        onChange={(event) => setTutorTransactionFilter(event.target.value as TutorTransactionFilter)}
-                        className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
-                      >
-                        <option value="all">All</option>
-                        <option value="paid">Paid</option>
-                        <option value="pending">Pending</option>
-                        <option value="refunded_or_cancelled">Refunded/Cancelled</option>
-                      </select>
-                    </label>
-
-                    <label className="flex flex-col gap-1">
-                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Sort</span>
-                      <select
-                        value={tutorTransactionSortOrder}
-                        onChange={(event) => setTutorTransactionSortOrder(event.target.value as TutorTransactionSortOrder)}
-                        className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
-                      >
-                        <option value="newest">Newest First</option>
-                        <option value="oldest">Oldest First</option>
-                      </select>
-                    </label>
-                  </div>
-                </div>
-
-                {isLoadingUserData ? (
-                  <div className="space-y-3">
-                    {[1, 2, 3, 4].map((row) => (
-                      <div key={row} className="h-14 rounded-xl bg-slate-100 animate-pulse" />
-                    ))}
-                  </div>
-                ) : filteredTutorTransactions.length === 0 ? (
-                  <div className="text-center py-14 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
-                    <Clock className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                    <p className="font-bold text-slate-500">No transactions found for current filters.</p>
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto rounded-2xl border border-slate-200">
-                    <table className="w-full min-w-[960px]">
-                      <thead className="bg-slate-50 border-b border-slate-200">
-                        <tr>
-                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Date</th>
-                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Session/Course</th>
-                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Student</th>
-                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Payment Type</th>
-                          <th className="text-right px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Amount</th>
-                          <th className="text-right px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Platform Fee</th>
-                          <th className="text-right px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Net Earning</th>
-                          <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 bg-white">
-                        {filteredTutorTransactions.map((transaction) => (
-                          <tr key={transaction.id} className="hover:bg-slate-50 transition-colors">
-                            <td className="px-4 py-3 text-sm font-semibold text-slate-700 whitespace-nowrap">{transaction.dateLabel}</td>
-                            <td className="px-4 py-3">
-                              <p className="text-sm font-bold text-slate-900">{transaction.itemName}</p>
-                              {transaction.paymentReference && (
-                                <p className="text-[11px] text-slate-500 mt-1">Ref: {transaction.paymentReference}</p>
-                              )}
-                            </td>
-                            <td className="px-4 py-3 text-sm font-semibold text-slate-700">{transaction.studentName}</td>
-                            <td className="px-4 py-3">
-                              <span className="text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border border-slate-200 bg-slate-50 text-slate-700">
-                                {transaction.paymentType}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-sm font-black text-slate-900 text-right">{formatLkr(transaction.amount)}</td>
-                            <td className="px-4 py-3 text-sm font-bold text-slate-600 text-right">{formatLkr(transaction.platformFee)}</td>
-                            <td className="px-4 py-3 text-sm font-black text-emerald-700 text-right">{formatLkr(transaction.netEarning)}</td>
-                            <td className="px-4 py-3">
-                              <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getTransactionStatusPillClassName(transaction.status)}`}>
-                                {getTransactionStatusLabel(transaction.status)}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            </div>
+            <TutorEarningsPage
+              setActiveTab={(tab: string) => setActiveTab(tab as Tab)}
+              handleOpenWithdrawalModal={handleOpenWithdrawalModal}
+              isLoadingWithdrawalData={isLoadingWithdrawalData}
+              withdrawalAvailableBalance={withdrawalAvailableBalance}
+              withdrawalTotalEarnings={withdrawalTotalEarnings}
+              withdrawalWithdrawnAmount={withdrawalWithdrawnAmount}
+              withdrawalPendingAmount={withdrawalPendingAmount}
+              withdrawalNotice={withdrawalNotice}
+              withdrawalRequests={withdrawalRequests}
+              getWithdrawalStatusPillClassName={getWithdrawalStatusPillClassName}
+              getWithdrawalStatusLabel={getWithdrawalStatusLabel}
+              getWithdrawalPayoutMethodLabel={getWithdrawalPayoutMethodLabel}
+              tutorSessionNetEarnings={tutorSessionNetEarnings}
+              tutorCourseNetEarnings={tutorCourseNetEarnings}
+              tutorCompletedPaidBookings={tutorCompletedPaidBookings}
+              tutorPaidCourseEnrollmentsCount={tutorPaidCourseEnrollmentsCount}
+              tutorHasSessionEarningMethod={tutorHasSessionEarningMethod}
+              tutorHasCourseEarningMethod={tutorHasCourseEarningMethod}
+              tutorSessionSharePercent={tutorSessionSharePercent}
+              tutorCourseSharePercent={tutorCourseSharePercent}
+              tutorPaidTransactions={tutorPaidTransactions}
+              tutorPaidSessionTransactions={tutorPaidSessionTransactions}
+              tutorPaidCourseTransactions={tutorPaidCourseTransactions}
+              tutorRecentMonthlyEarnings={tutorRecentMonthlyEarnings}
+              PLATFORM_FEE_RATE={PLATFORM_FEE_RATE}
+              filteredTutorTransactions={filteredTutorTransactions}
+              tutorTransactionFilter={tutorTransactionFilter}
+              setTutorTransactionFilter={setTutorTransactionFilter}
+              tutorTransactionSortOrder={tutorTransactionSortOrder}
+              setTutorTransactionSortOrder={setTutorTransactionSortOrder}
+              getTransactionStatusPillClassName={getTransactionStatusPillClassName}
+              getTransactionStatusLabel={getTransactionStatusLabel}
+              isLoadingUserData={isLoadingUserData}
+            />
           )}
 
           {activeTab === 'settings' && currentUser && (

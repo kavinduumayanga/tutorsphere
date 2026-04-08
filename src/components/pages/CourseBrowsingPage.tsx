@@ -23,9 +23,29 @@ import {
   CheckCircle,
   Layers,
   ArrowUpDown,
+  TicketPercent,
+  CreditCard,
+  Loader2,
+  Shield,
+  Lock,
+  AlertTriangle,
 } from 'lucide-react';
 import { Course, CourseEnrollment, Tutor } from '../../types';
 import { formatLkr } from '../../utils/currency';
+
+type CourseCheckoutSubmission = {
+  paymentReference: string;
+  couponCode?: string;
+};
+
+type CouponValidationResult = {
+  valid: boolean;
+  couponCode: string;
+  discountPercentage: number;
+  originalPrice: number;
+  discountAmount: number;
+  finalPrice: number;
+};
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -41,7 +61,11 @@ export interface CourseBrowsingPageProps {
   courseCategoryFilter: string;
   onSetCourseSearchQuery: (q: string) => void;
   onSetCourseCategoryFilter: (cat: string) => void;
-  onEnrollCourse: (courseId: string) => void;
+  onEnrollCourse: (
+    courseId: string,
+    checkout?: CourseCheckoutSubmission
+  ) => Promise<{ ok: boolean; error?: string }>;
+  onValidateCourseCoupon: (courseId: string, couponCode: string) => Promise<CouponValidationResult>;
   onOpenCourseLearning: (courseId: string) => void;
   onViewCertificate: (enrollment: CourseEnrollment, courseTitle: string) => void;
   stemSubjects: string[];
@@ -106,6 +130,55 @@ const getEntityTimestamp = (item: { id: string }): number => {
   return 0;
 };
 
+const getDigitsOnly = (value: string): string => value.replace(/\D/g, '');
+
+const formatCardNumberInput = (value: string): string => {
+  const digits = getDigitsOnly(value).slice(0, 16);
+  return digits.replace(/(.{4})/g, '$1 ').trim();
+};
+
+const formatExpiryInput = (value: string): string => {
+  const digits = getDigitsOnly(value).slice(0, 4);
+  if (digits.length <= 2) {
+    return digits;
+  }
+  return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+};
+
+const isValidExpiry = (value: string): boolean => {
+  const match = value.match(/^(\d{2})\/(\d{2})$/);
+  if (!match) {
+    return false;
+  }
+
+  const month = Number(match[1]);
+  const yearSuffix = Number(match[2]);
+
+  if (!Number.isInteger(month) || month < 1 || month > 12) {
+    return false;
+  }
+
+  const now = new Date();
+  const currentYearSuffix = now.getFullYear() % 100;
+  const currentMonth = now.getMonth() + 1;
+
+  if (yearSuffix < currentYearSuffix) {
+    return false;
+  }
+
+  if (yearSuffix === currentYearSuffix && month < currentMonth) {
+    return false;
+  }
+
+  return true;
+};
+
+const createCoursePaymentReference = (): string => {
+  const stamp = Date.now().toString(36).toUpperCase();
+  const nonce = Math.floor(Math.random() * 900 + 100);
+  return `CRS-${stamp}-${nonce}`;
+};
+
 // ─── Skeleton Components ──────────────────────────────────────────────────────
 
 const CardSkeleton = () => (
@@ -163,7 +236,7 @@ interface QuickPreviewProps {
   isStudent: boolean;
   isLoggedIn: boolean;
   onClose: () => void;
-  onEnroll: (courseId: string) => void;
+  onPrimaryAction: (course: Course) => void;
   onContinue: (courseId: string) => void;
   onViewCertificate: (enrollment: CourseEnrollment, courseTitle: string) => void;
 }
@@ -176,7 +249,7 @@ const QuickPreviewModal: React.FC<QuickPreviewProps> = ({
   isStudent,
   isLoggedIn,
   onClose,
-  onEnroll,
+  onPrimaryAction,
   onContinue,
   onViewCertificate,
 }) => {
@@ -331,7 +404,7 @@ const QuickPreviewModal: React.FC<QuickPreviewProps> = ({
           <button
             onClick={() => {
               if (isStudent && isEnrolled) onContinue(course.id);
-              else onEnroll(course.id);
+              else onPrimaryAction(course);
               onClose();
             }}
             className={`w-full py-3.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
@@ -347,9 +420,303 @@ const QuickPreviewModal: React.FC<QuickPreviewProps> = ({
             ) : isFreeCourse ? (
               <><Sparkles className="w-4 h-4" /> Enroll for Free</>
             ) : (
-              <><GraduationCap className="w-4 h-4" /> Buy Course — {formatLkr(course.price)}</>
+              <><GraduationCap className="w-4 h-4" /> Buy Link — {formatLkr(course.price)}</>
             )}
           </button>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+};
+
+interface CheckoutModalProps {
+  course: Course;
+  couponInput: string;
+  appliedCoupon: CouponValidationResult | null;
+  cardholderName: string;
+  cardNumber: string;
+  expiry: string;
+  cvv: string;
+  isApplyingCoupon: boolean;
+  isSubmitting: boolean;
+  errorMessage: string | null;
+  couponMessage: string | null;
+  onCouponInputChange: (value: string) => void;
+  onApplyCoupon: () => Promise<void>;
+  onClearCoupon: () => void;
+  onCardholderNameChange: (value: string) => void;
+  onCardNumberChange: (value: string) => void;
+  onExpiryChange: (value: string) => void;
+  onCvvChange: (value: string) => void;
+  onSubmit: () => Promise<void>;
+  onClose: () => void;
+}
+
+const CheckoutModal: React.FC<CheckoutModalProps> = ({
+  course,
+  couponInput,
+  appliedCoupon,
+  cardholderName,
+  cardNumber,
+  expiry,
+  cvv,
+  isApplyingCoupon,
+  isSubmitting,
+  errorMessage,
+  couponMessage,
+  onCouponInputChange,
+  onApplyCoupon,
+  onClearCoupon,
+  onCardholderNameChange,
+  onCardNumberChange,
+  onExpiryChange,
+  onCvvChange,
+  onSubmit,
+  onClose,
+}) => {
+  const originalPrice = appliedCoupon?.originalPrice ?? Math.max(0, Number(course.price) || 0);
+  const discountAmount = appliedCoupon?.discountAmount ?? 0;
+  const finalPrice = appliedCoupon?.finalPrice ?? originalPrice;
+  const hasAppliedCoupon = Boolean(appliedCoupon);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[210] flex items-center justify-center bg-black/50 px-4 py-6 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ opacity: 0, y: 20, scale: 0.97 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 20, scale: 0.97 }}
+        transition={{ type: 'spring', damping: 24, stiffness: 280 }}
+        className="w-full max-w-6xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="border-b border-slate-100 px-6 py-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1 text-[10px] font-extrabold uppercase tracking-widest text-indigo-700">
+                <CreditCard className="h-3.5 w-3.5" />
+                Secure Checkout
+              </p>
+              <h3 className="mt-2 text-lg font-extrabold text-slate-900">Course Payment Portal</h3>
+            </div>
+            <button
+              onClick={onClose}
+              className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+
+        <div className="max-h-[82vh] overflow-y-auto p-6 sm:p-8">
+          <div className="grid lg:grid-cols-12 gap-8 items-start">
+            <div className="lg:col-span-8">
+              <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200/60 overflow-hidden">
+                <div className="p-6 sm:p-8 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-indigo-50/30">
+                  <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">Secure Checkout</h1>
+                  <p className="text-slate-500 mt-2 font-medium text-sm">Complete payment to confirm your course enrollment instantly.</p>
+                </div>
+
+                <div className="p-6 sm:p-8 space-y-6">
+                  <div>
+                    <label className="text-xs font-black uppercase tracking-wider text-slate-500">Cardholder Name</label>
+                    <input
+                      value={cardholderName}
+                      onChange={(event) => onCardholderNameChange(event.target.value)}
+                      placeholder="Name on card"
+                      className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-black uppercase tracking-wider text-slate-500">Card Number</label>
+                    <input
+                      value={cardNumber}
+                      onChange={(event) => onCardNumberChange(event.target.value)}
+                      inputMode="numeric"
+                      placeholder="4242 4242 4242 4242"
+                      className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium tracking-[0.2em] text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                    />
+                  </div>
+
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-xs font-black uppercase tracking-wider text-slate-500">Expiry</label>
+                      <input
+                        value={expiry}
+                        onChange={(event) => onExpiryChange(event.target.value)}
+                        inputMode="numeric"
+                        placeholder="MM/YY"
+                        className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-black uppercase tracking-wider text-slate-500">CVV</label>
+                      <input
+                        value={cvv}
+                        onChange={(event) => onCvvChange(event.target.value)}
+                        inputMode="numeric"
+                        placeholder="123"
+                        className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-500">
+                    Test mode: use a card ending with <span className="font-black text-slate-700">0000</span> (or CVV <span className="font-black text-slate-700">000</span>) to simulate a failed payment.
+                  </div>
+
+                  {errorMessage && (
+                    <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-sm font-semibold text-rose-700 flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                      <span>{errorMessage}</span>
+                    </div>
+                  )}
+
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <button
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={() => {
+                        void onSubmit();
+                      }}
+                      className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200 flex items-center justify-center gap-2 disabled:opacity-60"
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Processing Payment...
+                        </>
+                      ) : (
+                        <>
+                          <Lock className="w-5 h-5" />
+                          Pay & Enroll Course
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={onClose}
+                      className="sm:w-52 py-4 bg-slate-50 text-slate-700 rounded-2xl font-bold hover:bg-slate-100 transition-colors border border-slate-200 disabled:opacity-60"
+                    >
+                      Back to Courses
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="lg:col-span-4">
+              <div className="bg-white rounded-[2rem] shadow-xl shadow-indigo-50 border border-slate-200/60 p-6 sm:p-8 lg:sticky lg:top-6">
+                <h3 className="text-xl font-black text-slate-900 mb-6">Order Summary</h3>
+
+                <div className="space-y-4 mb-6">
+                  <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                    <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center shrink-0 overflow-hidden border border-indigo-200">
+                      {course.thumbnail ? (
+                        <img src={course.thumbnail} alt={course.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      ) : (
+                        <GraduationCap className="w-5 h-5 text-indigo-600" />
+                      )}
+                    </div>
+                    <div>
+                      <p className="font-bold text-slate-900 text-sm line-clamp-1">{course.title}</p>
+                      <p className="text-xs font-medium text-slate-500">Course Purchase</p>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-wider">Coupon Code</p>
+                      {appliedCoupon && (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black uppercase tracking-widest text-emerald-700">
+                          Applied {appliedCoupon.discountPercentage}%
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="relative">
+                        <TicketPercent className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                        <input
+                          type="text"
+                          value={couponInput}
+                          onChange={(event) => onCouponInputChange(event.target.value.toUpperCase())}
+                          placeholder="Enter coupon code"
+                          className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm font-semibold uppercase tracking-wide text-slate-700 outline-none transition-all focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
+                        />
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => {
+                            void onApplyCoupon();
+                          }}
+                          disabled={isApplyingCoupon || !couponInput.trim()}
+                          className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {isApplyingCoupon ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                          Apply
+                        </button>
+                        {appliedCoupon && (
+                          <button
+                            onClick={onClearCoupon}
+                            className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-100"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {couponMessage && (
+                      <p className="text-xs font-semibold text-emerald-600">{couponMessage}</p>
+                    )}
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-3">
+                    <div>
+                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-wider">Coupon</p>
+                      <p className="text-sm font-bold text-slate-900">
+                        {hasAppliedCoupon ? `${appliedCoupon?.couponCode} (${appliedCoupon?.discountPercentage}% off)` : 'Not applied'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-wider">Access</p>
+                      <p className="text-sm font-bold text-slate-900">Instant after payment</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t border-slate-100 pt-6 mb-5">
+                  <div className="flex justify-between items-center mb-2.5">
+                    <span className="font-bold text-slate-500 text-sm">Course Price</span>
+                    <span className="font-bold text-slate-900">{formatLkr(originalPrice)}</span>
+                  </div>
+                  <div className="flex justify-between items-center mb-4">
+                    <span className="font-bold text-slate-500 text-sm">Discount</span>
+                    <span className="font-bold text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-md text-xs uppercase tracking-wider">
+                      -{formatLkr(discountAmount)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-end pt-4 border-t border-slate-100">
+                    <span className="font-black text-slate-900 text-lg">Total</span>
+                    <span className="font-black text-slate-900 text-3xl tracking-tight">{formatLkr(finalPrice)}</span>
+                  </div>
+                </div>
+
+                <div className="mt-5 flex items-center justify-center gap-2 text-xs font-bold text-slate-500 bg-slate-50 py-2.5 rounded-xl border border-slate-200">
+                  <Shield className="w-4 h-4 text-emerald-500" /> Secure encrypted checkout
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </motion.div>
     </motion.div>
@@ -371,6 +738,7 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
   onSetCourseSearchQuery,
   onSetCourseCategoryFilter,
   onEnrollCourse,
+  onValidateCourseCoupon,
   onOpenCourseLearning,
   onViewCertificate,
   stemSubjects,
@@ -380,6 +748,18 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
   const [wishlist, setWishlist] = useState<Set<string>>(new Set());
   const [previewCourse, setPreviewCourse] = useState<Course | null>(null);
   const [showSortDropdown, setShowSortDropdown] = useState(false);
+  const [checkoutCourse, setCheckoutCourse] = useState<Course | null>(null);
+  const [couponInput, setCouponInput] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<CouponValidationResult | null>(null);
+  const [cardholderName, setCardholderName] = useState('');
+  const [cardNumber, setCardNumber] = useState('');
+  const [expiry, setExpiry] = useState('');
+  const [cvv, setCvv] = useState('');
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [couponMessage, setCouponMessage] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [isApplyingCoupon, setIsApplyingCoupon] = useState(false);
+  const [isSubmittingCheckout, setIsSubmittingCheckout] = useState(false);
 
   const categories = useMemo(() => ['All', ...stemSubjects], [stemSubjects]);
 
@@ -482,6 +862,160 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
     });
   }, []);
 
+  const resetCheckoutState = () => {
+    setCouponInput('');
+    setAppliedCoupon(null);
+    setCardholderName('');
+    setCardNumber('');
+    setExpiry('');
+    setCvv('');
+    setCheckoutError(null);
+    setCouponMessage(null);
+    setIsApplyingCoupon(false);
+    setIsSubmittingCheckout(false);
+  };
+
+  const closeCheckoutModal = () => {
+    setCheckoutCourse(null);
+    resetCheckoutState();
+  };
+
+  const handlePrimaryCourseAction = useCallback(async (course: Course) => {
+    setActionError(null);
+
+    const enrollment = studentEnrollmentByCourseId.get(course.id);
+    if (isStudent && enrollment) {
+      onOpenCourseLearning(course.id);
+      return;
+    }
+
+    if (!isStudent || !isLoggedIn) {
+      const result = await onEnrollCourse(course.id);
+      if (!result.ok && result.error) {
+        setActionError(result.error);
+      }
+      return;
+    }
+
+    const isFreeCourse = course.isFree || course.price <= 0;
+    if (isFreeCourse) {
+      const result = await onEnrollCourse(course.id);
+      if (!result.ok && result.error) {
+        setActionError(result.error);
+      }
+      return;
+    }
+
+    resetCheckoutState();
+    setCheckoutCourse(course);
+  }, [
+    isLoggedIn,
+    isStudent,
+    onEnrollCourse,
+    onOpenCourseLearning,
+    studentEnrollmentByCourseId,
+  ]);
+
+  const handleApplyCoupon = async () => {
+    if (!checkoutCourse) {
+      return;
+    }
+
+    const code = couponInput.trim();
+    if (!code) {
+      setCheckoutError('Enter a coupon code before applying.');
+      return;
+    }
+
+    setCheckoutError(null);
+    setCouponMessage(null);
+    setIsApplyingCoupon(true);
+
+    try {
+      const validation = await onValidateCourseCoupon(checkoutCourse.id, code);
+      setAppliedCoupon(validation);
+      setCouponInput(validation.couponCode);
+      setCouponMessage(`${validation.couponCode} applied successfully.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to apply coupon.';
+      setAppliedCoupon(null);
+      setCouponMessage(null);
+      setCheckoutError(message);
+    } finally {
+      setIsApplyingCoupon(false);
+    }
+  };
+
+  const handleCouponInputChange = (value: string) => {
+    const normalizedValue = value.toUpperCase();
+    setCouponInput(normalizedValue);
+    setCheckoutError(null);
+    setCouponMessage(null);
+
+    if (appliedCoupon && normalizedValue.trim() !== appliedCoupon.couponCode) {
+      setAppliedCoupon(null);
+    }
+  };
+
+  const handleCheckoutSubmit = async () => {
+    if (!checkoutCourse) {
+      return;
+    }
+
+    const cleanedCardholder = cardholderName.trim();
+    const cleanedCardNumber = getDigitsOnly(cardNumber);
+    const cleanedCvv = getDigitsOnly(cvv).slice(0, 4);
+
+    if (cleanedCardholder.length < 2) {
+      setCheckoutError('Cardholder name is required.');
+      return;
+    }
+
+    if (cleanedCardNumber.length !== 16) {
+      setCheckoutError('Enter a valid 16-digit card number.');
+      return;
+    }
+
+    if (!isValidExpiry(expiry)) {
+      setCheckoutError('Enter a valid expiry date in MM/YY format.');
+      return;
+    }
+
+    if (cleanedCvv.length < 3) {
+      setCheckoutError('Enter a valid CVV (3 or 4 digits).');
+      return;
+    }
+
+    setCheckoutError(null);
+    setIsSubmittingCheckout(true);
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+
+      const paymentReference = createCoursePaymentReference();
+      const shouldFailPayment = cleanedCardNumber.endsWith('0000') || cleanedCvv === '000';
+
+      if (shouldFailPayment) {
+        setCheckoutError('Payment authorization was declined by the payment gateway. Please try a different card.');
+        return;
+      }
+
+      const result = await onEnrollCourse(checkoutCourse.id, {
+        paymentReference,
+        couponCode: appliedCoupon?.couponCode,
+      });
+
+      if (!result.ok) {
+        setCheckoutError(result.error || 'Failed to enroll in course.');
+        return;
+      }
+
+      closeCheckoutModal();
+    } finally {
+      setIsSubmittingCheckout(false);
+    }
+  };
+
   const activeCategory = courseCategoryFilter === 'All Categories' ? 'All' : courseCategoryFilter;
   const activeSortLabel = SORT_OPTIONS.find((o) => o.value === sortBy)?.label || 'Sort';
   const hasActiveFilters = courseSearchQuery !== '' || activeCategory !== 'All';
@@ -578,6 +1112,12 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
           </div>
         </div>
       </div>
+
+      {actionError && (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
+          {actionError}
+        </div>
+      )}
 
       {/* ═══════ CATEGORY PILLS ═══════ */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -800,11 +1340,9 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
                         )}
                       </div>
                       <button
-                        onClick={() =>
-                          isStudent && isEnrolled
-                            ? onOpenCourseLearning(course.id)
-                            : onEnrollCourse(course.id)
-                        }
+                        onClick={() => {
+                          void handlePrimaryCourseAction(course);
+                        }}
                         className={`px-4 py-2 rounded-xl flex items-center gap-1.5 text-[13px] font-bold transition-all duration-200 ${
                           isStudent && isEnrolled
                             ? 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200'
@@ -816,7 +1354,7 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
                         ) : isFreeCourse ? (
                           <>Enroll <ArrowRight className="w-3.5 h-3.5" /></>
                         ) : (
-                          <>Buy <ArrowRight className="w-3.5 h-3.5" /></>
+                          <>Buy Link <ArrowRight className="w-3.5 h-3.5" /></>
                         )}
                       </button>
                     </div>
@@ -874,9 +1412,43 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
             isStudent={isStudent}
             isLoggedIn={isLoggedIn}
             onClose={() => setPreviewCourse(null)}
-            onEnroll={onEnrollCourse}
+            onPrimaryAction={(course) => {
+              void handlePrimaryCourseAction(course);
+            }}
             onContinue={onOpenCourseLearning}
             onViewCertificate={onViewCertificate}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {checkoutCourse && (
+          <CheckoutModal
+            course={checkoutCourse}
+            couponInput={couponInput}
+            appliedCoupon={appliedCoupon}
+            cardholderName={cardholderName}
+            cardNumber={cardNumber}
+            expiry={expiry}
+            cvv={cvv}
+            isApplyingCoupon={isApplyingCoupon}
+            isSubmitting={isSubmittingCheckout}
+            errorMessage={checkoutError}
+            couponMessage={couponMessage}
+            onCouponInputChange={handleCouponInputChange}
+            onApplyCoupon={handleApplyCoupon}
+            onClearCoupon={() => {
+              setAppliedCoupon(null);
+              setCouponInput('');
+              setCouponMessage(null);
+              setCheckoutError(null);
+            }}
+            onCardholderNameChange={(value) => setCardholderName(value)}
+            onCardNumberChange={(value) => setCardNumber(formatCardNumberInput(value))}
+            onExpiryChange={(value) => setExpiry(formatExpiryInput(value))}
+            onCvvChange={(value) => setCvv(getDigitsOnly(value).slice(0, 4))}
+            onSubmit={handleCheckoutSubmit}
+            onClose={closeCheckoutModal}
           />
         )}
       </AnimatePresence>

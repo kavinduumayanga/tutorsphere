@@ -11,6 +11,7 @@ import {
   SkillLevel,
   CourseEnrollment,
   CourseModuleResource,
+  CourseCoupon,
   WithdrawalRequest,
   WithdrawalSummary,
 } from '../types';
@@ -633,7 +634,7 @@ class ApiService {
   async enrollInCourse(
     courseId: string,
     studentId: string,
-    options?: { paymentConfirmed?: boolean; paymentReference?: string }
+    options?: { paymentConfirmed?: boolean; paymentReference?: string; couponCode?: string }
   ): Promise<Course> {
     return this.request(`/courses/${courseId}/enroll`, {
       method: 'POST',
@@ -641,7 +642,83 @@ class ApiService {
         studentId,
         paymentConfirmed: Boolean(options?.paymentConfirmed),
         paymentReference: options?.paymentReference?.trim() || undefined,
+        couponCode: options?.couponCode?.trim() || undefined,
       }),
+    });
+  }
+
+  async getCourseCoupons(courseId: string, actorId: string): Promise<CourseCoupon[]> {
+    const params = new URLSearchParams({ actorId });
+    return this.request(`/courses/${courseId}/coupons?${params.toString()}`);
+  }
+
+  async createCourseCoupon(
+    courseId: string,
+    payload: {
+      actorId: string;
+      code: string;
+      discountPercentage: number;
+      isActive?: boolean;
+      expiresAt?: string;
+      usageLimit?: number;
+    }
+  ): Promise<CourseCoupon> {
+    return this.request(`/courses/${courseId}/coupons`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateCourseCoupon(
+    courseId: string,
+    couponId: string,
+    payload: {
+      actorId: string;
+      code?: string;
+      discountPercentage?: number;
+      isActive?: boolean;
+      expiresAt?: string | null;
+      usageLimit?: number | null;
+    }
+  ): Promise<CourseCoupon> {
+    return this.request(`/courses/${courseId}/coupons/${couponId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async toggleCourseCouponStatus(
+    courseId: string,
+    couponId: string,
+    payload: { actorId: string; isActive: boolean }
+  ): Promise<CourseCoupon> {
+    return this.request(`/courses/${courseId}/coupons/${couponId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteCourseCoupon(courseId: string, couponId: string, actorId: string): Promise<void> {
+    const params = new URLSearchParams({ actorId });
+    return this.request(`/courses/${courseId}/coupons/${couponId}?${params.toString()}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async validateCourseCoupon(
+    courseId: string,
+    payload: { studentId: string; couponCode: string }
+  ): Promise<{
+    valid: boolean;
+    couponCode: string;
+    discountPercentage: number;
+    originalPrice: number;
+    discountAmount: number;
+    finalPrice: number;
+  }> {
+    return this.request(`/courses/${courseId}/coupons/validate`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   }
 

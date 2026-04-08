@@ -72,6 +72,19 @@ export interface Course {
   enrolledStudents: string[];
 }
 
+export interface CourseCoupon {
+  id: string;
+  courseId: string;
+  code: string;
+  discountPercentage: number;
+  isActive: boolean;
+  expiresAt?: string;
+  usageLimit?: number;
+  usageCount: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface CourseModuleResource {
   name: string;
   url: string;
@@ -97,6 +110,10 @@ export interface CourseEnrollment {
   paymentReference?: string;
   paidAt?: string;
   amountPaid?: number;
+  originalPrice?: number;
+  couponCode?: string;
+  discountAmount?: number;
+  finalPaidAmount?: number;
   studentName?: string;
   courseTitle?: string;
   tutorId?: string;

@@ -82,7 +82,7 @@ export const localService = {
     const lowerMessage = message.toLowerCase();
 
     if (lowerMessage.includes('quiz') || lowerMessage.includes('test')) {
-      return "Great! You can take quizzes in the Quizzes section. Click on any subject to start a personalized assessment. Would you like me to help you navigate there?";
+      return "Great! You can open the AI Assistant section to start a personalized assessment and get a study plan. Would you like me to help you navigate there?";
     }
 
     if (lowerMessage.includes('tutor') || lowerMessage.includes('find')) {
@@ -107,8 +107,8 @@ export const localService = {
 
     // Default helpful responses
     const defaultResponses = [
-      "I'm here to help you with TutorSphere! You can ask me about finding tutors, taking quizzes, enrolling in courses, or checking your progress.",
-      "Welcome to TutorSphere! How can I assist you today? I can help you find tutors, start quizzes, or navigate the platform.",
+      "I'm here to help you with TutorSphere! You can ask me about finding tutors, using AI Assistant, enrolling in courses, or checking your progress.",
+      "Welcome to TutorSphere! How can I assist you today? I can help you find tutors, start AI Assistant, or navigate the platform.",
       "TutorSphere is your gateway to quality STEM education. What would you like to know about our tutors, courses, or features?"
     ];
 
@@ -124,7 +124,7 @@ export const localService = {
 
     const recommendations = [
       "Focus on weak subjects first",
-      "Practice regularly with quizzes",
+      "Practice regularly with AI Assistant",
       "Review fundamental concepts weekly",
       "Set specific daily goals"
     ];

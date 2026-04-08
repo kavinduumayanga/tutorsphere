@@ -26,7 +26,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       { key: 'questions' as Tab, label: 'Q&A' },
       { key: 'courses' as Tab, label: 'Courses' },
       { key: 'resources' as Tab, label: 'Resources' },
-      { key: 'quizzes' as Tab, label: 'Quizzes' }
+      { key: 'quizzes' as Tab, label: 'AI Assistant' }
     ];
 
     if (!currentUser) {

@@ -1,23 +1,34 @@
 import { azureOpenAiClient } from '../quiz-chatbot/azureOpenAiClient.js';
 import {
+  ASK_LEARN_ASSISTANT_NAME,
+  ASK_LEARN_OUT_OF_SCOPE_MESSAGE,
+  ASK_LEARN_SYSTEM_PROMPT,
   FAQ_ASSISTANT_NAME,
   FAQ_OUT_OF_SCOPE_MESSAGE,
   FAQ_RESPONSE_FORMAT_RULES,
   FAQ_SYSTEM_PROMPT,
   PLATFORM_INFO_CONTEXT,
+  ROADMAP_FINDER_ASSISTANT_NAME,
+  ROADMAP_OUT_OF_SCOPE_MESSAGE,
+  ROADMAP_SYSTEM_PROMPT,
 } from './promptRules.js';
 import { buildSafePlatformSnapshot } from './dataLayer.js';
 import {
   getOutOfScopeReply,
+  isAskLearnRestrictedTopic,
   isPromptInjectionAttempt,
+  isRoadmapRequest,
   isTutorSphereScopeQuestion,
   sanitizeAssistantReply,
   sanitizeUserInput,
 } from './security.js';
-import { FaqChatContext, SafePlatformSnapshot } from './types.js';
+import { FaqAssistantMode, FaqChatContext, SafePlatformSnapshot } from './types.js';
 
 const FALLBACK_REPLY =
   'Hi! Here is a clear overview for you.\n\n🧭 TutorSphere Help\n\n1. Platform Guidance\n   • Scope: Courses, tutors, bookings, resources, certificates\n   • Format: Structured response blocks\n   • Support: Step-by-step help\n\n👉 You can explore these in TutorSphere sections, and I can guide your next step.';
+
+const ASK_LEARN_FALLBACK_REPLY =
+  '📘 Learning Assistant\n\nI can explain this step by step in a student-friendly way.\n\n🔹 Main Concepts:\n1. Core idea and why it matters\n2. Key terms and how they connect\n3. Practical usage\n\n🔹 Example:\nI can also provide a simple practical or code example if you want.\n\n👉 Tell me your exact topic (for example: "OOP in Java", "binary search", or "networking basics") and I will break it down clearly.';
 
 type AssistantIntent =
   | 'courses'
@@ -26,6 +37,15 @@ type AssistantIntent =
   | 'resources'
   | 'certificates'
   | 'platform';
+
+type AssistantMode = FaqAssistantMode;
+
+const normalizeAssistantMode = (value: unknown): AssistantMode => {
+  if (value === 'ask_learn' || value === 'roadmap_finder' || value === 'platform') {
+    return value;
+  }
+  return 'platform';
+};
 
 const INTENT_PATTERNS: Record<AssistantIntent, RegExp> = {
   courses: /\b(course|courses|enroll|enrollment|module|lesson|price|paid|free)\b/i,
@@ -273,7 +293,7 @@ const buildPlatformResponse = (): string => {
   const sections = PLATFORM_INFO_CONTEXT.knownSections;
   const sectionBlocks = [
     formatItemBlock(1, 'Find Learning Content', [
-      { label: 'Sections', value: sections.filter((s) => ['Courses', 'Resources', 'Quizzes'].includes(s)).join(', ') },
+      { label: 'Sections', value: sections.filter((s) => ['Courses', 'Resources', 'AI Assistant'].includes(s)).join(', ') },
       { label: 'Use Case', value: 'Explore study content and practice' },
       { label: 'Audience', value: 'Students and tutors' },
     ]),
@@ -385,20 +405,91 @@ const toSafeContext = (context: FaqChatContext = {}) => ({
   currentTab: sanitizeUserInput(context.currentTab || '').slice(0, 40) || 'unknown',
   userRole: sanitizeUserInput(context.userRole || '').slice(0, 20) || 'guest',
   userName: sanitizeUserInput(context.userName || '').slice(0, 80) || 'Guest',
+  aiMode: normalizeAssistantMode(context.aiMode),
 });
 
+const TARGET_ROLE_PATTERNS = [
+  /(?:become|as|for|toward|towards)\s+(?:a|an)?\s*([a-z][a-z0-9\s/+\-]{2,50})/i,
+  /roadmap\s+(?:for|to\s+become)\s+(?:a|an)?\s*([a-z][a-z0-9\s/+\-]{2,50})/i,
+  /(?:role|career)\s*[:\-]\s*([a-z][a-z0-9\s/+\-]{2,50})/i,
+];
+
+const extractTargetRole = (message: string): string => {
+  for (const pattern of TARGET_ROLE_PATTERNS) {
+    const match = message.match(pattern);
+    if (match?.[1]) {
+      return match[1].trim().replace(/\s+/g, ' ');
+    }
+  }
+
+  const compact = message.trim().replace(/\s+/g, ' ');
+  if (!compact) {
+    return 'Target Role';
+  }
+
+  return compact.length > 60 ? compact.slice(0, 60).trim() : compact;
+};
+
+const isStructuredRoadmap = (reply: string): boolean => {
+  const normalized = String(reply || '').replace(/\r\n?/g, '\n');
+  const requiredHeaders = [
+    '1. Target Role Overview',
+    '2. Foundation Skills',
+    '3. Core Technical Skills',
+    '4. Projects and Portfolio',
+    '5. Timeline and Milestones',
+    '6. Interview and Job Search Preparation',
+    '7. First Action This Week',
+  ];
+
+  return requiredHeaders.every((header) => normalized.includes(header));
+};
+
+const buildRoadmapFallback = (role: string): string => {
+  const safeRole = role || 'Target Role';
+
+  return [
+    `Great goal. Here is a focused roadmap for becoming a ${safeRole}.`,
+    '',
+    '1. Target Role Overview',
+    `   • Role: ${safeRole}`,
+    '   • Outcome: Job-ready portfolio and interview confidence',
+    '   • Focus: Strong fundamentals + practical projects',
+    '',
+    '2. Foundation Skills',
+    '   • Learn core math, logic, and problem-solving basics',
+    '   • Build clear communication and technical writing habits',
+    '   • Set a weekly learning routine with measurable goals',
+    '',
+    '3. Core Technical Skills',
+    '   • Master tools, frameworks, and domain concepts for this role',
+    '   • Practice with guided exercises and mini implementations',
+    '   • Track weak areas and revise using spaced repetition',
+    '',
+    '4. Projects and Portfolio',
+    '   • Build 3 portfolio projects from beginner to advanced',
+    '   • Publish work on GitHub with clean README documentation',
+    '   • Add one real-world capstone that solves a practical problem',
+    '',
+    '5. Timeline and Milestones',
+    '   • Month 1-2: Foundations and beginner projects',
+    '   • Month 3-4: Intermediate depth and portfolio growth',
+    '   • Month 5-6: Advanced capstone and job preparation',
+    '',
+    '6. Interview and Job Search Preparation',
+    '   • Prepare resume, LinkedIn profile, and project summaries',
+    '   • Practice role-specific interview questions weekly',
+    '   • Apply consistently and refine using feedback',
+    '',
+    '7. First Action This Week',
+    `   • Define your ${safeRole} skill checklist and learning schedule`,
+    '   • Complete one beginner project milestone',
+    '   • Write a progress note and plan the next 7 days',
+  ].join('\n');
+};
+
 export class FaqChatbotService {
-  async getReply(message: string, context: FaqChatContext = {}): Promise<string> {
-    const sanitizedMessage = sanitizeUserInput(message);
-
-    if (!sanitizedMessage) {
-      return `${FAQ_ASSISTANT_NAME} is ready. Ask me about TutorSphere courses, tutors, bookings, resources, certificates, or platform usage.`;
-    }
-
-    if (isPromptInjectionAttempt(sanitizedMessage)) {
-      return getOutOfScopeReply();
-    }
-
+  private async getPlatformReply(sanitizedMessage: string, context: FaqChatContext): Promise<string> {
     if (!isTutorSphereScopeQuestion(sanitizedMessage)) {
       return FAQ_OUT_OF_SCOPE_MESSAGE;
     }
@@ -440,12 +531,131 @@ export class FaqChatbotService {
       return FALLBACK_REPLY;
     }
 
-    // Final safety net: if model drifted out of scope, force the guardrail response.
     if (!isTutorSphereScopeQuestion(`${sanitizedMessage} ${safeReply}`)) {
       return FAQ_OUT_OF_SCOPE_MESSAGE;
     }
 
     return safeReply;
+  }
+
+  private async getAskLearnReply(sanitizedMessage: string, context: FaqChatContext): Promise<string> {
+    if (isAskLearnRestrictedTopic(sanitizedMessage)) {
+      return ASK_LEARN_OUT_OF_SCOPE_MESSAGE;
+    }
+
+    const safeContext = toSafeContext(context);
+    const composedUserPrompt = [
+      'You are operating in Ask & Learn AI mode.',
+      `UserContext: ${JSON.stringify(safeContext)}`,
+      `UserQuestion: ${sanitizedMessage}`,
+      'Answer as a tutor for educational learning questions with clear step-by-step explanations.',
+      'If the user asks something harmful, illegal, sexually explicit, violent, or unrelated to learning, refuse using the exact required out-of-scope sentence.',
+      'Keep the answer practical and student-friendly. Include a short "Next Practice Step" line.',
+    ].join('\n\n');
+
+    const rawReply = await azureOpenAiClient.chat(
+      [
+        {
+          role: 'system',
+          content: ASK_LEARN_SYSTEM_PROMPT,
+        },
+        {
+          role: 'user',
+          content: composedUserPrompt,
+        },
+      ],
+      {
+        temperature: 0.3,
+        maxTokens: 700,
+      }
+    );
+
+    const safeReply = sanitizeAssistantReply(rawReply);
+    if (!safeReply) {
+      return ASK_LEARN_FALLBACK_REPLY;
+    }
+
+    return safeReply;
+  }
+
+  private async getRoadmapReply(sanitizedMessage: string, context: FaqChatContext): Promise<string> {
+    if (!isRoadmapRequest(sanitizedMessage)) {
+      return ROADMAP_OUT_OF_SCOPE_MESSAGE;
+    }
+
+    const safeContext = toSafeContext(context);
+    const targetRole = extractTargetRole(sanitizedMessage);
+    const composedUserPrompt = [
+      'You are operating in Roadmap Finder mode.',
+      `UserContext: ${JSON.stringify(safeContext)}`,
+      `TargetRole: ${targetRole}`,
+      `UserRequest: ${sanitizedMessage}`,
+      'Return a role-based structured roadmap using the exact numbered sections from the system instructions.',
+      'Keep milestones practical and student-friendly.',
+    ].join('\n\n');
+
+    const rawReply = await azureOpenAiClient.chat(
+      [
+        {
+          role: 'system',
+          content: ROADMAP_SYSTEM_PROMPT,
+        },
+        {
+          role: 'user',
+          content: composedUserPrompt,
+        },
+      ],
+      {
+        temperature: 0.35,
+        maxTokens: 900,
+      }
+    );
+
+    const safeReply = sanitizeAssistantReply(rawReply);
+    if (!safeReply) {
+      return buildRoadmapFallback(targetRole);
+    }
+
+    if (!isStructuredRoadmap(safeReply)) {
+      return buildRoadmapFallback(targetRole);
+    }
+
+    return safeReply;
+  }
+
+  async getReply(message: string, context: FaqChatContext = {}): Promise<string> {
+    const sanitizedMessage = sanitizeUserInput(message);
+    const mode = normalizeAssistantMode(context.aiMode);
+
+    if (!sanitizedMessage) {
+      if (mode === 'ask_learn') {
+        return `${ASK_LEARN_ASSISTANT_NAME} is ready. Ask any learning question in programming, science, technology, mathematics, engineering, or ICT.`;
+      }
+      if (mode === 'roadmap_finder') {
+        return `${ROADMAP_FINDER_ASSISTANT_NAME} is ready. Tell me your future job role and I will build a structured roadmap.`;
+      }
+      return `${FAQ_ASSISTANT_NAME} is ready. Ask me about TutorSphere courses, tutors, bookings, resources, certificates, or platform usage.`;
+    }
+
+    if (isPromptInjectionAttempt(sanitizedMessage)) {
+      if (mode === 'ask_learn') {
+        return ASK_LEARN_OUT_OF_SCOPE_MESSAGE;
+      }
+      if (mode === 'roadmap_finder') {
+        return ROADMAP_OUT_OF_SCOPE_MESSAGE;
+      }
+      return getOutOfScopeReply();
+    }
+
+    if (mode === 'ask_learn') {
+      return this.getAskLearnReply(sanitizedMessage, context);
+    }
+
+    if (mode === 'roadmap_finder') {
+      return this.getRoadmapReply(sanitizedMessage, context);
+    }
+
+    return this.getPlatformReply(sanitizedMessage, context);
   }
 }
 

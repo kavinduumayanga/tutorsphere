@@ -83,7 +83,7 @@ const NAV_LABELS: Record<Tab, string> = {
   courses: 'Courses',
   courseLearning: 'Course Learning',
   resources: 'Resources',
-  quizzes: 'Quizzes',
+  quizzes: 'AI Assistant',
   registerSelect: 'Register',
   registerStudent: 'Register',
   registerTutor: 'Register',

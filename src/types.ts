@@ -33,13 +33,19 @@ export interface TimeSlot {
 export interface Booking {
   id: string;
   studentId: string;
+  studentName?: string;
   tutorId: string;
   slotId: string;
   status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
   subject: string;
   date: string;
+  timeSlot?: string;
   meetingLink?: string;
   expertFeedback?: string;
+  paymentStatus?: 'pending' | 'paid' | 'failed';
+  paymentReference?: string;
+  paymentFailureReason?: string;
+  paidAt?: string;
 }
 
 export interface Question {

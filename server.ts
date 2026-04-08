@@ -662,6 +662,39 @@ async function normalizeResourceDownloadCounts() {
   }
 }
 
+async function normalizeBookingPaymentStates() {
+  try {
+    // Preserve historical confirmed/completed sessions as paid bookings.
+    await Booking.updateMany(
+      {
+        paymentStatus: { $exists: false },
+        status: { $in: ['confirmed', 'completed'] },
+      },
+      {
+        $set: {
+          paymentStatus: 'paid',
+          paidAt: new Date().toISOString(),
+        },
+      }
+    );
+
+    // Default all other legacy bookings to pending payment.
+    await Booking.updateMany(
+      {
+        paymentStatus: { $exists: false },
+        status: { $nin: ['confirmed', 'completed'] },
+      },
+      {
+        $set: {
+          paymentStatus: 'pending',
+        },
+      }
+    );
+  } catch (error) {
+    console.log('Booking payment status normalization skipped or failed:', (error as Error).message);
+  }
+}
+
 async function startServer() {
   console.log('[Startup] Bootstrapping server runtime...');
   const securityConfig = loadSecurityConfig();
@@ -686,6 +719,9 @@ async function startServer() {
 
   // Ensure every resource has a persisted, non-negative download count.
   await normalizeResourceDownloadCounts();
+
+  // Keep legacy bookings compatible with payment-aware booking workflows.
+  await normalizeBookingPaymentStates();
 
   console.log('[Startup] Startup data checks completed.');
 
@@ -897,7 +933,7 @@ async function startServer() {
       if (req.session) {
         (req.session as any).userId = user.id;
         (req.session as any).role = user.role;
-        req.session.cookie.maxAge = persistentSession ? REMEMBER_ME_MAX_AGE_MS : null;
+        req.session.cookie.maxAge = persistentSession ? REMEMBER_ME_MAX_AGE_MS : undefined;
       }
 
       // Fallback to splitting name for old users if firstName is missing
@@ -1975,6 +2011,21 @@ async function startServer() {
     }
   });
 
+  const normalizeBookingStatus = (value: unknown): 'pending' | 'confirmed' | 'completed' | 'cancelled' => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'confirmed') return 'confirmed';
+    if (normalized === 'completed') return 'completed';
+    if (normalized === 'cancelled') return 'cancelled';
+    return 'pending';
+  };
+
+  const normalizeBookingPaymentStatus = (value: unknown): 'pending' | 'paid' | 'failed' => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'paid') return 'paid';
+    if (normalized === 'failed') return 'failed';
+    return 'pending';
+  };
+
   // Booking APIs
   app.get("/api/bookings", async (req, res) => {
     try {
@@ -1988,10 +2039,90 @@ async function startServer() {
 
   app.post("/api/bookings", async (req, res) => {
     try {
-      const bookingData = req.body;
+      const bookingData = req.body || {};
+      const studentId = String(bookingData.studentId || '').trim();
+      const studentName = String(bookingData.studentName || '').trim();
+      const tutorId = String(bookingData.tutorId || '').trim();
+      const slotId = String(bookingData.slotId || '').trim();
+      const subject = String(bookingData.subject || '').trim();
+      const date = String(bookingData.date || '').trim();
+      const timeSlot = String(bookingData.timeSlot || '').trim();
+      const paymentStatus = normalizeBookingPaymentStatus(bookingData.paymentStatus);
+      const paymentReference = String(bookingData.paymentReference || '').trim();
+      const paymentFailureReason = String(bookingData.paymentFailureReason || '').trim();
+      const paidAt = String(bookingData.paidAt || '').trim();
+      let status = normalizeBookingStatus(bookingData.status);
+
+      if (!studentId || !tutorId || !slotId || !subject || !date) {
+        return res.status(400).json({ error: 'studentId, tutorId, slotId, subject, and date are required.' });
+      }
+
+      if ((status === 'confirmed' || status === 'completed') && paymentStatus !== 'paid') {
+        return res.status(400).json({ error: 'Confirmed bookings require a successful payment.' });
+      }
+
+      if (paymentStatus === 'paid' && !paymentReference) {
+        return res.status(400).json({ error: 'Payment reference is required for paid bookings.' });
+      }
+
+      if (paymentStatus !== 'paid' && status === 'completed') {
+        status = 'pending';
+      }
+
+      if (paymentStatus === 'paid' && status === 'pending') {
+        status = 'confirmed';
+      }
+
+      const conflictingBooking = await Booking.findOne({
+        tutorId,
+        slotId,
+        date,
+        status: { $in: ['pending', 'confirmed'] },
+        paymentStatus: { $ne: 'failed' },
+      });
+
+      if (conflictingBooking) {
+        return res.status(409).json({ error: 'This time slot is already booked.' });
+      }
+
+      let resolvedStudentName = studentName;
+      if (!resolvedStudentName) {
+        const studentUser = await User.findOne({ id: studentId });
+        if (studentUser) {
+          resolvedStudentName = `${studentUser.firstName || ''} ${studentUser.lastName || ''}`.trim();
+        }
+      }
+
       const id = Math.random().toString(36).substr(2, 9);
-      const booking = new Booking({ ...bookingData, id });
+      const booking = new Booking({
+        ...bookingData,
+        id,
+        studentId,
+        studentName: resolvedStudentName || undefined,
+        tutorId,
+        slotId,
+        subject,
+        date,
+        timeSlot: timeSlot || undefined,
+        status,
+        paymentStatus,
+        paymentReference: paymentStatus === 'paid' ? paymentReference : undefined,
+        paymentFailureReason: paymentStatus === 'failed' ? (paymentFailureReason || 'Payment failed before confirmation.') : undefined,
+        paidAt: paymentStatus === 'paid' ? (paidAt || new Date().toISOString()) : undefined,
+      });
       await booking.save();
+
+      if (booking.status === 'confirmed' && booking.paymentStatus === 'paid') {
+        try {
+          await Tutor.updateOne(
+            { id: booking.tutorId, "availability.id": booking.slotId },
+            { $set: { "availability.$.isBooked": true } }
+          );
+        } catch (availabilitySyncError) {
+          console.warn('Booking slot sync warning (create):', availabilitySyncError);
+        }
+      }
+
       res.json(booking);
     } catch (error) {
       console.error("Create booking error:", error);
@@ -2001,12 +2132,108 @@ async function startServer() {
 
   app.put("/api/bookings/:id", async (req, res) => {
     try {
+      const existingBooking = await Booking.findOne({ id: req.params.id });
+      if (!existingBooking) {
+        return res.status(404).json({ error: "Booking not found" });
+      }
+
+      const incomingStatus = req.body?.status;
+      const incomingPaymentStatus = req.body?.paymentStatus;
+      const status = incomingStatus !== undefined
+        ? normalizeBookingStatus(incomingStatus)
+        : normalizeBookingStatus(existingBooking.status);
+      const paymentStatus = incomingPaymentStatus !== undefined
+        ? normalizeBookingPaymentStatus(incomingPaymentStatus)
+        : normalizeBookingPaymentStatus(existingBooking.paymentStatus);
+
+      if ((status === 'confirmed' || status === 'completed') && paymentStatus !== 'paid') {
+        return res.status(400).json({ error: 'Only paid bookings can be confirmed or completed.' });
+      }
+
+      const paymentReference = req.body?.paymentReference !== undefined
+        ? String(req.body.paymentReference || '').trim()
+        : String(existingBooking.paymentReference || '').trim();
+
+      if (paymentStatus === 'paid' && !paymentReference) {
+        return res.status(400).json({ error: 'Payment reference is required for paid bookings.' });
+      }
+
+      const paymentFailureReason = req.body?.paymentFailureReason !== undefined
+        ? String(req.body.paymentFailureReason || '').trim()
+        : String(existingBooking.paymentFailureReason || '').trim();
+
+      const paidAt = req.body?.paidAt !== undefined
+        ? String(req.body.paidAt || '').trim()
+        : String(existingBooking.paidAt || '').trim();
+
+      const updateSet: Record<string, any> = {
+        ...req.body,
+        status,
+        paymentStatus,
+      };
+      const updateUnset: Record<string, ''> = {};
+
+      if (req.body?.timeSlot !== undefined) {
+        const normalizedTimeSlot = String(req.body.timeSlot || '').trim();
+        if (normalizedTimeSlot) {
+          updateSet.timeSlot = normalizedTimeSlot;
+        } else {
+          delete updateSet.timeSlot;
+          updateUnset.timeSlot = '';
+        }
+      }
+
+      if (paymentStatus === 'paid') {
+        updateSet.paymentReference = paymentReference;
+        updateSet.paidAt = paidAt || new Date().toISOString();
+        updateUnset.paymentFailureReason = '';
+      } else if (paymentStatus === 'failed') {
+        updateSet.paymentFailureReason = paymentFailureReason || 'Payment failed before confirmation.';
+        updateUnset.paymentReference = '';
+        updateUnset.paidAt = '';
+      } else {
+        updateUnset.paymentReference = '';
+        updateUnset.paymentFailureReason = '';
+        updateUnset.paidAt = '';
+      }
+
+      delete updateSet.id;
+
       const booking = await Booking.findOneAndUpdate(
         { id: req.params.id },
-        req.body,
+        Object.keys(updateUnset).length > 0
+          ? { $set: updateSet, $unset: updateUnset }
+          : { $set: updateSet },
         { new: true }
       );
+
       if (booking) {
+        const wasSlotLocked =
+          existingBooking.status === 'confirmed' && normalizeBookingPaymentStatus(existingBooking.paymentStatus) === 'paid';
+        const isSlotLocked =
+          booking.status === 'confirmed' && normalizeBookingPaymentStatus(booking.paymentStatus) === 'paid';
+
+        try {
+          if (
+            wasSlotLocked &&
+            (!isSlotLocked || existingBooking.slotId !== booking.slotId || existingBooking.tutorId !== booking.tutorId)
+          ) {
+            await Tutor.updateOne(
+              { id: existingBooking.tutorId, "availability.id": existingBooking.slotId },
+              { $set: { "availability.$.isBooked": false } }
+            );
+          }
+
+          if (isSlotLocked) {
+            await Tutor.updateOne(
+              { id: booking.tutorId, "availability.id": booking.slotId },
+              { $set: { "availability.$.isBooked": true } }
+            );
+          }
+        } catch (availabilitySyncError) {
+          console.warn('Booking slot sync warning (update):', availabilitySyncError);
+        }
+
         res.json(booking);
       } else {
         res.status(404).json({ error: "Booking not found" });
@@ -2021,6 +2248,16 @@ async function startServer() {
     try {
       const booking = await Booking.findOneAndDelete({ id: req.params.id });
       if (booking) {
+        if (booking.status === 'confirmed' && booking.paymentStatus === 'paid') {
+          try {
+            await Tutor.updateOne(
+              { id: booking.tutorId, "availability.id": booking.slotId },
+              { $set: { "availability.$.isBooked": false } }
+            );
+          } catch (availabilitySyncError) {
+            console.warn('Booking slot sync warning (delete):', availabilitySyncError);
+          }
+        }
         res.json({ message: "Booking deleted successfully" });
       } else {
         res.status(404).json({ error: "Booking not found" });

@@ -72,7 +72,6 @@ type FeatureCard = {
 };
 
 const QUIZ_OPENING_MESSAGE = 'Which subject are you weak in?';
-const QUIZ_PROGRESS_TOTAL = 5;
 const MESSAGE_LINK_PATTERN = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s]+)/g;
 const ASK_LEARN_WELCOME_MESSAGE =
   'Hi! I am Ask & Learn AI. Ask me Science, Technology, Maths, Engineering, or ICT questions and I will teach step by step.';
@@ -555,47 +554,6 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
     [currentUser]
   );
 
-  const quizQuestionCount = useMemo(
-    () => quizMessages.filter((message) => message.role === 'user').length,
-    [quizMessages]
-  );
-
-  const quizHasPrompt = useMemo(
-    () => quizMessages.some((message) => message.role === 'assistant'),
-    [quizMessages]
-  );
-
-  const quizProgressStep = useMemo(() => {
-    if (quizSessionClosed) {
-      return QUIZ_PROGRESS_TOTAL;
-    }
-    if (!quizHasPrompt) {
-      return 0;
-    }
-    return Math.min(quizQuestionCount + 1, QUIZ_PROGRESS_TOTAL);
-  }, [quizHasPrompt, quizQuestionCount, quizSessionClosed]);
-
-  const quizProgressPercent = useMemo(() => {
-    if (quizSessionClosed) {
-      return 100;
-    }
-    if (!quizHasPrompt) {
-      return 0;
-    }
-    return (quizProgressStep / QUIZ_PROGRESS_TOTAL) * 100;
-  }, [quizHasPrompt, quizProgressStep, quizSessionClosed]);
-
-  const quizProgressLabel = useMemo(() => {
-    if (quizSessionClosed) {
-      return 'Session complete';
-    }
-    if (!quizHasPrompt) {
-      return 'Starting quiz...';
-    }
-
-    return `Question ${Math.max(quizProgressStep, 1)}/${QUIZ_PROGRESS_TOTAL}`;
-  }, [quizHasPrompt, quizProgressStep, quizSessionClosed]);
-
   const quizInputPlaceholder = useMemo(() => {
     if (!quizHasStarted) return 'Start the assessment to begin.';
     if (!currentUser) return 'Log in as a student or tutor to use Skill Assessment AI.';
@@ -980,8 +938,6 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
                   onBack={goHome}
                   onRestart={restartQuizSession}
                   restartLabel="Restart Session"
-                  progressLabel={quizProgressLabel}
-                  progressPercent={quizProgressPercent}
                   copiedId={quizCopiedId}
                   onCopy={(id, text) => copyToClipboard(id, text, setQuizCopiedId, setQuizErrorText)}
                   disableInput={!quizHasStarted || quizSessionClosed}

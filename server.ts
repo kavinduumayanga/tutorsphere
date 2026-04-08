@@ -2234,7 +2234,9 @@ async function startServer() {
             finalPrice: roundCurrency(normalizedCoursePrice),
           };
 
-      if (!isFreeCourse) {
+      const requiresPayment = !isFreeCourse && priceBreakdown.finalPrice > 0;
+
+      if (requiresPayment) {
         if (!paymentConfirmed) {
           return res.status(402).json({ error: "This is a paid course. Payment is required before enrollment." });
         }

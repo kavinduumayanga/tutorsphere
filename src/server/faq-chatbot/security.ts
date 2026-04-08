@@ -15,6 +15,18 @@ const INJECTION_PATTERN =
 const SCOPE_KEYWORD_PATTERN =
   /\b(tutorsphere|course|courses|module|lesson|tutor|tutors|booking|bookings|resource|resources|certificate|certificates|dashboard|quiz|assistant|profile|availability|review|reviews|enroll|enrollment|payment|download|library|signup|register|login|account|settings|platform)\b/i;
 
+const ASK_LEARN_HARMFUL_OR_ILLEGAL_PATTERN =
+  /\b(how\s+to\s+make\s+(a\s+)?bomb|build\s+(a\s+)?bomb|how\s+to\s+kill|how\s+to\s+murder|assassinate|terror(ism|ist)?|buy\s+illegal\s+drugs|drug\s+trafficking|phishing|ransomware|malware|ddos|steal\s+password|bypass\s+password|credit\s+card\s+fraud|porn|explicit\s+sexual|rape)\b/i;
+
+const ASK_LEARN_UNRELATED_PATTERN =
+  /\b(politics?|election|politician|party\s+manifesto|celebrity\s+gossip|dating\s+advice|horoscope|astrology|adult\s+chat)\b/i;
+
+const ROADMAP_REQUEST_PATTERN =
+  /\b(roadmap|career\s*path|learning\s*path|how\s+to\s+become|become\s+a?n?|future\s+role|job\s+role|career\s+goal|transition\s+to|plan\s+to\s+become|what\s+should\s+i\s+learn\s+to\s+become)\b/i;
+
+const ROLE_HINT_PATTERN =
+  /\b(software\s+engineer|data\s+scientist|data\s+analyst|ai\s+engineer|ml\s+engineer|cybersecurity\s+analyst|network\s+engineer|devops\s+engineer|cloud\s+engineer|frontend\s+developer|backend\s+developer|full\s*stack\s+developer|mobile\s+developer|game\s+developer|qa\s+engineer|site\s+reliability\s+engineer|product\s+manager|ux\s+designer|ui\s+designer)\b/i;
+
 const APP_REFERENCE_PATTERN = /\b(this\s+app|this\s+platform|website|portal|here)\b/i;
 
 const SENSITIVE_OUTPUT_PATTERN =
@@ -60,6 +72,24 @@ export const isTutorSphereScopeQuestion = (message: string): boolean => {
   }
 
   return SCOPE_KEYWORD_PATTERN.test(text) || APP_REFERENCE_PATTERN.test(text);
+};
+
+export const isAskLearnRestrictedTopic = (message: string): boolean => {
+  const text = message.trim();
+  if (!text) {
+    return false;
+  }
+
+  return ASK_LEARN_HARMFUL_OR_ILLEGAL_PATTERN.test(text) || ASK_LEARN_UNRELATED_PATTERN.test(text);
+};
+
+export const isRoadmapRequest = (message: string): boolean => {
+  const text = message.trim();
+  if (!text) {
+    return false;
+  }
+
+  return ROADMAP_REQUEST_PATTERN.test(text) || ROLE_HINT_PATTERN.test(text);
 };
 
 export const getOutOfScopeReply = (): string => FAQ_OUT_OF_SCOPE_MESSAGE;

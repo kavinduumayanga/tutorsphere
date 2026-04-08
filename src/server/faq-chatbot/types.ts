@@ -1,7 +1,10 @@
+export type FaqAssistantMode = 'platform' | 'ask_learn' | 'roadmap_finder';
+
 export type FaqChatContext = {
   currentTab?: string;
   userRole?: string;
   userName?: string;
+  aiMode?: FaqAssistantMode;
 };
 
 export type FaqChatRequestBody = {

@@ -1001,6 +1001,7 @@ class ApiService {
       currentTab?: string;
       userRole?: string;
       userName?: string;
+      aiMode?: 'platform' | 'ask_learn' | 'roadmap_finder';
     }
   ): Promise<FaqChatResponse> {
     return this.request('/faq-chatbot/chat', {

@@ -1,6 +1,8 @@
 import express from 'express';
 import { faqChatbotService } from './faqChatbotService.js';
 
+const ALLOWED_AI_MODES = new Set(['platform', 'ask_learn', 'roadmap_finder']);
+
 const router = express.Router();
 
 router.post('/chat', async (req, res) => {
@@ -15,6 +17,10 @@ router.post('/chat', async (req, res) => {
       currentTab: typeof context?.currentTab === 'string' ? context.currentTab : undefined,
       userRole: typeof context?.userRole === 'string' ? context.userRole : undefined,
       userName: typeof context?.userName === 'string' ? context.userName : undefined,
+      aiMode:
+        typeof context?.aiMode === 'string' && ALLOWED_AI_MODES.has(context.aiMode)
+          ? context.aiMode
+          : undefined,
     });
 
     return res.json({ reply });

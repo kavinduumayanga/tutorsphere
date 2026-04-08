@@ -46,6 +46,8 @@ export interface Booking {
   paymentReference?: string;
   paymentFailureReason?: string;
   paidAt?: string;
+  hiddenForTutor?: boolean;
+  hiddenForStudent?: boolean;
 }
 
 export interface Question {
@@ -136,6 +138,7 @@ export interface Review {
   id: string;
   tutorId: string;
   studentId: string;
+  sessionId?: string;
   studentName: string;
   rating: number;
   comment: string;

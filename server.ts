@@ -695,6 +695,22 @@ async function normalizeBookingPaymentStates() {
   }
 }
 
+async function normalizeBookingVisibilityFlags() {
+  try {
+    await Booking.updateMany(
+      { hiddenForTutor: { $exists: false } },
+      { $set: { hiddenForTutor: false } }
+    );
+
+    await Booking.updateMany(
+      { hiddenForStudent: { $exists: false } },
+      { $set: { hiddenForStudent: false } }
+    );
+  } catch (error) {
+    console.log('Booking visibility normalization skipped or failed:', (error as Error).message);
+  }
+}
+
 async function startServer() {
   console.log('[Startup] Bootstrapping server runtime...');
   const securityConfig = loadSecurityConfig();
@@ -722,6 +738,9 @@ async function startServer() {
 
   // Keep legacy bookings compatible with payment-aware booking workflows.
   await normalizeBookingPaymentStates();
+
+  // Ensure booking visibility flags exist for soft-hide session cards.
+  await normalizeBookingVisibilityFlags();
 
   console.log('[Startup] Startup data checks completed.');
 
@@ -1299,7 +1318,7 @@ async function startServer() {
   // Review APIs
   app.get("/api/reviews", async (req, res) => {
     try {
-      const reviews = await Review.find();
+      const reviews = await Review.find().sort({ date: -1, createdAt: -1 });
       res.json(reviews);
     } catch (error) {
       console.error("Get reviews error:", error);
@@ -1309,7 +1328,7 @@ async function startServer() {
 
   app.get("/api/reviews/:tutorId", async (req, res) => {
     try {
-      const reviews = await Review.find({ tutorId: req.params.tutorId });
+      const reviews = await Review.find({ tutorId: req.params.tutorId }).sort({ date: -1, createdAt: -1 });
       res.json(reviews);
     } catch (error) {
       console.error("Get tutor reviews error:", error);
@@ -1319,9 +1338,47 @@ async function startServer() {
 
   app.post("/api/reviews", async (req, res) => {
     try {
-      const reviewData = req.body;
+      const reviewData = req.body || {};
+      const tutorId = String(reviewData.tutorId || '').trim();
+      const studentId = String(reviewData.studentId || '').trim();
+      const studentName = String(reviewData.studentName || '').trim();
+      const sessionId = String(reviewData.sessionId || '').trim();
+      const rating = Number(reviewData.rating);
+      const comment = String(reviewData.comment || '').trim();
+      const date = String(reviewData.date || new Date().toISOString().split('T')[0]).trim();
+
+      if (!tutorId || !studentId || !studentName) {
+        return res.status(400).json({ error: 'tutorId, studentId, and studentName are required.' });
+      }
+
+      if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
+        return res.status(400).json({ error: 'rating must be between 1 and 5.' });
+      }
+
+      if (sessionId) {
+        const existingReview = await Review.findOne({ sessionId, studentId });
+        if (existingReview) {
+          existingReview.tutorId = tutorId;
+          existingReview.studentName = studentName;
+          existingReview.rating = rating;
+          existingReview.comment = comment;
+          existingReview.date = date;
+          await existingReview.save();
+          return res.json(existingReview);
+        }
+      }
+
       const id = Math.random().toString(36).substr(2, 9);
-      const review = new Review({ ...reviewData, id });
+      const review = new Review({
+        id,
+        tutorId,
+        studentId,
+        studentName,
+        sessionId: sessionId || undefined,
+        rating,
+        comment,
+        date,
+      });
       await review.save();
       res.json(review);
     } catch (error) {
@@ -2026,6 +2083,15 @@ async function startServer() {
     return 'pending';
   };
 
+  const isValidHttpMeetingLink = (value: string): boolean => {
+    try {
+      const parsed = new URL(value);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  };
+
   // Booking APIs
   app.get("/api/bookings", async (req, res) => {
     try {
@@ -2051,6 +2117,9 @@ async function startServer() {
       const paymentReference = String(bookingData.paymentReference || '').trim();
       const paymentFailureReason = String(bookingData.paymentFailureReason || '').trim();
       const paidAt = String(bookingData.paidAt || '').trim();
+      const meetingLink = String(bookingData.meetingLink || '').trim();
+      const hiddenForTutor = Boolean(bookingData.hiddenForTutor);
+      const hiddenForStudent = Boolean(bookingData.hiddenForStudent);
       let status = normalizeBookingStatus(bookingData.status);
 
       if (!studentId || !tutorId || !slotId || !subject || !date) {
@@ -2070,6 +2139,14 @@ async function startServer() {
       }
 
       if (paymentStatus === 'paid' && status === 'pending') {
+        status = 'confirmed';
+      }
+
+      if (meetingLink && !isValidHttpMeetingLink(meetingLink)) {
+        return res.status(400).json({ error: 'Meeting link must be a valid http/https URL.' });
+      }
+
+      if (meetingLink && paymentStatus === 'paid' && status === 'pending') {
         status = 'confirmed';
       }
 
@@ -2104,11 +2181,14 @@ async function startServer() {
         subject,
         date,
         timeSlot: timeSlot || undefined,
+        meetingLink: meetingLink || undefined,
         status,
         paymentStatus,
         paymentReference: paymentStatus === 'paid' ? paymentReference : undefined,
         paymentFailureReason: paymentStatus === 'failed' ? (paymentFailureReason || 'Payment failed before confirmation.') : undefined,
         paidAt: paymentStatus === 'paid' ? (paidAt || new Date().toISOString()) : undefined,
+        hiddenForTutor,
+        hiddenForStudent,
       });
       await booking.save();
 
@@ -2139,12 +2219,32 @@ async function startServer() {
 
       const incomingStatus = req.body?.status;
       const incomingPaymentStatus = req.body?.paymentStatus;
-      const status = incomingStatus !== undefined
+      let status = incomingStatus !== undefined
         ? normalizeBookingStatus(incomingStatus)
         : normalizeBookingStatus(existingBooking.status);
       const paymentStatus = incomingPaymentStatus !== undefined
         ? normalizeBookingPaymentStatus(incomingPaymentStatus)
         : normalizeBookingPaymentStatus(existingBooking.paymentStatus);
+
+      const nextTutorId = String(req.body?.tutorId ?? existingBooking.tutorId).trim();
+      const nextSlotId = String(req.body?.slotId ?? existingBooking.slotId).trim();
+      const nextDate = String(req.body?.date ?? existingBooking.date).trim();
+
+      if (!nextTutorId || !nextSlotId || !nextDate) {
+        return res.status(400).json({ error: 'tutorId, slotId, and date must be valid values.' });
+      }
+
+      const normalizedMeetingLink = req.body?.meetingLink !== undefined
+        ? String(req.body.meetingLink || '').trim()
+        : undefined;
+
+      if (normalizedMeetingLink !== undefined && normalizedMeetingLink && !isValidHttpMeetingLink(normalizedMeetingLink)) {
+        return res.status(400).json({ error: 'Meeting link must be a valid http/https URL.' });
+      }
+
+      if (normalizedMeetingLink !== undefined && normalizedMeetingLink && status === 'pending' && paymentStatus === 'paid') {
+        status = 'confirmed';
+      }
 
       if ((status === 'confirmed' || status === 'completed') && paymentStatus !== 'paid') {
         return res.status(400).json({ error: 'Only paid bookings can be confirmed or completed.' });
@@ -2166,12 +2266,46 @@ async function startServer() {
         ? String(req.body.paidAt || '').trim()
         : String(existingBooking.paidAt || '').trim();
 
+      const scheduleRelevantChange =
+        req.body?.tutorId !== undefined ||
+        req.body?.slotId !== undefined ||
+        req.body?.date !== undefined ||
+        req.body?.status !== undefined ||
+        req.body?.paymentStatus !== undefined;
+
+      if (scheduleRelevantChange && (status === 'pending' || status === 'confirmed') && paymentStatus !== 'failed') {
+        const conflictingBooking = await Booking.findOne({
+          id: { $ne: req.params.id },
+          tutorId: nextTutorId,
+          slotId: nextSlotId,
+          date: nextDate,
+          status: { $in: ['pending', 'confirmed'] },
+          paymentStatus: { $ne: 'failed' },
+        });
+
+        if (conflictingBooking) {
+          return res.status(409).json({ error: 'This time slot is already booked.' });
+        }
+      }
+
       const updateSet: Record<string, any> = {
         ...req.body,
         status,
         paymentStatus,
       };
       const updateUnset: Record<string, ''> = {};
+
+      if (req.body?.tutorId !== undefined) {
+        updateSet.tutorId = nextTutorId;
+      }
+
+      if (req.body?.slotId !== undefined) {
+        updateSet.slotId = nextSlotId;
+      }
+
+      if (req.body?.date !== undefined) {
+        updateSet.date = nextDate;
+      }
 
       if (req.body?.timeSlot !== undefined) {
         const normalizedTimeSlot = String(req.body.timeSlot || '').trim();
@@ -2181,6 +2315,23 @@ async function startServer() {
           delete updateSet.timeSlot;
           updateUnset.timeSlot = '';
         }
+      }
+
+      if (normalizedMeetingLink !== undefined) {
+        if (normalizedMeetingLink) {
+          updateSet.meetingLink = normalizedMeetingLink;
+        } else {
+          delete updateSet.meetingLink;
+          updateUnset.meetingLink = '';
+        }
+      }
+
+      if (req.body?.hiddenForTutor !== undefined) {
+        updateSet.hiddenForTutor = Boolean(req.body.hiddenForTutor);
+      }
+
+      if (req.body?.hiddenForStudent !== undefined) {
+        updateSet.hiddenForStudent = Boolean(req.body.hiddenForStudent);
       }
 
       if (paymentStatus === 'paid') {

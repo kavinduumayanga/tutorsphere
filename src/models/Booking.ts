@@ -16,6 +16,8 @@ export interface IBooking extends Document {
   paymentReference?: string;
   paymentFailureReason?: string;
   paidAt?: string;
+  hiddenForTutor?: boolean;
+  hiddenForStudent?: boolean;
 }
 
 const BookingSchema: Schema = new Schema({
@@ -34,6 +36,8 @@ const BookingSchema: Schema = new Schema({
   paymentReference: { type: String },
   paymentFailureReason: { type: String },
   paidAt: { type: String },
+  hiddenForTutor: { type: Boolean, default: false },
+  hiddenForStudent: { type: Boolean, default: false },
 }, {
   timestamps: true
 });

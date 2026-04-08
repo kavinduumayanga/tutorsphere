@@ -271,7 +271,7 @@ type TutorTransactionItem = {
 };
 
 type CourseCheckoutSubmission = {
-  paymentReference: string;
+  paymentReference?: string;
   couponCode?: string;
 };
 
@@ -1462,7 +1462,7 @@ export default function App() {
     const couponCode = checkout?.couponCode?.trim() || '';
 
     if (!isFreeCourse) {
-      if (!paymentReference) {
+      if (!paymentReference && !couponCode) {
         return { ok: false, error: 'Payment completion is required for paid course enrollment.' };
       }
     }

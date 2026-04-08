@@ -34,7 +34,7 @@ import { Course, CourseEnrollment, Tutor } from '../../types';
 import { formatLkr } from '../../utils/currency';
 
 type CourseCheckoutSubmission = {
-  paymentReference: string;
+  paymentReference?: string;
   couponCode?: string;
 };
 
@@ -477,6 +477,7 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const originalPrice = appliedCoupon?.originalPrice ?? Math.max(0, Number(course.price) || 0);
   const discountAmount = appliedCoupon?.discountAmount ?? 0;
   const finalPrice = appliedCoupon?.finalPrice ?? originalPrice;
+  const requiresPayment = finalPrice > 0;
   const hasAppliedCoupon = Boolean(appliedCoupon);
 
   return (
@@ -498,11 +499,8 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
         <div className="border-b border-slate-100 px-6 py-4">
           <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1 text-[10px] font-extrabold uppercase tracking-widest text-indigo-700">
-                <CreditCard className="h-3.5 w-3.5" />
-                Secure Checkout
-              </p>
-              <h3 className="mt-2 text-lg font-extrabold text-slate-900">Course Payment Portal</h3>
+              <h3 className="text-lg font-extrabold text-slate-900">Secure Checkout</h3>
+              <p className="mt-1 text-sm text-slate-500">Complete payment to confirm your course enrollment instantly.</p>
             </div>
             <button
               onClick={onClose}
@@ -513,63 +511,78 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
           </div>
         </div>
 
-        <div className="max-h-[82vh] overflow-y-auto p-6 sm:p-8">
-          <div className="grid lg:grid-cols-12 gap-8 items-start">
+        <div className="max-h-[86vh] overflow-y-auto p-4 sm:p-6">
+          <div className="grid lg:grid-cols-12 gap-6 items-start">
             <div className="lg:col-span-8">
               <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200/60 overflow-hidden">
                 <div className="p-6 sm:p-8 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-indigo-50/30">
-                  <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">Secure Checkout</h1>
-                  <p className="text-slate-500 mt-2 font-medium text-sm">Complete payment to confirm your course enrollment instantly.</p>
+                  <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+                    {requiresPayment ? 'Payment Details' : 'No Payment Needed'}
+                  </h1>
+                  <p className="text-slate-500 mt-2 font-medium text-sm">
+                    {requiresPayment
+                      ? 'Enter your card details to complete checkout.'
+                      : 'A 100% coupon was applied. Enroll now with zero charge.'}
+                  </p>
                 </div>
 
                 <div className="p-6 sm:p-8 space-y-6">
-                  <div>
-                    <label className="text-xs font-black uppercase tracking-wider text-slate-500">Cardholder Name</label>
-                    <input
-                      value={cardholderName}
-                      onChange={(event) => onCardholderNameChange(event.target.value)}
-                      placeholder="Name on card"
-                      className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                    />
-                  </div>
+                  {requiresPayment ? (
+                    <>
+                      <div>
+                        <label className="text-xs font-black uppercase tracking-wider text-slate-500">Cardholder Name</label>
+                        <input
+                          value={cardholderName}
+                          onChange={(event) => onCardholderNameChange(event.target.value)}
+                          placeholder="Name on card"
+                          className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                        />
+                      </div>
 
-                  <div>
-                    <label className="text-xs font-black uppercase tracking-wider text-slate-500">Card Number</label>
-                    <input
-                      value={cardNumber}
-                      onChange={(event) => onCardNumberChange(event.target.value)}
-                      inputMode="numeric"
-                      placeholder="4242 4242 4242 4242"
-                      className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium tracking-[0.2em] text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                    />
-                  </div>
+                      <div>
+                        <label className="text-xs font-black uppercase tracking-wider text-slate-500">Card Number</label>
+                        <input
+                          value={cardNumber}
+                          onChange={(event) => onCardNumberChange(event.target.value)}
+                          inputMode="numeric"
+                          placeholder="4242 4242 4242 4242"
+                          className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium tracking-[0.2em] text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                        />
+                      </div>
 
-                  <div className="grid sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-xs font-black uppercase tracking-wider text-slate-500">Expiry</label>
-                      <input
-                        value={expiry}
-                        onChange={(event) => onExpiryChange(event.target.value)}
-                        inputMode="numeric"
-                        placeholder="MM/YY"
-                        className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                      />
+                      <div className="grid sm:grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-xs font-black uppercase tracking-wider text-slate-500">Expiry</label>
+                          <input
+                            value={expiry}
+                            onChange={(event) => onExpiryChange(event.target.value)}
+                            inputMode="numeric"
+                            placeholder="MM/YY"
+                            className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-black uppercase tracking-wider text-slate-500">CVV</label>
+                          <input
+                            value={cvv}
+                            onChange={(event) => onCvvChange(event.target.value)}
+                            inputMode="numeric"
+                            placeholder="123"
+                            className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-500">
+                        Test mode: use a card ending with <span className="font-black text-slate-700">0000</span> (or CVV <span className="font-black text-slate-700">000</span>) to simulate a failed payment.
+                      </div>
+                    </>
+                  ) : (
+                    <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200">
+                      <p className="text-sm font-bold text-emerald-800">100% coupon applied successfully.</p>
+                      <p className="text-xs text-emerald-700 mt-1">No payment details are required. Click below to enroll at no charge.</p>
                     </div>
-                    <div>
-                      <label className="text-xs font-black uppercase tracking-wider text-slate-500">CVV</label>
-                      <input
-                        value={cvv}
-                        onChange={(event) => onCvvChange(event.target.value)}
-                        inputMode="numeric"
-                        placeholder="123"
-                        className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-500">
-                    Test mode: use a card ending with <span className="font-black text-slate-700">0000</span> (or CVV <span className="font-black text-slate-700">000</span>) to simulate a failed payment.
-                  </div>
+                  )}
 
                   {errorMessage && (
                     <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-sm font-semibold text-rose-700 flex items-start gap-2">
@@ -590,12 +603,12 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
                       {isSubmitting ? (
                         <>
                           <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          Processing Payment...
+                          {requiresPayment ? 'Processing Payment...' : 'Enrolling...'}
                         </>
                       ) : (
                         <>
-                          <Lock className="w-5 h-5" />
-                          Pay & Enroll Course
+                          {requiresPayment ? <Lock className="w-5 h-5" /> : <CheckCircle className="w-5 h-5" />}
+                          {requiresPayment ? 'Pay & Enroll Course' : 'Enroll for Free'}
                         </>
                       )}
                     </button>
@@ -613,7 +626,7 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
             </div>
 
             <div className="lg:col-span-4">
-              <div className="bg-white rounded-[2rem] shadow-xl shadow-indigo-50 border border-slate-200/60 p-6 sm:p-8 lg:sticky lg:top-6">
+              <div className="bg-white rounded-[2rem] shadow-xl shadow-indigo-50 border border-slate-200/60 p-6 sm:p-8 lg:sticky lg:top-4">
                 <h3 className="text-xl font-black text-slate-900 mb-6">Order Summary</h3>
 
                 <div className="space-y-4 mb-6">
@@ -689,7 +702,7 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
                     </div>
                     <div>
                       <p className="text-[10px] text-slate-400 font-black uppercase tracking-wider">Access</p>
-                      <p className="text-sm font-bold text-slate-900">Instant after payment</p>
+                      <p className="text-sm font-bold text-slate-900">{requiresPayment ? 'Instant after payment' : 'Instant with zero charge'}</p>
                     </div>
                   </div>
                 </div>
@@ -962,42 +975,49 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
       return;
     }
 
-    const cleanedCardholder = cardholderName.trim();
-    const cleanedCardNumber = getDigitsOnly(cardNumber);
-    const cleanedCvv = getDigitsOnly(cvv).slice(0, 4);
-
-    if (cleanedCardholder.length < 2) {
-      setCheckoutError('Cardholder name is required.');
-      return;
-    }
-
-    if (cleanedCardNumber.length !== 16) {
-      setCheckoutError('Enter a valid 16-digit card number.');
-      return;
-    }
-
-    if (!isValidExpiry(expiry)) {
-      setCheckoutError('Enter a valid expiry date in MM/YY format.');
-      return;
-    }
-
-    if (cleanedCvv.length < 3) {
-      setCheckoutError('Enter a valid CVV (3 or 4 digits).');
-      return;
-    }
+    const effectiveFinalPrice = appliedCoupon?.finalPrice ?? Math.max(0, Number(checkoutCourse.price) || 0);
+    const requiresPayment = effectiveFinalPrice > 0;
 
     setCheckoutError(null);
     setIsSubmittingCheckout(true);
 
     try {
-      await new Promise((resolve) => setTimeout(resolve, 900));
+      let paymentReference: string | undefined;
 
-      const paymentReference = createCoursePaymentReference();
-      const shouldFailPayment = cleanedCardNumber.endsWith('0000') || cleanedCvv === '000';
+      if (requiresPayment) {
+        const cleanedCardholder = cardholderName.trim();
+        const cleanedCardNumber = getDigitsOnly(cardNumber);
+        const cleanedCvv = getDigitsOnly(cvv).slice(0, 4);
 
-      if (shouldFailPayment) {
-        setCheckoutError('Payment authorization was declined by the payment gateway. Please try a different card.');
-        return;
+        if (cleanedCardholder.length < 2) {
+          setCheckoutError('Cardholder name is required.');
+          return;
+        }
+
+        if (cleanedCardNumber.length !== 16) {
+          setCheckoutError('Enter a valid 16-digit card number.');
+          return;
+        }
+
+        if (!isValidExpiry(expiry)) {
+          setCheckoutError('Enter a valid expiry date in MM/YY format.');
+          return;
+        }
+
+        if (cleanedCvv.length < 3) {
+          setCheckoutError('Enter a valid CVV (3 or 4 digits).');
+          return;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 900));
+
+        paymentReference = createCoursePaymentReference();
+        const shouldFailPayment = cleanedCardNumber.endsWith('0000') || cleanedCvv === '000';
+
+        if (shouldFailPayment) {
+          setCheckoutError('Payment authorization was declined by the payment gateway. Please try a different card.');
+          return;
+        }
       }
 
       const result = await onEnrollCourse(checkoutCourse.id, {

@@ -23,7 +23,6 @@ import {
   User,
   TrendingUp,
   FileText,
-  Copy,
   Video,
   CircleDollarSign,
   ShieldCheck,
@@ -132,7 +131,6 @@ export const TutorDashboardPage: React.FC<TutorDashboardPageProps> = (props) => 
     { key: 'courses', label: 'Courses', icon: BookOpen, badge: activeCourses, onClick: () => setActiveTab('courses'), desc: 'Create and edit tutor courses' },
     { key: 'resources', label: 'Resources', icon: Layers, badge: resourcesCount, onClick: () => setActiveTab('resources'), desc: 'Upload and share resources' },
     { key: 'revenue', label: 'Revenue', icon: CircleDollarSign, onClick: () => setActiveTab('earnings'), desc: 'View payouts and earnings' },
-    { key: 'settings', label: 'Settings', icon: Settings, onClick: () => setActiveTab('settings'), desc: 'Update profile and preferences' },
   ];
 
   /* ─── Summary cards config ─── */
@@ -161,41 +159,34 @@ export const TutorDashboardPage: React.FC<TutorDashboardPageProps> = (props) => 
            <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center font-bold text-lg shadow-sm">
              {(currentUser.firstName || 'T').charAt(0)}
            </div>
-           <div>
+           <div className="space-y-2">
+             <p className="text-[11px] uppercase tracking-[0.2em] font-bold text-indigo-500">Workspace Overview</p>
              <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight">
                Tutor Workspace
              </h1>
-             <p className="text-slate-500 mt-0.5 text-sm md:text-base font-medium max-w-xl">
-               Manage sessions, earnings, and course content from your dashboard.
+             <p className="text-slate-500 text-sm md:text-base font-medium max-w-xl">
+               Manage sessions, monitor earnings, and maintain course content from one organized workspace.
              </p>
+             <div className="flex flex-wrap items-center gap-2">
+               <span className="px-2.5 py-1 rounded-full text-[10px] uppercase tracking-wider font-bold bg-indigo-50 text-indigo-700 border border-indigo-100">Sessions</span>
+               <span className="px-2.5 py-1 rounded-full text-[10px] uppercase tracking-wider font-bold bg-emerald-50 text-emerald-700 border border-emerald-100">Earnings</span>
+               <span className="px-2.5 py-1 rounded-full text-[10px] uppercase tracking-wider font-bold bg-cyan-50 text-cyan-700 border border-cyan-100">Courses</span>
+             </div>
            </div>
         </div>
-        <div className="relative z-10 flex flex-wrap items-center gap-3">
-             <button
-               onClick={() => {
-                 const latestLink = bookings[0]?.meetingLink;
-                 if (!latestLink) {
-                   alert('No session link available yet.');
-                   return;
-                 }
-                 navigator.clipboard.writeText(latestLink);
-                 alert('Latest session link copied to clipboard.');
-               }}
-               className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200/70 bg-white text-slate-700 font-bold text-sm hover:bg-slate-50 transition-all active:scale-[0.98] shadow-sm"
-             >
-               <Copy className="w-4 h-4 text-slate-400" /> Copy Session Link
-             </button>
-             <button
-               onClick={() => setActiveTab('earnings')}
-               className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-indigo-600 text-white font-bold text-sm tracking-wide hover:bg-indigo-700 transition-all shadow-sm active:scale-[0.98]"
-             >
-               <BarChart3 className="w-4 h-4" /> Revenue Details
-             </button>
-           </div>
+
+        <div className="relative z-10 w-full lg:w-auto flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setActiveTab('earnings')}
+            className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-indigo-600 text-white font-bold text-sm tracking-wide hover:bg-indigo-700 transition-all shadow-sm active:scale-[0.98]"
+          >
+            <BarChart3 className="w-4 h-4" /> Revenue Details
+          </button>
+        </div>
       </motion.div>
 
       {/* ──── Navigation Cards (Top Section) ──── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
          {navItems.map((item, idx) => {
            const Icon = item.icon;
            return (
@@ -231,7 +222,7 @@ export const TutorDashboardPage: React.FC<TutorDashboardPageProps> = (props) => 
       </div>
 
       {/* ──── Summary Cards ──── */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2.5 md:gap-3">
         {summaryCards.map((card, i) => {
           const Icon = card.icon;
           return (
@@ -241,14 +232,14 @@ export const TutorDashboardPage: React.FC<TutorDashboardPageProps> = (props) => 
               variants={fadeUp}
               initial="hidden"
               animate="show"
-              className={`relative overflow-hidden rounded-xl border border-slate-200/70 ${card.accent} border-t-4 p-4 md:p-5 transition-all hover:shadow-md hover:-translate-y-0.5 group bg-white flex items-center gap-4`}
+              className={`relative overflow-hidden rounded-lg border border-slate-200/70 ${card.accent} border-t-2 p-2.5 md:p-3 bg-white flex items-center gap-3 min-h-[82px]`}
             >
-              <div className={`w-10 h-10 rounded-xl shrink-0 ${card.iconBg} flex items-center justify-center group-hover:scale-105 transition-transform`}>
+              <div className={`w-9 h-9 rounded-lg shrink-0 ${card.iconBg} flex items-center justify-center`}>
                 <Icon className={`w-5 h-5 ${card.color} opacity-90`} />
               </div>
-              <div className="flex flex-col">
-                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-0.5">{card.label}</p>
-                <p className={`text-2xl md:text-3xl font-extrabold ${card.color}`}>{card.value}</p>
+              <div className="flex flex-col min-w-0">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400 leading-tight">{card.label}</p>
+                <p className={`text-lg md:text-xl font-extrabold leading-tight ${card.color}`}>{card.value}</p>
               </div>
             </motion.div>
           );

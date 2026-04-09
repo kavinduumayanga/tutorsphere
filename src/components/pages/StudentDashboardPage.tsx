@@ -10,6 +10,7 @@ import {
   TrendingUp,
   Settings,
   Search,
+  Award,
 } from 'lucide-react';
 
 interface SessionRatingDraft {
@@ -115,11 +116,18 @@ export const StudentDashboardPage: React.FC<StudentDashboardPageProps> = (props)
           <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center font-bold text-lg shadow-sm">
             {currentUser?.firstName?.charAt(0) || 'S'}
           </div>
-          <div>
+          <div className="space-y-2">
+            <p className="text-[11px] uppercase tracking-[0.2em] font-bold text-indigo-500">Workspace Overview</p>
             <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight">Student Workspace</h1>
-            <p className="text-slate-500 font-medium text-sm md:text-base mt-0.5">Manage your tutoring sessions and track learning progress.</p>
+            <p className="text-slate-500 font-medium text-sm md:text-base">Manage sessions, track learning progress, and quickly jump to your key study areas.</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="px-2.5 py-1 rounded-full text-[10px] uppercase tracking-wider font-bold bg-indigo-50 text-indigo-700 border border-indigo-100">Sessions</span>
+              <span className="px-2.5 py-1 rounded-full text-[10px] uppercase tracking-wider font-bold bg-cyan-50 text-cyan-700 border border-cyan-100">Learning</span>
+              <span className="px-2.5 py-1 rounded-full text-[10px] uppercase tracking-wider font-bold bg-emerald-50 text-emerald-700 border border-emerald-100">Resources</span>
+            </div>
           </div>
         </div>
+
       </motion.div>
 
       {/* ──── Navigation Cards (Top Section) ──── */}
@@ -282,9 +290,9 @@ export const StudentDashboardPage: React.FC<StudentDashboardPageProps> = (props)
                           <button
                             type="button"
                             onClick={() => handleShowCertificateModal(enrollment, course.title)}
-                            className="flex-1 px-3 py-2 rounded-lg text-xs font-bold bg-emerald-50 border border-emerald-100 text-emerald-700 hover:bg-emerald-100 transition-colors shadow-sm"
+                            className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold text-amber-900 border border-amber-200 bg-gradient-to-r from-amber-100 via-amber-200 to-yellow-200 hover:from-amber-200 hover:via-amber-200 hover:to-yellow-200 transition-colors shadow-sm"
                           >
-                            Certificate
+                            <Award className="w-3.5 h-3.5" /> Get Certificate
                           </button>
                         )}
                       </div>

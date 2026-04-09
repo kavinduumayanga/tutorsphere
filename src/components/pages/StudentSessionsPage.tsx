@@ -94,6 +94,21 @@ const getMeetingLinkMeta = (booking: any, paymentStatus: string, hasValidMeeting
   };
 };
 
+const formatStatusLabel = (status: string) =>
+  status
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+
+const getPaymentBadgeClassName = (paymentStatus: string, fallbackClassName: string) => {
+  if (paymentStatus === 'paid') {
+    return 'bg-gradient-to-r from-amber-50 to-yellow-100 text-amber-800 border-amber-200';
+  }
+
+  return fallbackClassName;
+};
+
 type InfoTileProps = {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
@@ -205,6 +220,8 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
           {filteredStudentBookings.map((booking, idx) => {
             const isLoading = activeBookingActionId === booking.id;
             const paymentStatus = getBookingPaymentStatus(booking);
+            const paymentStatusLabel = formatStatusLabel(paymentStatus);
+            const paymentBadgeClassName = getPaymentBadgeClassName(paymentStatus, getBookingPaymentPillClassName(paymentStatus));
             const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed' && canStudentManageBeforeStart(booking);
             const hasValidMeetingLink = isValidMeetingLink(booking.meetingLink);
             const canJoinMeeting = hasValidMeetingLink && booking.status === 'confirmed';
@@ -235,8 +252,8 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
                 <div className="grid gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(270px,1fr)] lg:items-stretch">
                   <div className="min-w-0">
                     <div className="mb-3 flex flex-wrap items-center gap-2 pr-12">
-                      <span className={`text-[10px] uppercase tracking-widest font-bold px-2.5 py-1 rounded-full border ${getBookingPaymentPillClassName(paymentStatus)}`}>
-                       {paymentStatus}
+                      <span className={`text-[10px] uppercase tracking-widest font-bold px-2.5 py-1 rounded-full border ${paymentBadgeClassName}`}>
+                       {paymentStatusLabel}
                       </span>
                       <span className={`text-[10px] uppercase tracking-widest font-bold px-2.5 py-1 rounded-full border ${getBookingStatusPillClassName(booking.status)}`}>
                        {booking.status}
@@ -253,7 +270,12 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
                       <InfoTile icon={Calendar} label="Date" value={booking.date || 'Not set'} />
                       <InfoTile icon={Clock} label="Time Slot" value={booking.timeSlot || 'Any Time'} />
                       <InfoTile icon={User} label="Tutor" value={getBookingTutorName(booking)} valueClassName="text-emerald-700" />
-                      <InfoTile icon={Star} label="Payment" value={paymentStatus} />
+                      <InfoTile
+                        icon={Star}
+                        label="Payment"
+                        value={paymentStatusLabel}
+                        valueClassName={paymentStatus === 'paid' ? 'text-amber-700' : 'text-slate-800'}
+                      />
                       <InfoTile icon={Calendar} label="Session Status" value={booking.status} />
                       <InfoTile icon={LinkIcon} label="Meeting Link" value={meetingLinkMeta.label} valueClassName={meetingLinkMeta.valueClassName} />
                     </div>
@@ -275,32 +297,6 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
 
                   <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-4 md:p-5 flex flex-col gap-3">
                     <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Actions</p>
-
-                    {booking.status === 'completed' && (
-                      <div className="w-full">
-                        {existingReview ? (
-                          <div className="bg-white border border-slate-200 p-3 rounded-xl flex flex-col gap-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-black tracking-wider uppercase text-slate-400">Your Review</span>
-                              <div className="flex items-center gap-0.5">
-                                {[1, 2, 3, 4, 5].map((val) => (
-                                  <Star key={val} className={`w-3.5 h-3.5 ${val <= existingReview.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-200'}`} />
-                                ))}
-                              </div>
-                            </div>
-                            {existingReview.comment && <p className="text-xs font-medium text-slate-600 italic line-clamp-2">"{existingReview.comment}"</p>}
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setReviewModalBooking(booking)}
-                            className="w-full inline-flex justify-center items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors shadow-sm border border-indigo-100"
-                          >
-                            <Star className="w-4 h-4" /> Give Review
-                          </button>
-                        )}
-                      </div>
-                    )}
 
                     {canJoinMeeting ? (
                       <a
@@ -330,6 +326,32 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
                       >
                         <X className="w-4 h-4" /> Cancel Session
                       </button>
+                    )}
+
+                    {booking.status === 'completed' && (
+                      <div className="w-full">
+                        {existingReview ? (
+                          <div className="bg-white border border-slate-200 p-3 rounded-xl flex flex-col gap-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-black tracking-wider uppercase text-slate-400">Your Review</span>
+                              <div className="flex items-center gap-0.5">
+                                {[1, 2, 3, 4, 5].map((val) => (
+                                  <Star key={val} className={`w-3.5 h-3.5 ${val <= existingReview.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-200'}`} />
+                                ))}
+                              </div>
+                            </div>
+                            {existingReview.comment && <p className="text-xs font-medium text-slate-600 italic line-clamp-2">"{existingReview.comment}"</p>}
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setReviewModalBooking(booking)}
+                            className="w-full inline-flex justify-center items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors shadow-sm border border-indigo-100"
+                          >
+                            <Star className="w-4 h-4" /> Give Review
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>

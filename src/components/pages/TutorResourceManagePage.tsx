@@ -34,6 +34,9 @@ type ResourceFormData = {
   subject: string;
   type: Resource['type'];
   url: string;
+  blobName: string | undefined;
+  mimeType: string | undefined;
+  size: number | undefined;
   description: string;
 };
 
@@ -92,17 +95,6 @@ const resolveResourcePreviewUrl = (rawUrl: string): string => {
   const trimmed = rawUrl.trim();
   if (!trimmed) {
     return '';
-  }
-
-  if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed;
-  }
-
-  if (trimmed.startsWith('/uploads/')) {
-    if (window.location.port === '3000') {
-      return `${window.location.origin}${trimmed}`;
-    }
-    return `http://localhost:3000${trimmed}`;
   }
 
   return trimmed;
@@ -290,7 +282,13 @@ const UploadModal: React.FC<{
                     value={form.url}
                     onChange={(e) => {
                       onClearUploadFeedback();
-                      setForm((p) => ({ ...p, url: e.target.value }));
+                      setForm((p) => ({
+                        ...p,
+                        url: e.target.value,
+                        blobName: undefined,
+                        mimeType: undefined,
+                        size: undefined,
+                      }));
                     }}
                     placeholder="https://example.com/resource.pdf"
                     className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm"
@@ -328,9 +326,9 @@ const UploadModal: React.FC<{
                       </button>
                     </div>
                   )}
-                  {!selectedFile && editingId && form.url.startsWith('/uploads/') && (
+                  {!selectedFile && editingId && Boolean(form.blobName) && (
                     <p className="text-[11px] text-slate-500 break-all">
-                      Current file path: {form.url}
+                      Current uploaded file URL: {form.url}
                     </p>
                   )}
                 </div>

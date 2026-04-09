@@ -62,6 +62,9 @@ const getDownloadFileName = (contentDisposition: string | null): string | null =
 
 type UploadedCourseAsset = {
   path: string;
+  url?: string;
+  blobUrl?: string;
+  blobName?: string;
   originalName: string;
   size: number;
   mimeType: string;
@@ -134,13 +137,24 @@ const uploadResourceWithProgress = (
       }
 
       if (xhr.status >= 200 && xhr.status < 300) {
-        if (!parsed || typeof parsed.path !== 'string') {
+        const resolvedPath =
+          (parsed && typeof parsed.blobUrl === 'string' && parsed.blobUrl.trim()) ||
+          (parsed && typeof parsed.url === 'string' && parsed.url.trim()) ||
+          (parsed && typeof parsed.path === 'string' && parsed.path.trim()) ||
+          '';
+
+        if (!resolvedPath) {
           reject(new Error('Upload succeeded but response format was invalid.'));
           return;
         }
 
         onProgress?.(100);
-        resolve(parsed as UploadedCourseAsset);
+        resolve({
+          ...(parsed || {}),
+          path: resolvedPath,
+          url: typeof parsed?.url === 'string' ? parsed.url : resolvedPath,
+          blobUrl: typeof parsed?.blobUrl === 'string' ? parsed.blobUrl : resolvedPath,
+        } as UploadedCourseAsset);
         return;
       }
 
@@ -288,7 +302,17 @@ class ApiService {
     }
 
     const name = String(resource?.name ?? '').trim() || this.getResourceNameFromUrl(url, `Resource ${index + 1}`);
-    return { name, url };
+    const blobName = String(resource?.blobName ?? '').trim();
+    const mimeType = String(resource?.mimeType ?? '').trim();
+    const parsedSize = Number(resource?.size);
+
+    return {
+      name,
+      url,
+      blobName: blobName || undefined,
+      mimeType: mimeType || undefined,
+      size: Number.isFinite(parsedSize) && parsedSize >= 0 ? parsedSize : undefined,
+    };
   }
 
   private normalizeCourse(course: any): Course {
@@ -621,6 +645,24 @@ class ApiService {
     const formData = new FormData();
     formData.append('resource', file);
     return this.request('/uploads/course-resource', {
+      method: 'POST',
+      body: formData,
+    });
+  }
+
+  async uploadTutorCertificate(file: File): Promise<UploadedCourseAsset> {
+    const formData = new FormData();
+    formData.append('certificate', file);
+    return this.request('/uploads/tutor-certificate', {
+      method: 'POST',
+      body: formData,
+    });
+  }
+
+  async uploadRecordedLesson(file: File): Promise<UploadedCourseAsset> {
+    const formData = new FormData();
+    formData.append('lesson', file);
+    return this.request('/uploads/recorded-lesson', {
       method: 'POST',
       body: formData,
     });

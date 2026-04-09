@@ -1,8 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle, Calendar, MessageCircle, Star, GraduationCap, ArrowRight, User } from 'lucide-react';
-import { Tab, STEM_SUBJECTS } from '../../data/mockData';
 import { User as UserType, Tutor } from '../../types';
+
+type Tab =
+  | 'home'
+  | 'tutors'
+  | 'questions'
+  | 'courses'
+  | 'resources'
+  | 'quizzes'
+  | 'registerSelect'
+  | 'registerStudent'
+  | 'registerTutor'
+  | 'register'
+  | 'dashboard'
+  | 'about';
 
 interface HomePageProps {
   setActiveTab: (tab: Tab) => void;

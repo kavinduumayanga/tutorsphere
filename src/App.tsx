@@ -56,7 +56,6 @@ import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel
 import { TutorProfilePage } from './components/pages/TutorProfilePage';
 import { GetStartedSection } from "./components/pages/GetStartedSection";
 import { TutorBookingPage } from './components/pages/TutorBookingPage';
-import { MOCK_TUTORS, MOCK_COURSES, MOCK_RESOURCES } from './data/mockData';
 import { ALLOWED_TUTOR_SUBJECTS } from './data/tutorSubjects';
 import { RegistrationSelectionPage } from './components/pages/RegistrationSelectionPage';
 import { AboutPage } from './components/pages/AboutPage';
@@ -1111,9 +1110,7 @@ export default function App() {
       return;
     }
 
-    const hasSelectedCourse =
-      courses.some((course) => course.id === activeLearningCourseId) ||
-      MOCK_COURSES.some((course) => course.id === activeLearningCourseId);
+    const hasSelectedCourse = courses.some((course) => course.id === activeLearningCourseId);
 
     if (!hasSelectedCourse) {
       setActiveTab('courses', { replace: true });
@@ -1248,10 +1245,7 @@ export default function App() {
       return null;
     }
 
-    const course =
-      courses.find((course) => course.id === activeLearningCourseId) ||
-      MOCK_COURSES.find((course) => course.id === activeLearningCourseId) ||
-      null;
+    const course = courses.find((course) => course.id === activeLearningCourseId) || null;
 
     if (!course && isLoadingCourses) {
       // Still loading, return null to show loading state
@@ -1457,8 +1451,8 @@ export default function App() {
         const tutorsData = await apiService.getTutors();
         setTutors(tutorsData);
       } catch (error) {
-        console.error('Failed to fetch tutors from API, using mock data:', error);
-        setTutors(MOCK_TUTORS);
+        console.error('Failed to fetch tutors from API:', error);
+        setTutors([]);
       } finally {
         setIsLoadingTutors(false);
       }
@@ -1470,8 +1464,8 @@ export default function App() {
         const coursesData = await apiService.getCourses();
         setCourses(coursesData);
       } catch (error) {
-        console.error('Failed to fetch courses from API, using mock data:', error);
-        setCourses(MOCK_COURSES);
+        console.error('Failed to fetch courses from API:', error);
+        setCourses([]);
       } finally {
         setIsLoadingCourses(false);
       }
@@ -1483,8 +1477,8 @@ export default function App() {
         const resourcesData = await apiService.getResources();
         setResources(resourcesData);
       } catch (error) {
-        console.error('Failed to fetch resources from API, using mock data:', error);
-        setResources(MOCK_RESOURCES);
+        console.error('Failed to fetch resources from API:', error);
+        setResources([]);
       } finally {
         setIsLoadingResources(false);
       }
@@ -1521,13 +1515,6 @@ export default function App() {
         });
       } catch (error) {
         console.error('Failed to load course:', error);
-        const mockFallback = MOCK_COURSES.find((course) => course.id === activeLearningCourseId);
-        if (mockFallback) {
-          setCourses((prevCourses) => {
-            const exists = prevCourses.some((course) => course.id === mockFallback.id);
-            return exists ? prevCourses : [...prevCourses, mockFallback];
-          });
-        }
       }
     };
 

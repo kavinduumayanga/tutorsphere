@@ -1,7 +1,20 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { ShieldCheck, Search, CalendarClock, BookOpen, Bot, Star, Target, Lightbulb, Users, CheckCircle2 } from 'lucide-react';
-import { Tab } from '../../data/mockData';
+
+type Tab =
+  | 'home'
+  | 'tutors'
+  | 'questions'
+  | 'courses'
+  | 'resources'
+  | 'quizzes'
+  | 'registerSelect'
+  | 'registerStudent'
+  | 'registerTutor'
+  | 'register'
+  | 'dashboard'
+  | 'about';
 
 interface AboutPageProps {
   setActiveTab: (tab: Tab) => void;

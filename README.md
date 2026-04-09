@@ -264,6 +264,37 @@ Use `.env.example` as the starting point.
 | `npm run preview` | Runs `vite preview` for the frontend build only. This is not a full backend runtime. |
 | `npm run lint` | Type-checks the project with TypeScript. |
 | `npm run clean` | Removes the `dist/` directory. |
+| `npm run migrate:uploads` | Runs one-time legacy local uploads migration to Azure Blob Storage (includes DB updates and local cleanup). |
+| `npm run migrate:uploads:dry` | Runs the same migration in dry-run mode without uploads, DB writes, or cleanup deletes. |
+
+## Legacy Upload Migration
+
+Use this once when moving historical local files in `uploads/` to Azure Blob Storage.
+
+1. Run a dry run first:
+
+```bash
+npm run migrate:uploads:dry
+```
+
+2. Review the output for planned uploads and DB updates.
+
+3. Run the real migration:
+
+```bash
+npm run migrate:uploads
+```
+
+By default, successful migrations enforce cloud-only storage by deleting local files only after:
+
+- Azure upload succeeds (or the deterministic migration blob already exists)
+- MongoDB references are updated successfully
+
+If needed for emergency rollback prep, you can keep local files by running:
+
+```bash
+npx tsx scripts/migrateUploadsToAzure.ts --keep-local
+```
 
 ## Runtime Notes
 

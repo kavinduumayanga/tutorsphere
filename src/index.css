@@ -139,6 +139,81 @@
 .typing-dot:nth-child(2) { animation-delay: 0.2s; }
 .typing-dot:nth-child(3) { animation-delay: 0.4s; }
 
+/* ─── AI Chat Backgrounds ─── */
+.ai-home-bg {
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(99, 102, 241, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse 60% 40% at 80% 100%, rgba(139, 92, 246, 0.04) 0%, transparent 50%),
+    linear-gradient(180deg, #f8fafc 0%, #ffffff 40%);
+}
+
+.ai-chat-bg {
+  background:
+    radial-gradient(ellipse 100% 60% at 50% 0%, rgba(99, 102, 241, 0.05) 0%, transparent 40%),
+    linear-gradient(180deg, #fafbfd 0%, #ffffff 100%);
+}
+
+/* ─── Chat Bubble Styling ─── */
+.chat-bubble {
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.chat-bubble-assistant {
+  /* Light inner glow for assistant messages */
+  background: linear-gradient(135deg, #ffffff 0%, #fafbff 100%);
+}
+
+.chat-bubble-user {
+  /* Premium gradient shift for user messages */
+  background-size: 200% 200%;
+}
+
+/* ─── AI Composer ─── */
+.ai-composer {
+  transition: all 0.2s ease;
+}
+
+/* ─── Chatbot Widget Premium ─── */
+.chatbot-widget-panel {
+  background: rgba(255, 255, 255, 0.98);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.chatbot-widget-header {
+  background: linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #7c3aed 100%);
+}
+
+.chatbot-widget-message-bot {
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  border: 1px solid rgba(226, 232, 240, 0.6);
+}
+
+.chatbot-widget-message-user {
+  background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
+  color: white;
+}
+
+.chatbot-widget-fab {
+  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+  box-shadow:
+    0 8px 32px rgba(79, 70, 229, 0.35),
+    0 2px 8px rgba(0, 0, 0, 0.08);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.chatbot-widget-fab:hover {
+  box-shadow:
+    0 12px 40px rgba(79, 70, 229, 0.45),
+    0 4px 12px rgba(0, 0, 0, 0.12);
+  transform: scale(1.08);
+}
+
+.chatbot-widget-fab:active {
+  transform: scale(0.95);
+}
+
 /* ─── Glass Panel ─── */
 .glass-panel {
   background: rgba(255, 255, 255, 0.7);

@@ -71,6 +71,7 @@ import { FindTutorsPage } from './components/pages/FindTutorsPage';
 import { CertificateModal } from './components/common/CertificateModal';
 import { ForgotPasswordPage } from './components/pages/ForgotPasswordPage';
 import { TutorDashboardPage } from './components/pages/TutorDashboardPage';
+import { StudentDashboardPage } from './components/pages/StudentDashboardPage';
 import { TutorEarningsPage } from './components/pages/TutorEarningsPage';
 
 const STEM_SUBJECTS: string[] = [...ALLOWED_TUTOR_SUBJECTS];
@@ -5302,332 +5303,33 @@ export default function App() {
           )}
 
           {activeTab === 'dashboard' && currentUser && isStudent && (
-            <div className="space-y-8">
-              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-5">
-                  <div className="flex items-center gap-4">
-                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center font-black text-xl shadow-lg shadow-indigo-200">
-                      {(currentUser.firstName + ' ' + currentUser.lastName).charAt(0)}
-                    </div>
-                    <div>
-                      <h2 className="text-3xl font-black text-slate-900 tracking-tight">Student Dashboard</h2>
-                      <p className="text-slate-500 font-medium">Focus on sessions, courses, certificates, and learning progress.</p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setActiveTab('courses')}
-                    className="px-6 py-3 rounded-2xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
-                  >
-                    Browse Courses
-                  </button>
-                </div>
-
-                <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4 mt-8">
-                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Booked Sessions</p>
-                    <p className="text-3xl font-black text-slate-900 mt-2">{studentDashboardBookings.length}</p>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Ready to Join</p>
-                    <p className="text-3xl font-black text-emerald-600 mt-2">
-                      {studentDashboardBookings.filter((booking) => isValidMeetingLink(booking.meetingLink)).length}
-                    </p>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Enrolled Courses</p>
-                    <p className="text-3xl font-black text-indigo-600 mt-2">{studentEnrolledCourses.length}</p>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Avg. Progress</p>
-                    <p className="text-3xl font-black text-violet-600 mt-2">
-                      {studentEnrolledCourses.length
-                        ? Math.round(
-                          studentEnrolledCourses.reduce((sum, entry) => sum + entry.enrollment.progress, 0) /
-                            studentEnrolledCourses.length
-                        )
-                        : 0}
-                      %
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid xl:grid-cols-5 gap-8">
-                <div className="xl:col-span-3 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-black text-2xl text-slate-900">My Sessions</h3>
-                      <Calendar className="w-5 h-5 text-slate-400" />
-                    </div>
-                    <div className="flex flex-wrap items-end gap-3">
-                      <span className="text-xs font-black uppercase tracking-widest px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
-                        {filteredStudentBookings.length} sessions shown
-                      </span>
-                      <label className="flex flex-col gap-1">
-                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Status</span>
-                        <select
-                          value={studentBookingStatusFilter}
-                          onChange={(event) => setStudentBookingStatusFilter(event.target.value as BookingStatusFilter)}
-                          className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
-                        >
-                          <option value="all">All Statuses</option>
-                          <option value="pending">Pending</option>
-                          <option value="confirmed">Confirmed</option>
-                          <option value="completed">Completed</option>
-                          <option value="cancelled">Cancelled</option>
-                        </select>
-                      </label>
-                      <label className="flex flex-col gap-1">
-                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Time</span>
-                        <select
-                          value={studentSessionTimelineFilter}
-                          onChange={(event) => setStudentSessionTimelineFilter(event.target.value as SessionTimelineFilter)}
-                          className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
-                        >
-                          <option value="all">Any Time</option>
-                          <option value="upcoming">Upcoming</option>
-                          <option value="past">Past</option>
-                        </select>
-                      </label>
-                    </div>
-                  </div>
-
-                  {filteredStudentBookings.length === 0 ? (
-                    <div className="text-center py-16 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
-                      <Clock className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                      <p className="font-bold text-slate-500">No sessions match your filters.</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {filteredStudentBookings.map((booking) => {
-                        const isLoading = activeBookingActionId === booking.id;
-                        const isSubmittingRating = activeRatingActionBookingId === booking.id;
-                        const paymentStatus = getBookingPaymentStatus(booking);
-                        const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed' && canStudentManageBeforeStart(booking);
-                        const hasValidMeetingLink = isValidMeetingLink(booking.meetingLink);
-                        const canJoinMeeting = hasValidMeetingLink && booking.status !== 'cancelled';
-                        const existingReview = studentReviewsBySessionId.get(booking.id);
-                        const ratingDraft = sessionRatingDrafts[booking.id] || { rating: 0, feedback: '' };
-
-                        return (
-                          <div key={booking.id} className="relative rounded-3xl border border-slate-200 bg-slate-50 p-5 pr-14 space-y-4">
-                            <button
-                              type="button"
-                              disabled={isLoading}
-                              onClick={() => handleHideBookingForCurrentUser(booking)}
-                              className="absolute right-4 top-4 h-8 w-8 rounded-full border border-slate-300 bg-white text-slate-500 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-60 flex items-center justify-center"
-                              aria-label="Hide session card"
-                              title="Hide session card"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                            <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
-                              <div>
-                                <p className="text-lg font-black text-slate-900">{booking.subject} Session</p>
-                                <p className="text-xs text-slate-500 font-semibold mt-1">
-                                  {booking.date}
-                                  {booking.timeSlot ? ` • ${booking.timeSlot}` : ''}
-                                  {' • Tutor: '}
-                                  {getBookingTutorName(booking)}
-                                </p>
-                              </div>
-                              <div className="flex flex-wrap gap-2">
-                                <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getBookingPaymentPillClassName(paymentStatus)}`}>
-                                  payment {paymentStatus}
-                                </span>
-                                <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getBookingStatusPillClassName(booking.status)}`}>
-                                  {booking.status}
-                                </span>
-                              </div>
-                            </div>
-
-                            {!hasValidMeetingLink && paymentStatus === 'paid' && booking.status === 'confirmed' && (
-                              <p className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                                Waiting for tutor to submit a valid meeting link.
-                              </p>
-                            )}
-
-                            {!canStudentManageBeforeStart(booking) && booking.status !== 'cancelled' && booking.status !== 'completed' && (
-                              <p className="text-[11px] font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg px-3 py-2">
-                                Session has started or passed. Cancel action is now disabled.
-                              </p>
-                            )}
-
-                            <div className="flex flex-wrap gap-2">
-                              {canCancel && (
-                                <button
-                                  type="button"
-                                  disabled={isLoading}
-                                  onClick={() => handleStudentCancelBooking(booking)}
-                                  className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
-                                >
-                                  Cancel Booking
-                                </button>
-                              )}
-
-                              {canJoinMeeting ? (
-                                <a
-                                  href={booking.meetingLink}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-indigo-600 text-white hover:bg-indigo-700"
-                                >
-                                  Join Meeting
-                                </a>
-                              ) : (
-                                <button
-                                  type="button"
-                                  disabled
-                                  className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-slate-300 text-slate-600"
-                                >
-                                  Join Meeting
-                                </button>
-                              )}
-                            </div>
-
-                            {booking.status === 'completed' && (
-                              <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
-                                <p className="text-xs font-black uppercase tracking-widest text-slate-500">Rate This Session</p>
-
-                                {existingReview ? (
-                                  <div className="space-y-2">
-                                    <div className="flex items-center gap-1">
-                                      {[1, 2, 3, 4, 5].map((value) => (
-                                        <Star
-                                          key={value}
-                                          className={`w-4 h-4 ${value <= existingReview.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-300'}`}
-                                        />
-                                      ))}
-                                    </div>
-                                    <p className="text-sm text-slate-700">{existingReview.comment || 'Rating submitted.'}</p>
-                                  </div>
-                                ) : (
-                                  <>
-                                    <div className="flex items-center gap-1">
-                                      {[1, 2, 3, 4, 5].map((value) => (
-                                        <button
-                                          key={value}
-                                          type="button"
-                                          onClick={() =>
-                                            setSessionRatingDrafts((prev) => ({
-                                              ...prev,
-                                              [booking.id]: {
-                                                rating: value,
-                                                feedback: prev[booking.id]?.feedback || '',
-                                              },
-                                            }))
-                                          }
-                                          className="p-0.5"
-                                        >
-                                          <Star
-                                            className={`w-5 h-5 ${value <= ratingDraft.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-300 hover:text-amber-300'}`}
-                                          />
-                                        </button>
-                                      ))}
-                                    </div>
-                                    <textarea
-                                      value={ratingDraft.feedback}
-                                      onChange={(event) =>
-                                        setSessionRatingDrafts((prev) => ({
-                                          ...prev,
-                                          [booking.id]: {
-                                            rating: prev[booking.id]?.rating || 0,
-                                            feedback: event.target.value,
-                                          },
-                                        }))
-                                      }
-                                      placeholder="Optional feedback"
-                                      rows={3}
-                                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                                    />
-                                    <button
-                                      type="button"
-                                      disabled={isSubmittingRating || ratingDraft.rating < 1}
-                                      onClick={() => handleSubmitSessionRating(booking)}
-                                      className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
-                                    >
-                                      {isSubmittingRating ? 'Submitting...' : 'Submit Rating'}
-                                    </button>
-                                  </>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                <div className="xl:col-span-2 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                  <div className="flex items-center justify-between mb-6">
-                    <h3 className="font-black text-2xl text-slate-900">Course Progress</h3>
-                    <BookOpen className="w-5 h-5 text-slate-400" />
-                  </div>
-
-                  {studentEnrolledCourses.length === 0 ? (
-                    <div className="text-center py-12 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
-                      <BookMarked className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                      <p className="font-bold text-slate-500">No enrolled courses yet.</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {studentEnrolledCourses.map(({ course, enrollment }) => {
-                        const isCompleted = enrollment.progress >= 100;
-
-                        return (
-                          <div key={course.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                            <p className="font-bold text-slate-900 line-clamp-2">{course.title}</p>
-                            <p className="text-xs font-semibold text-slate-500 mt-1">{course.subject}</p>
-
-                            <div className="mt-3">
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">Progress</span>
-                                <span className="text-sm font-black text-indigo-600">{enrollment.progress}%</span>
-                              </div>
-                              <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
-                                <div
-                                  className={`h-full rounded-full ${isCompleted ? 'bg-emerald-500' : 'bg-indigo-600'}`}
-                                  style={{ width: `${enrollment.progress}%` }}
-                                />
-                              </div>
-                            </div>
-
-                            <div className="mt-4 flex flex-wrap gap-2">
-                              <button
-                                type="button"
-                                onClick={() => handleOpenCourseLearning(course.id)}
-                                className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-indigo-600 text-white hover:bg-indigo-700"
-                              >
-                                Continue Learning
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (!isCompleted) {
-                                    alert('Complete all modules to unlock your certificate.');
-                                    return;
-                                  }
-                                  handleShowCertificateModal(enrollment, course.title);
-                                }}
-                                disabled={!isCompleted}
-                                className={`px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest ${
-                                  isCompleted
-                                    ? 'bg-amber-500 text-white hover:bg-amber-600'
-                                    : 'bg-slate-300 text-slate-600 cursor-not-allowed'
-                                }`}
-                              >
-                                View Certificate
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
+            <StudentDashboardPage
+              currentUser={currentUser}
+              studentDashboardBookings={studentDashboardBookings}
+              studentEnrolledCourses={studentEnrolledCourses}
+              filteredStudentBookings={filteredStudentBookings}
+              studentBookingStatusFilter={studentBookingStatusFilter}
+              setStudentBookingStatusFilter={setStudentBookingStatusFilter}
+              studentSessionTimelineFilter={studentSessionTimelineFilter}
+              setStudentSessionTimelineFilter={setStudentSessionTimelineFilter}
+              activeBookingActionId={activeBookingActionId}
+              studentReviewsBySessionId={studentReviewsBySessionId}
+              sessionRatingDrafts={sessionRatingDrafts}
+              setSessionRatingDrafts={setSessionRatingDrafts}
+              activeRatingActionBookingId={activeRatingActionBookingId}
+              handleHideBookingForCurrentUser={handleHideBookingForCurrentUser}
+              getBookingPaymentStatus={getBookingPaymentStatus}
+              getBookingStatusPillClassName={getBookingStatusPillClassName}
+              getBookingPaymentPillClassName={getBookingPaymentPillClassName}
+              canStudentManageBeforeStart={canStudentManageBeforeStart}
+              isValidMeetingLink={isValidMeetingLink}
+              handleStudentCancelBooking={handleStudentCancelBooking}
+              handleSubmitSessionRating={handleSubmitSessionRating}
+              handleOpenCourseLearning={handleOpenCourseLearning}
+              handleShowCertificateModal={handleShowCertificateModal}
+              getBookingTutorName={getBookingTutorName}
+              setActiveTab={(tab: string) => setActiveTab(tab as Tab)}
+            />
           )}
 
           {activeTab === 'earnings' && currentUser && isTutor && (

@@ -2,7 +2,7 @@
  * TutorDashboardPage – Modern SaaS-style Tutor Dashboard
  * Pure UI component. No backend logic changes.
  */
-import React, { useState } from 'react';
+import React from 'react';
 import { motion } from 'motion/react';
 import {
   BookOpen,
@@ -23,8 +23,6 @@ import {
   User,
   TrendingUp,
   FileText,
-  ExternalLink,
-  ChevronRight,
   Copy,
   Video,
   CircleDollarSign,
@@ -38,19 +36,9 @@ const fadeUp = {
   show: (i: number) => ({
     opacity: 1,
     y: 0,
-    transition: { delay: i * 0.06, duration: 0.45, ease: 'easeOut' as const },
+    transition: { delay: i * 0.05, duration: 0.4, ease: 'easeOut' as const },
   }),
 };
-
-/* ─── Sidebar nav item type ─── */
-interface SidebarItem {
-  key: string;
-  label: string;
-  icon: React.ElementType;
-  badge?: number;
-  onClick?: () => void;
-  external?: boolean;
-}
 
 /* ─── Props — mirrors every piece of data the old inline JSX referenced ─── */
 export interface TutorDashboardPageProps {
@@ -125,10 +113,7 @@ export const TutorDashboardPage: React.FC<TutorDashboardPageProps> = (props) => 
     bookings,
   } = props;
 
-  /* ─── Sidebar collapse state (mobile) ─── */
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  /* ─── Stat derivations (same logic, reused) ─── */
+  /* ─── Stat derivations ─── */
   const totalSessions = tutorDashboardBookings.length;
   const upcomingSessions = tutorDashboardBookings.filter(
     (b) => b.status !== 'cancelled' && !isPastSession(b)
@@ -138,292 +123,183 @@ export const TutorDashboardPage: React.FC<TutorDashboardPageProps> = (props) => 
   const resourcesCount = myTutorResources.length;
   const avgRating = tutorAverageRatingFromReviews.toFixed(1);
 
-  /* ─── Sidebar items ─── */
-  const sidebarItems: SidebarItem[] = [
-    { key: 'profile', label: 'Profile & Quals', icon: User, onClick: () => setActiveTab('register') },
-    { key: 'settings', label: 'Settings', icon: Settings, onClick: () => setActiveTab('settings') },
+  /* ─── Navigation Action Cards ─── */
+  const navItems = [
+    { key: 'settings', label: 'Settings', icon: Settings, onClick: () => setActiveTab('settings'), desc: 'Preferences' },
     ...(profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University'
-      ? [{ key: 'availability', label: 'Availability', icon: Calendar, onClick: () => setActiveTab('manageAvailability') }]
+      ? [{ key: 'availability', label: 'Availability', icon: Calendar, onClick: () => setActiveTab('manageAvailability'), desc: 'Set schedule' }]
       : []),
-    { key: 'courses', label: 'Courses', icon: BookOpen, badge: activeCourses, onClick: () => setActiveTab('courses') },
-    { key: 'resources', label: 'Resources', icon: Layers, badge: resourcesCount, onClick: () => setActiveTab('resources') },
-    { key: 'revenue', label: 'Revenue', icon: CircleDollarSign, onClick: () => setActiveTab('earnings') },
+    { key: 'courses', label: 'Courses', icon: BookOpen, badge: activeCourses, onClick: () => setActiveTab('courses'), desc: 'Tutor content' },
+    { key: 'resources', label: 'Resources', icon: Layers, badge: resourcesCount, onClick: () => setActiveTab('resources'), desc: 'Study materials' },
+    { key: 'revenue', label: 'Revenue', icon: CircleDollarSign, onClick: () => setActiveTab('earnings'), desc: 'Payouts & history' },
   ];
 
   /* ─── Summary cards config ─── */
   const summaryCards = [
-    { label: 'Total Sessions', value: totalSessions, color: 'text-slate-900', bg: 'bg-gradient-to-br from-slate-50 to-slate-100/70', iconBg: 'bg-slate-200/60', icon: Calendar, border: 'border-slate-200/80' },
-    { label: 'Upcoming', value: upcomingSessions, color: 'text-indigo-700', bg: 'bg-gradient-to-br from-indigo-50/80 to-indigo-100/40', iconBg: 'bg-indigo-100', icon: TrendingUp, border: 'border-indigo-200/60' },
-    { label: 'Pending', value: pendingActions, color: 'text-amber-700', bg: 'bg-gradient-to-br from-amber-50/80 to-amber-100/40', iconBg: 'bg-amber-100', icon: Clock, border: 'border-amber-200/60' },
-    { label: 'Courses', value: activeCourses, color: 'text-cyan-700', bg: 'bg-gradient-to-br from-cyan-50/80 to-cyan-100/40', iconBg: 'bg-cyan-100', icon: BookOpen, border: 'border-cyan-200/60' },
-    { label: 'Resources', value: resourcesCount, color: 'text-emerald-700', bg: 'bg-gradient-to-br from-emerald-50/80 to-emerald-100/40', iconBg: 'bg-emerald-100', icon: FileText, border: 'border-emerald-200/60' },
-    { label: 'Avg Rating', value: avgRating, color: 'text-violet-700', bg: 'bg-gradient-to-br from-violet-50/80 to-violet-100/40', iconBg: 'bg-violet-100', icon: Star, border: 'border-violet-200/60' },
+    { label: 'Total Sessions', value: totalSessions, color: 'text-indigo-700', iconBg: 'bg-indigo-50/80', accent: 'border-t-indigo-400', icon: Calendar },
+    { label: 'Upcoming', value: upcomingSessions, color: 'text-emerald-700', iconBg: 'bg-emerald-50/80', accent: 'border-t-emerald-400', icon: TrendingUp },
+    { label: 'Pending', value: pendingActions, color: 'text-amber-600', iconBg: 'bg-amber-50/80', accent: 'border-t-amber-400', icon: Clock },
+    { label: 'Courses', value: activeCourses, color: 'text-cyan-700', iconBg: 'bg-cyan-50/80', accent: 'border-t-cyan-400', icon: BookOpen },
+    { label: 'Resources', value: resourcesCount, color: 'text-purple-700', iconBg: 'bg-purple-50/80', accent: 'border-t-purple-400', icon: FileText },
+    { label: 'Avg Rating', value: avgRating, color: 'text-blue-700', iconBg: 'bg-blue-50/80', accent: 'border-t-blue-400', icon: Star },
   ];
 
   return (
-    <div className="flex min-h-[calc(100vh-80px)] gap-0 lg:gap-8">
+    <div className="space-y-6 max-w-7xl mx-auto w-full">
 
-      {/* ════════ MOBILE SIDEBAR OVERLAY ════════ */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/30 z-40 lg:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      {/* ════════ SIDEBAR ════════ */}
-      <aside
-        className={`
-          fixed lg:static inset-y-0 left-0 z-50
-          w-[280px] lg:w-[260px] shrink-0
-          bg-white border-r border-slate-100
-          flex flex-col
-          transform transition-transform duration-300 ease-in-out
-          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-          lg:rounded-[1.75rem] lg:border lg:border-slate-100 lg:shadow-[0_1px_4px_rgba(0,0,0,0.03)]
-          overflow-y-auto
-        `}
+      {/* ──── Header Banner ──── */}
+      <motion.div
+        initial={{ opacity: 0, y: 14 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+        className="relative bg-white rounded-2xl border border-slate-200/70 shadow-sm p-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-5 overflow-hidden"
       >
-        {/* Sidebar header */}
-        <div className="p-6 pb-4 border-b border-slate-100/80">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-600 text-white flex items-center justify-center font-extrabold text-base shadow-md shadow-indigo-200/60">
-              {(currentUser.firstName || 'T').charAt(0)}
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm font-bold text-slate-900 truncate">
-                {currentUser.firstName} {currentUser.lastName}
-              </p>
-              <p className="text-xs text-slate-500 truncate">{currentUser.email}</p>
-            </div>
-          </div>
-          <button
-            onClick={() => setSidebarOpen(false)}
-            className="lg:hidden absolute top-5 right-4 p-1.5 rounded-lg hover:bg-slate-100 text-slate-400"
-          >
-            <X className="w-5 h-5" />
-          </button>
+        <div className="pointer-events-none absolute -right-16 -top-16 w-56 h-56 rounded-full bg-gradient-to-br from-indigo-100 to-purple-100 opacity-40 blur-3xl" />
+
+        <div className="relative z-10 flex items-center gap-4">
+           <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center font-bold text-lg shadow-sm">
+             {(currentUser.firstName || 'T').charAt(0)}
+           </div>
+           <div>
+             <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight">
+               Tutor Workspace
+             </h1>
+             <p className="text-slate-500 mt-0.5 text-sm md:text-base font-medium max-w-xl">
+               Manage sessions, earnings, and course content from your dashboard.
+             </p>
+           </div>
         </div>
+        <div className="relative z-10 flex flex-wrap items-center gap-3">
+             <button
+               onClick={() => {
+                 const latestLink = bookings[0]?.meetingLink;
+                 if (!latestLink) {
+                   alert('No session link available yet.');
+                   return;
+                 }
+                 navigator.clipboard.writeText(latestLink);
+                 alert('Latest session link copied to clipboard.');
+               }}
+               className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200/70 bg-white text-slate-700 font-bold text-sm hover:bg-slate-50 transition-all active:scale-[0.98] shadow-sm"
+             >
+               <Copy className="w-4 h-4 text-slate-400" /> Copy Session Link
+             </button>
+             <button
+               onClick={() => setActiveTab('earnings')}
+               className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-indigo-600 text-white font-bold text-sm tracking-wide hover:bg-indigo-700 transition-all shadow-sm active:scale-[0.98]"
+             >
+               <BarChart3 className="w-4 h-4" /> Revenue Details
+             </button>
+           </div>
+      </motion.div>
 
-        {/* Quick Stats (mini) */}
-        <div className="px-5 py-4 grid grid-cols-2 gap-2.5">
-          <div className="bg-indigo-50/60 rounded-xl p-3 text-center">
-            <p className="text-lg font-extrabold text-indigo-700">{upcomingSessions}</p>
-            <p className="text-[10px] font-bold text-indigo-600/70 uppercase tracking-wider mt-0.5">Upcoming</p>
-          </div>
-          <div className="bg-amber-50/60 rounded-xl p-3 text-center">
-            <p className="text-lg font-extrabold text-amber-700">{pendingActions}</p>
-            <p className="text-[10px] font-bold text-amber-600/70 uppercase tracking-wider mt-0.5">Pending</p>
-          </div>
-        </div>
+      {/* ──── Navigation Cards (Top Section) ──── */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 md:gap-4">
+         {navItems.map((item, idx) => {
+           const Icon = item.icon;
+           return (
+             <motion.button
+               custom={idx}
+               variants={fadeUp}
+               initial="hidden"
+               animate="show"
+               key={item.key}
+               onClick={item.onClick}
+               className="flex items-center gap-3 text-left p-3.5 rounded-xl bg-white border border-slate-200/70 hover:border-indigo-200 hover:bg-slate-50 transition-all group relative overflow-hidden shadow-sm"
+             >
+               {item.badge !== undefined && item.badge > 0 && (
+                 <span className="absolute top-2.5 right-2.5 bg-indigo-100 text-indigo-700 text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm">
+                   {item.badge}
+                 </span>
+               )}
+               <div className="w-10 h-10 shrink-0 rounded-lg bg-indigo-50/50 border border-indigo-100/30 flex items-center justify-center group-hover:bg-indigo-100/50 transition-colors">
+                 <Icon className="w-5 h-5 text-indigo-600 transition-colors" />
+               </div>
+               <div className="flex flex-col">
+                 <span className="text-sm font-bold text-slate-800 group-hover:text-indigo-700 transition-colors">{item.label}</span>
+                 <span className="text-[11px] text-slate-500 font-medium hidden sm:block truncate pr-3">{item.desc}</span>
+               </div>
+             </motion.button>
+           );
+         })}
+      </div>
 
-        {/* Nav items */}
-        <nav className="flex-1 px-4 py-2 space-y-1">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 px-3 mb-2">Workspace</p>
-          {sidebarItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.key}
-                onClick={() => {
-                  item.onClick?.();
-                  setSidebarOpen(false);
-                }}
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-50 hover:text-indigo-700 transition-all duration-200 group"
-              >
-                <span className="w-8 h-8 rounded-lg bg-slate-100/80 flex items-center justify-center group-hover:bg-indigo-50 transition-colors">
-                  <Icon className="w-4 h-4 text-slate-500 group-hover:text-indigo-600 transition-colors" />
-                </span>
-                <span className="flex-1 text-left">{item.label}</span>
-                {item.badge !== undefined && item.badge > 0 && (
-                  <span className="text-[10px] font-bold bg-slate-200/80 text-slate-600 px-2 py-0.5 rounded-full group-hover:bg-indigo-100 group-hover:text-indigo-700 transition-colors">
-                    {item.badge}
-                  </span>
-                )}
-                <ChevronRight className="w-3.5 h-3.5 text-slate-300 group-hover:text-indigo-400 transition-colors" />
-              </button>
-            );
-          })}
-        </nav>
-
-        {/* session link copy */}
-        <div className="p-4 mx-4 mb-4 rounded-xl bg-slate-50 border border-slate-100">
-          <button
-            onClick={() => {
-              const latestLink = bookings[0]?.meetingLink;
-              if (!latestLink) {
-                alert('No session link available yet.');
-                return;
-              }
-              navigator.clipboard.writeText(latestLink);
-              alert('Latest session link copied to clipboard.');
-            }}
-            className="w-full flex items-center gap-3 text-left text-sm font-semibold text-slate-700 hover:text-indigo-700 transition-colors group"
-          >
-            <span className="w-8 h-8 rounded-lg bg-white flex items-center justify-center shadow-sm">
-              <Copy className="w-4 h-4 text-slate-500 group-hover:text-indigo-600 transition-colors" />
-            </span>
-            <span>Copy Session Link</span>
-          </button>
-        </div>
-      </aside>
-
-      {/* ════════ MAIN CONTENT ════════ */}
-      <main className="flex-1 min-w-0 space-y-6">
-
-        {/* Mobile menu toggle */}
-        <button
-          onClick={() => setSidebarOpen(true)}
-          className="lg:hidden flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-sm font-semibold text-slate-700 shadow-sm hover:shadow transition-all"
-        >
-          <Layers className="w-4 h-4" />
-          Menu
-        </button>
-
-        {/* ──── Header Banner ──── */}
-        <motion.div
-          initial={{ opacity: 0, y: 14 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-          className="relative overflow-hidden rounded-2xl bg-white border border-slate-200/70 shadow-sm p-6 md:p-8"
-        >
-          {/* Decorative gradient orbs */}
-          <div className="pointer-events-none absolute -right-16 -top-16 w-56 h-56 rounded-full bg-gradient-to-br from-indigo-100 to-violet-100 opacity-50 blur-3xl" />
-          <div className="pointer-events-none absolute -left-12 -bottom-12 w-40 h-40 rounded-full bg-gradient-to-br from-cyan-100 to-blue-100 opacity-40 blur-3xl" />
-
-          <div className="relative flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-            <div>
-              <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight">
-                Tutor Workspace
-              </h1>
-              <p className="text-slate-500 mt-1.5 text-sm md:text-base max-w-xl">
-                Manage your sessions, profile, content, and performance from one clean dashboard.
-              </p>
-            </div>
-            <button
-              onClick={() => setActiveTab('earnings')}
-              className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700 transition-colors shadow-md shadow-indigo-200/50 active:scale-[0.97]"
+      {/* ──── Summary Cards ──── */}
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
+        {summaryCards.map((card, i) => {
+          const Icon = card.icon;
+          return (
+            <motion.div
+              key={card.label}
+              custom={i}
+              variants={fadeUp}
+              initial="hidden"
+              animate="show"
+              className={`relative overflow-hidden rounded-xl border border-slate-200/70 ${card.accent} border-t-4 p-4 md:p-5 transition-all hover:shadow-md hover:-translate-y-0.5 group bg-white flex items-center gap-4`}
             >
-              <BarChart3 className="w-4 h-4" />
-              Revenue Dashboard
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </div>
-        </motion.div>
+              <div className={`w-10 h-10 rounded-xl shrink-0 ${card.iconBg} flex items-center justify-center group-hover:scale-105 transition-transform`}>
+                <Icon className={`w-5 h-5 ${card.color} opacity-90`} />
+              </div>
+              <div className="flex flex-col">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-0.5">{card.label}</p>
+                <p className={`text-2xl md:text-3xl font-extrabold ${card.color}`}>{card.value}</p>
+              </div>
+            </motion.div>
+          );
+        })}
+      </div>
 
-        {/* ──── Summary Cards ──── */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3 md:gap-4">
-          {summaryCards.map((card, i) => {
-            const Icon = card.icon;
-            return (
-              <motion.div
-                key={card.label}
-                custom={i}
-                variants={fadeUp}
-                initial="hidden"
-                animate="show"
-                className={`relative overflow-hidden rounded-2xl border ${card.border} ${card.bg} p-4 md:p-5 transition-shadow duration-300 hover:shadow-md group`}
-              >
-                <div className={`w-9 h-9 rounded-xl ${card.iconBg} flex items-center justify-center mb-3 transition-transform duration-300 group-hover:scale-110`}>
-                  <Icon className={`w-4.5 h-4.5 ${card.color} opacity-80`} />
-                </div>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">{card.label}</p>
-                <p className={`text-2xl font-extrabold ${card.color}`}>{card.value}</p>
-              </motion.div>
-            );
-          })}
-        </div>
-
-        {/* ──── Revenue CTA Card ──── */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+        {/* ──── Main Section: Session Management ──── */}
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.35, duration: 0.4 }}
-          className="rounded-2xl border border-slate-200/70 bg-white p-6 md:p-7 shadow-sm hover:shadow-md transition-shadow duration-300"
+          transition={{ delay: 0.2, duration: 0.4 }}
+          className="md:col-span-2 xl:col-span-2 rounded-xl border border-slate-200/70 bg-white shadow-sm overflow-hidden flex flex-col"
         >
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-            <div className="flex items-start gap-4">
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-100 to-emerald-50 flex items-center justify-center shadow-sm">
-                <Wallet className="w-6 h-6 text-emerald-600" />
+          <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-slate-50/50">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-indigo-100/50 flex items-center justify-center">
+                <Calendar className="w-5 h-5 text-indigo-600" />
               </div>
               <div>
-                <h3 className="text-lg font-bold text-slate-900">Tutor Revenue Dashboard</h3>
-                <p className="text-slate-500 text-sm mt-0.5">
-                  Earnings, payment history, source breakdown, and revenue charts.
-                </p>
+                 <h2 className="text-xl font-bold text-slate-900">Session Management</h2>
+                 <p className="text-xs font-semibold text-slate-500 mt-0.5">{filteredTutorBookings.length} results</p>
               </div>
             </div>
-            <button
-              onClick={() => setActiveTab('earnings')}
-              className="inline-flex items-center gap-2 px-5 py-3 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 font-bold text-sm hover:bg-indigo-100 transition-colors active:scale-[0.97]"
-            >
-              Go to Revenue Dashboard
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </div>
-        </motion.div>
-
-        {/* ──── Session Management ──── */}
-        <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4, duration: 0.4 }}
-          className="rounded-2xl border border-slate-200/70 bg-white shadow-sm overflow-hidden"
-        >
-          {/* Section header */}
-          <div className="p-6 md:p-7 border-b border-slate-100">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center">
-                  <Calendar className="w-5 h-5 text-indigo-600" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900">Session Management</h3>
-                  <span className="text-xs font-semibold text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full border border-indigo-100 inline-block mt-1">
-                    {filteredTutorBookings.length} sessions shown
-                  </span>
-                </div>
-              </div>
-              <div className="flex flex-wrap items-end gap-3">
-                <label className="flex flex-col gap-1">
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Status</span>
-                  <select
-                    value={tutorBookingStatusFilter}
-                    onChange={(e) => setTutorBookingStatusFilter(e.target.value)}
-                    className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold bg-white text-slate-700 focus:ring-2 focus:ring-indigo-100 focus:border-indigo-300 transition-all outline-none"
-                  >
-                    <option value="all">All Statuses</option>
-                    <option value="pending">Pending</option>
-                    <option value="confirmed">Confirmed</option>
-                    <option value="completed">Completed</option>
-                    <option value="cancelled">Cancelled</option>
-                  </select>
-                </label>
-                <label className="flex flex-col gap-1">
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Time</span>
-                  <select
-                    value={tutorSessionTimelineFilter}
-                    onChange={(e) => setTutorSessionTimelineFilter(e.target.value)}
-                    className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold bg-white text-slate-700 focus:ring-2 focus:ring-indigo-100 focus:border-indigo-300 transition-all outline-none"
-                  >
-                    <option value="all">Any Time</option>
-                    <option value="upcoming">Upcoming</option>
-                    <option value="past">Past</option>
-                  </select>
-                </label>
-              </div>
+            
+            <div className="flex flex-wrap gap-2">
+               <select
+                 value={tutorBookingStatusFilter}
+                 onChange={(e) => setTutorBookingStatusFilter(e.target.value)}
+                 className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold bg-slate-50 text-slate-700 outline-none focus:ring-2 focus:ring-indigo-100"
+               >
+                 <option value="all">All Statuses</option>
+                 <option value="pending">Pending</option>
+                 <option value="confirmed">Confirmed</option>
+                 <option value="completed">Completed</option>
+                 <option value="cancelled">Cancelled</option>
+               </select>
+               <select
+                 value={tutorSessionTimelineFilter}
+                 onChange={(e) => setTutorSessionTimelineFilter(e.target.value)}
+                 className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold bg-slate-50 text-slate-700 outline-none focus:ring-2 focus:ring-indigo-100"
+               >
+                 <option value="all">Any Time</option>
+                 <option value="upcoming">Upcoming</option>
+                 <option value="past">Past</option>
+               </select>
             </div>
           </div>
 
-          {/* Session cards */}
-          <div className="p-5 md:p-6">
+          <div className="p-5 bg-slate-50/30 flex-1">
             {filteredTutorBookings.length === 0 ? (
-              <div className="text-center py-16 rounded-2xl bg-slate-50/80 border border-dashed border-slate-200">
-                <Clock className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                <p className="font-semibold text-slate-500">No sessions match your filters.</p>
+              <div className="text-center py-12 rounded-xl bg-white border border-dashed border-slate-200">
+                <Clock className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                <p className="text-sm font-semibold text-slate-500">No sessions match your filters.</p>
               </div>
             ) : (
-              <div className="space-y-4">
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                 {filteredTutorBookings.map((booking, idx) => {
                   const isLoading = activeBookingActionId === booking.id;
                   const paymentStatus = getBookingPaymentStatus(booking);
@@ -437,122 +313,122 @@ export const TutorDashboardPage: React.FC<TutorDashboardPageProps> = (props) => 
                   return (
                     <motion.div
                       key={booking.id}
-                      initial={{ opacity: 0, y: 8 }}
+                      initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: idx * 0.04, duration: 0.35 }}
-                      className="relative rounded-2xl border border-slate-200/70 bg-white p-5 pr-14 space-y-4 shadow-sm hover:shadow-md transition-shadow duration-300"
+                      transition={{ delay: idx * 0.04, duration: 0.3 }}
+                      className="relative bg-white rounded-xl border border-slate-200/70 p-5 shadow-sm hover:shadow-md transition-shadow flex flex-col h-full"
                     >
-                      {/* Hide button */}
                       <button
                         type="button"
                         disabled={isLoading}
                         onClick={() => handleHideBookingForCurrentUser(booking)}
-                        className="absolute right-4 top-4 h-8 w-8 rounded-full border border-slate-200 bg-slate-50 text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-60 flex items-center justify-center transition-colors"
-                        aria-label="Hide session card"
-                        title="Hide session card"
+                        className="absolute right-3 top-3 h-7 w-7 rounded-full border border-slate-100 bg-slate-50 text-slate-400 hover:bg-slate-100 disabled:opacity-60 flex items-center justify-center transition-colors hover:text-slate-600"
+                        title="Hide session"
                       >
                         <X className="w-3.5 h-3.5" />
                       </button>
 
-                      {/* Title row */}
-                      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
-                        <div>
-                          <p className="text-base font-bold text-slate-900">{booking.subject} Session</p>
-                          <p className="text-xs font-medium text-slate-400 mt-0.5">ID: {booking.id}</p>
+                      <div className="flex-1 mb-4">
+                        <div className="flex flex-wrap gap-2 mb-3">
+                           <span className={`text-[10px] uppercase tracking-widest font-bold px-2.5 py-1 rounded-full border ${getBookingPaymentPillClassName(paymentStatus)}`}>
+                             {paymentStatus}
+                           </span>
+                           <span className={`text-[10px] uppercase tracking-widest font-bold px-2.5 py-1 rounded-full border ${getBookingStatusPillClassName(booking.status)}`}>
+                             {booking.status}
+                           </span>
                         </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className={`text-[10px] uppercase tracking-widest font-bold px-2.5 py-1 rounded-full border ${getBookingPaymentPillClassName(paymentStatus)}`}>
-                            payment {paymentStatus}
-                          </span>
-                          <span className={`text-[10px] uppercase tracking-widest font-bold px-2.5 py-1 rounded-full border ${getBookingStatusPillClassName(booking.status)}`}>
-                            {booking.status}
-                          </span>
+                        <h3 className="text-base font-bold text-slate-900 mb-1 line-clamp-1 pr-6">{booking.subject} Session</h3>
+                        
+                        <div className="space-y-2 mt-3">
+                           <div className="flex items-center gap-2 text-sm text-slate-600">
+                             <Calendar className="w-4 h-4 text-slate-400 shrink-0" />
+                             <span className="font-medium">{booking.date} {booking.timeSlot ? `• ${booking.timeSlot}` : ''}</span>
+                           </div>
+                           <div className="flex items-center gap-2 text-sm text-slate-600">
+                             <User className="w-4 h-4 text-slate-400 shrink-0" />
+                             <span className="font-medium text-indigo-600">{getBookingStudentName(booking)}</span>
+                           </div>
                         </div>
-                      </div>
 
-                      {/* Details grid */}
-                      <div className="grid sm:grid-cols-2 xl:grid-cols-5 gap-3 text-sm">
-                        {[
-                          { label: 'Date', value: booking.date },
-                          { label: 'Time Slot', value: booking.timeSlot || 'Not specified' },
-                          { label: 'Student', value: getBookingStudentName(booking), span: 'xl:col-span-2' },
-                          {
-                            label: 'Meeting Link',
-                            value: isValidMeetingLink(booking.meetingLink) ? 'Ready' : 'Not submitted',
-                            valueClass: isValidMeetingLink(booking.meetingLink) ? 'text-emerald-600' : 'text-amber-600',
-                          },
-                        ].map((detail) => (
-                          <div key={detail.label} className={`bg-slate-50/80 rounded-xl border border-slate-100 p-3 ${(detail as any).span || ''}`}>
-                            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{detail.label}</p>
-                            <p className={`font-semibold mt-1 ${(detail as any).valueClass || 'text-slate-800'}`}>{detail.value}</p>
+                        {paymentStatus === 'failed' && (
+                          <div className="mt-4 bg-rose-50 border border-rose-100 rounded-lg px-3 py-2">
+                            <p className="text-xs font-semibold text-rose-700 leading-snug">
+                               {booking.paymentFailureReason || 'Payment failed for this booking. Ask student to retry.'}
+                            </p>
                           </div>
-                        ))}
+                        )}
+                        
+                        <div className="flex flex-wrap items-center justify-between gap-4 bg-slate-50/80 rounded-lg border border-slate-100 p-2.5 mt-4">
+                           <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Link Info:</span>
+                              <span className={`text-xs font-bold ${isValidMeetingLink(booking.meetingLink) ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                 {isValidMeetingLink(booking.meetingLink) ? 'Ready' : 'Needs Setup'}
+                              </span>
+                           </div>
+                           <p className="text-[10px] font-bold text-slate-400">ID: {booking.id}</p>
+                        </div>
                       </div>
 
-                      {/* Payment failure message */}
-                      {paymentStatus === 'failed' && (
-                        <p className="text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">
-                          {booking.paymentFailureReason || 'Payment failed for this booking. Ask the student to retry checkout.'}
-                        </p>
-                      )}
-
-                      {/* Action buttons */}
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        <button
-                          type="button"
-                          disabled={isLoading || !canComplete}
-                          onClick={() => handleTutorBookingStatusChange(booking, 'completed')}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors active:scale-[0.97]"
-                        >
-                          <CheckCircle className="w-3.5 h-3.5" />
-                          Mark Completed
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isLoading || !canCancel}
-                          onClick={() => handleTutorBookingStatusChange(booking, 'cancelled')}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-50 transition-colors active:scale-[0.97]"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isLoading || !canReschedule}
-                          onClick={() => handleTutorRescheduleBooking(booking)}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-50 transition-colors active:scale-[0.97]"
-                        >
-                          <Calendar className="w-3.5 h-3.5" />
-                          Reschedule
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isLoading || !canSubmitMeetingLink}
-                          onClick={() => handleTutorMeetingLinkUpdate(booking)}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition-colors active:scale-[0.97]"
-                        >
-                          <LinkIcon className="w-3.5 h-3.5" />
-                          Meeting Link
-                        </button>
+                      <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center gap-2 mt-auto">
                         {canStartMeeting ? (
                           <a
                             href={booking.meetingLink}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider bg-indigo-600 text-white hover:bg-indigo-700 transition-colors active:scale-[0.97]"
+                            className="inline-flex flex-1 justify-center items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 transition-colors shadow-sm"
                           >
-                            <Video className="w-3.5 h-3.5" />
-                            Start Meeting
+                            <Video className="w-4 h-4" /> Start
                           </a>
                         ) : (
                           <button
                             type="button"
                             disabled
-                            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider bg-slate-200 text-slate-500 cursor-not-allowed"
+                            className="inline-flex flex-1 justify-center items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold bg-slate-100 text-slate-400 cursor-not-allowed"
                           >
-                            <Video className="w-3.5 h-3.5" />
-                            Start Meeting
+                            <Video className="w-4 h-4" /> Start
                           </button>
+                        )}
+
+                        <button
+                           type="button"
+                           disabled={isLoading || !canSubmitMeetingLink}
+                           onClick={() => handleTutorMeetingLinkUpdate(booking)}
+                           className="inline-flex flex-1 justify-center items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition-colors shadow-sm"
+                        >
+                           <LinkIcon className="w-3.5 h-3.5" /> Setup
+                        </button>
+
+                        <div className="w-full h-px hidden" />
+
+                        {canComplete && (
+                           <button
+                             type="button"
+                             disabled={isLoading}
+                             onClick={() => handleTutorBookingStatusChange(booking, 'completed')}
+                             className="inline-flex justify-center items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold bg-emerald-50 border border-emerald-100 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 transition-colors"
+                           >
+                             <CheckCircle className="w-3.5 h-3.5" /> Done
+                           </button>
+                        )}
+                        {canReschedule && (
+                           <button
+                             type="button"
+                             disabled={isLoading}
+                             onClick={() => handleTutorRescheduleBooking(booking)}
+                             className="inline-flex justify-center items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold bg-white border border-slate-200 text-indigo-600 hover:bg-indigo-50 disabled:opacity-50 transition-colors shadow-sm"
+                           >
+                             <Calendar className="w-3.5 h-3.5" /> Resched
+                           </button>
+                        )}
+                        {canCancel && (
+                           <button
+                             type="button"
+                             disabled={isLoading}
+                             onClick={() => handleTutorBookingStatusChange(booking, 'cancelled')}
+                             className="inline-flex justify-center items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold bg-white border border-slate-200 text-rose-600 hover:bg-rose-50 hover:border-rose-200 disabled:opacity-50 transition-colors shadow-sm"
+                           >
+                             <X className="w-3.5 h-3.5" /> Cancel
+                           </button>
                         )}
                       </div>
                     </motion.div>
@@ -565,84 +441,69 @@ export const TutorDashboardPage: React.FC<TutorDashboardPageProps> = (props) => 
 
         {/* ──── Performance Panel ──── */}
         <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.45, duration: 0.4 }}
-          className="rounded-2xl border border-slate-200/70 bg-white shadow-sm overflow-hidden"
+           initial={{ opacity: 0, y: 12 }}
+           animate={{ opacity: 1, y: 0 }}
+           transition={{ delay: 0.3, duration: 0.4 }}
+           className="md:col-span-1 xl:col-span-1 bg-white rounded-xl border border-slate-200/70 overflow-hidden flex flex-col h-max shadow-sm"
         >
-          <div className="p-6 md:p-7 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center">
-                <Activity className="w-5 h-5 text-violet-600" />
-              </div>
-              <h3 className="text-lg font-bold text-slate-900">Performance</h3>
-            </div>
-            <button
-              type="button"
-              onClick={() => setActiveTab('earnings')}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 hover:bg-indigo-100 transition-colors"
-            >
-              Revenue Details
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
+          <div className="p-5 border-b border-slate-100 flex items-center justify-between gap-3 bg-slate-50/50">
+             <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-purple-100/50 flex items-center justify-center">
+                   <Activity className="w-5 h-5 text-purple-600" />
+                </div>
+                <h2 className="text-xl font-bold text-slate-900">Performance</h2>
+             </div>
+             <button
+               onClick={() => setActiveTab('earnings')}
+               className="text-xs font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg transition-colors"
+             >
+               View Stats
+             </button>
           </div>
-
-          <div className="p-5 md:p-6 space-y-6">
-            {/* Performance stats */}
-            <div className="grid sm:grid-cols-3 gap-4">
-              {[
-                { label: 'Sessions Completed', value: tutorCompletedPaidBookings.length, color: 'text-emerald-600', bg: 'bg-emerald-50/60', icon: ShieldCheck },
-                { label: 'Average Rating', value: tutorAverageRatingFromReviews.toFixed(1), color: 'text-indigo-600', bg: 'bg-indigo-50/60', icon: Star },
-                { label: 'Written Feedback', value: tutorPerformanceFeedback.length, color: 'text-slate-800', bg: 'bg-slate-50/60', icon: FileText },
-              ].map((stat) => {
-                const Icon = stat.icon;
-                return (
-                  <div key={stat.label} className={`rounded-2xl border border-slate-200/70 ${stat.bg} p-5 group hover:shadow-sm transition-shadow`}>
-                    <div className="flex items-center gap-2 mb-3">
-                      <Icon className={`w-4 h-4 ${stat.color}`} />
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">{stat.label}</p>
+          
+          <div className="p-5 bg-slate-50/30">
+            <div className="grid grid-cols-2 gap-4 mb-6">
+               {[
+                 { label: 'Total Sessions', value: totalSessions, icon: Layers, color: 'text-indigo-600', bg: 'bg-indigo-50/80' },
+                 { label: 'Completed', value: tutorCompletedPaidBookings.length, icon: ShieldCheck, color: 'text-emerald-600', bg: 'bg-emerald-50/80' },
+                 { label: 'Avg Rating', value: tutorAverageRatingFromReviews.toFixed(1), icon: Star, color: 'text-amber-500', bg: 'bg-amber-50/80' },
+                 { label: 'Feedback', value: tutorPerformanceFeedback.length, icon: FileText, color: 'text-purple-600', bg: 'bg-purple-50/80' },
+               ].map((stat) => (
+                 <div key={stat.label} className="bg-white rounded-xl border border-slate-200/70 p-4 shadow-sm flex flex-col items-center text-center justify-center hover:border-indigo-100 hover:shadow-md transition-all">
+                    <div className={`w-10 h-10 rounded-xl ${stat.bg} flex items-center justify-center mb-2.5`}>
+                       <stat.icon className={`w-5 h-5 ${stat.color}`} />
                     </div>
-                    <p className={`text-2xl font-extrabold ${stat.color}`}>{stat.value}</p>
-                  </div>
-                );
-              })}
+                    <span className="text-2xl font-black text-slate-900 leading-none mb-1">{stat.value}</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{stat.label}</span>
+                 </div>
+               ))}
             </div>
 
-            {/* Recent feedback */}
             <div className="space-y-3">
-              <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2">
-                <MessageSquareIcon className="w-3.5 h-3.5" />
-                Recent Feedback
-              </h4>
-              {tutorPerformanceFeedback.length === 0 ? (
-                <p className="text-sm font-medium text-slate-500 bg-slate-50 border border-slate-200/70 rounded-xl px-4 py-3">
-                  No written feedback yet.
-                </p>
-              ) : (
-                tutorPerformanceFeedback.map((review: any) => (
-                  <div key={review.id} className="rounded-xl border border-slate-200/60 bg-slate-50/50 p-4 hover:bg-slate-50 transition-colors">
-                    <div className="flex items-center justify-between gap-2 mb-1">
-                      <p className="text-sm font-bold text-slate-900">{review.studentName}</p>
-                      <span className="flex items-center gap-1 text-xs font-bold text-amber-600">
-                        <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                        {review.rating.toFixed(1)}
-                      </span>
-                    </div>
-                    <p className="text-sm text-slate-600 leading-relaxed">{review.comment}</p>
-                  </div>
-                ))
-              )}
+               <h4 className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Recent Feedback</h4>
+               {tutorPerformanceFeedback.length === 0 ? (
+                 <p className="text-sm font-medium text-slate-500 bg-white border border-slate-200/70 rounded-lg px-4 py-3">
+                   No feedback received yet.
+                 </p>
+               ) : (
+                 <div className="space-y-2.5 max-h-[300px] overflow-y-auto pr-1 custom-scrollbar">
+                   {tutorPerformanceFeedback.map((review: any) => (
+                     <div key={review.id} className="bg-white rounded-lg border border-slate-100 p-4 shadow-sm hover:border-slate-200 transition-colors">
+                        <div className="flex justify-between items-center mb-1.5">
+                           <span className="text-xs font-bold text-slate-900">{review.studentName}</span>
+                           <span className="flex items-center gap-1 text-[11px] font-bold text-amber-600">
+                             <Star className="w-3.5 h-3.5 fill-amber-400" /> {review.rating.toFixed(1)}
+                           </span>
+                        </div>
+                        <p className="text-xs text-slate-500 italic">"{review.comment}"</p>
+                     </div>
+                   ))}
+                 </div>
+               )}
             </div>
           </div>
         </motion.div>
-      </main>
+      </div>
     </div>
   );
 };
-
-/* Small helper icon — lucide doesn't export MessageSquare with proper name so alias */
-const MessageSquareIcon = ({ className }: { className?: string }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-  </svg>
-);

@@ -1,5 +1,32 @@
 export type UserRole = 'student' | 'tutor' | 'admin';
 
+export type NotificationType =
+  | 'booking_update'
+  | 'session_confirmed'
+  | 'session_cancelled'
+  | 'session_rescheduled'
+  | 'session_completed'
+  | 'payment_success'
+  | 'course_enrolled'
+  | 'course_completed'
+  | 'profile_update'
+  | 'meeting_link_available'
+  | 'meeting_link_updated'
+  | 'system';
+
+export interface AppNotification {
+  id: string;
+  userId: string;
+  type: NotificationType | string;
+  title: string;
+  message: string;
+  isRead: boolean;
+  createdAt: string;
+  link?: string;
+  targetTab?: string;
+  relatedEntityId?: string;
+}
+
 export interface User {
   id: string;
   firstName: string;

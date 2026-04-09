@@ -54,7 +54,6 @@ import { formatLkr } from './utils/currency';
 import { DEFAULT_AVATAR_PLACEHOLDER } from './utils/defaultAvatar';
 import {
   DEFAULT_COURSE_THUMBNAIL_PLACEHOLDER,
-  DEFAULT_HERO_IMAGE_PLACEHOLDER,
 } from './utils/defaultImages';
 
 import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz, TimeSlot, CourseEnrollment, CourseCoupon, WithdrawalRequest, WithdrawalSummary, AppNotification } from './types';
@@ -5172,7 +5171,7 @@ export default function App() {
                   <div className="absolute -inset-4 bg-gradient-to-tr from-indigo-500/20 to-violet-500/20 blur-3xl rounded-full" />
                   <div className="relative bg-white p-4 rounded-[2.5rem] shadow-2xl border border-slate-100 overflow-hidden">
                     <img
-                      src={DEFAULT_HERO_IMAGE_PLACEHOLDER}
+                      src="https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&q=80&w=1200&h=900"
                       alt="Learning"
                       className="rounded-[2rem] w-full object-cover aspect-[4/3]"
                       referrerPolicy="no-referrer"

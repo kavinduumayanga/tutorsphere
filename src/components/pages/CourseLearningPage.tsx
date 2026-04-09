@@ -678,7 +678,7 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
                                 <div className="flex-1 min-w-0">
                                   <p className="text-sm font-bold text-slate-900 truncate">{resource.name || `Resource ${idx + 1}`}</p>
                                   <p className="text-[11px] text-slate-500 truncate">
-                                    {resource.url.startsWith('/uploads/') ? 'Local file' : 'External resource'} - click to view in Resources
+                                    {resource.name ? 'Uploaded file' : 'External resource'} - click to view in Resources
                                   </p>
                                 </div>
                               </div>
@@ -791,7 +791,7 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
                             href={resource.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            download={resource.url.startsWith('/uploads/') ? resource.name : undefined}
+                            download={resource.name || undefined}
                             className="p-4 rounded-2xl bg-white border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50/40 transition-all duration-200 flex items-center justify-between group shadow-sm hover:shadow-md"
                           >
                             <div className="flex items-center gap-4">

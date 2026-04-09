@@ -83,6 +83,9 @@ export interface User {
   email: string;
   role: UserRole;
   avatar?: string;
+  avatarBlobName?: string;
+  avatarMimeType?: string;
+  avatarSize?: number;
   phone?: string;
 }
 
@@ -146,6 +149,9 @@ export interface Course {
   isFree: boolean;
   price: number;
   thumbnail: string;
+  thumbnailBlobName?: string;
+  thumbnailMimeType?: string;
+  thumbnailSize?: number;
   modules: CourseModule[];
   enrolledStudents: string[];
 }
@@ -166,12 +172,18 @@ export interface CourseCoupon {
 export interface CourseModuleResource {
   name: string;
   url: string;
+  blobName?: string;
+  mimeType?: string;
+  size?: number;
 }
 
 export interface CourseModule {
   id: string;
   title: string;
   videoUrl: string;
+  videoBlobName?: string;
+  videoMimeType?: string;
+  videoSize?: number;
   resources: CourseModuleResource[];
 }
 
@@ -231,6 +243,9 @@ export interface Resource {
   type: 'Paper' | 'Article' | 'Note';
   subject: string;
   url: string;
+  blobName?: string;
+  mimeType?: string;
+  size?: number;
   description?: string;
   isFree: boolean;
   downloadCount: number;

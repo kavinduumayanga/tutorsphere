@@ -70,17 +70,6 @@ const resolveResourceViewUrl = (rawUrl: string): string => {
     return '';
   }
 
-  if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed;
-  }
-
-  if (trimmed.startsWith('/uploads/')) {
-    if (window.location.port === '3000') {
-      return `${window.location.origin}${trimmed}`;
-    }
-    return `http://localhost:3000${trimmed}`;
-  }
-
   return trimmed;
 };
 

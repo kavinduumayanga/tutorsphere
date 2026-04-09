@@ -7,6 +7,9 @@ export interface IResource extends Document {
   type: 'Paper' | 'Article' | 'Note';
   subject: string;
   url: string;
+  blobName?: string;
+  mimeType?: string;
+  size?: number;
   description?: string;
   isFree: boolean;
   downloadCount: number;
@@ -19,6 +22,9 @@ const ResourceSchema: Schema = new Schema({
   type: { type: String, required: true, enum: ['Paper', 'Article', 'Note'] },
   subject: { type: String, required: true },
   url: { type: String, required: true },
+  blobName: { type: String },
+  mimeType: { type: String },
+  size: { type: Number },
   description: { type: String },
   isFree: { type: Boolean, required: true, default: true },
   downloadCount: { type: Number, required: true, default: 0, min: 0 }

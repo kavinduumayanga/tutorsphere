@@ -44,12 +44,18 @@ type EditableCourseModuleResource = {
   id: string;
   name: string;
   url: string;
+  blobName?: string;
+  mimeType?: string;
+  size?: number;
 };
 
 type EditableCourseModule = {
   id?: string;
   title: string;
   videoUrl: string;
+  videoBlobName?: string;
+  videoMimeType?: string;
+  videoSize?: number;
   resources: EditableCourseModuleResource[];
   resourceNameInput: string;
   resourceUrlInput: string;
@@ -62,6 +68,9 @@ type CourseFormData = {
   isFree: boolean;
   price: number;
   thumbnail: string;
+  thumbnailBlobName: string | undefined;
+  thumbnailMimeType: string | undefined;
+  thumbnailSize: number | undefined;
   modules: EditableCourseModule[];
 };
 
@@ -417,8 +426,16 @@ const CourseEditorPanel: React.FC<{
                       <input
                         type="text"
                         value={courseForm.thumbnail}
-                        onChange={(e) => setCourseForm((prev) => ({ ...prev, thumbnail: e.target.value }))}
-                        placeholder="https://example.com/thumbnail.jpg or /uploads/thumbnail-file.jpg"
+                        onChange={(e) =>
+                          setCourseForm((prev) => ({
+                            ...prev,
+                            thumbnail: e.target.value,
+                            thumbnailBlobName: undefined,
+                            thumbnailMimeType: undefined,
+                            thumbnailSize: undefined,
+                          }))
+                        }
+                        placeholder="https://example.com/thumbnail.jpg"
                         className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm"
                       />
                     </div>
@@ -588,7 +605,7 @@ const CourseEditorPanel: React.FC<{
                                 type="text"
                                 value={module.videoUrl}
                                 onChange={(e) => onUpdateModule(moduleIndex, 'videoUrl', e.target.value)}
-                                placeholder="YouTube/Vimeo URL or /uploads/video-file.mp4"
+                                placeholder="YouTube/Vimeo URL or uploaded video URL"
                                 className="w-full px-3 py-2.5 rounded-lg border border-slate-200 bg-white outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm"
                               />
                               <label className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-600 cursor-pointer hover:border-indigo-300 hover:bg-indigo-50/30 transition-all">

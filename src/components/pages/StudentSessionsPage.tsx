@@ -94,6 +94,21 @@ const getMeetingLinkMeta = (booking: any, paymentStatus: string, hasValidMeeting
   };
 };
 
+const formatStatusLabel = (status: string) =>
+  status
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+
+const getPaymentBadgeClassName = (paymentStatus: string, fallbackClassName: string) => {
+  if (paymentStatus === 'paid') {
+    return 'bg-gradient-to-r from-amber-50 to-yellow-100 text-amber-800 border-amber-200';
+  }
+
+  return fallbackClassName;
+};
+
 type InfoTileProps = {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
@@ -205,6 +220,8 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
           {filteredStudentBookings.map((booking, idx) => {
             const isLoading = activeBookingActionId === booking.id;
             const paymentStatus = getBookingPaymentStatus(booking);
+            const paymentStatusLabel = formatStatusLabel(paymentStatus);
+            const paymentBadgeClassName = getPaymentBadgeClassName(paymentStatus, getBookingPaymentPillClassName(paymentStatus));
             const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed' && canStudentManageBeforeStart(booking);
             const hasValidMeetingLink = isValidMeetingLink(booking.meetingLink);
             const canJoinMeeting = hasValidMeetingLink && booking.status === 'confirmed';
@@ -235,8 +252,8 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
                 <div className="grid gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(270px,1fr)] lg:items-stretch">
                   <div className="min-w-0">
                     <div className="mb-3 flex flex-wrap items-center gap-2 pr-12">
-                      <span className={`text-[10px] uppercase tracking-widest font-bold px-2.5 py-1 rounded-full border ${getBookingPaymentPillClassName(paymentStatus)}`}>
-                       {paymentStatus}
+                      <span className={`text-[10px] uppercase tracking-widest font-bold px-2.5 py-1 rounded-full border ${paymentBadgeClassName}`}>
+                       {paymentStatusLabel}
                       </span>
                       <span className={`text-[10px] uppercase tracking-widest font-bold px-2.5 py-1 rounded-full border ${getBookingStatusPillClassName(booking.status)}`}>
                        {booking.status}
@@ -253,7 +270,12 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
                       <InfoTile icon={Calendar} label="Date" value={booking.date || 'Not set'} />
                       <InfoTile icon={Clock} label="Time Slot" value={booking.timeSlot || 'Any Time'} />
                       <InfoTile icon={User} label="Tutor" value={getBookingTutorName(booking)} valueClassName="text-emerald-700" />
-                      <InfoTile icon={Star} label="Payment" value={paymentStatus} />
+                      <InfoTile
+                        icon={Star}
+                        label="Payment"
+                        value={paymentStatusLabel}
+                        valueClassName={paymentStatus === 'paid' ? 'text-amber-700' : 'text-slate-800'}
+                      />
                       <InfoTile icon={Calendar} label="Session Status" value={booking.status} />
                       <InfoTile icon={LinkIcon} label="Meeting Link" value={meetingLinkMeta.label} valueClassName={meetingLinkMeta.valueClassName} />
                     </div>

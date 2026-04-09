@@ -7,7 +7,7 @@ export const localService = {
   async generateSpeech(text: string) {
     // Mock speech generation - in a real local implementation,
     // you could integrate with local TTS libraries like Web Speech API
-    console.log("Speech requested:", text);
+    void text;
     return null; // Return null to disable speech feature
   },
 

@@ -9,6 +9,7 @@ import {
 import { apiService } from '../../services/apiService';
 import { Tutor, Course, Review } from '../../types';
 import { formatLkr } from '../../utils/currency';
+import { SUBTLE_NOISE_TEXTURE_PLACEHOLDER } from '../../utils/defaultImages';
 
 interface TutorProfilePageProps {
   tutorId: string;
@@ -177,7 +178,10 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
             <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200/60 overflow-hidden relative group">
               {/* Cover Gradient */}
               <div className="h-40 bg-gradient-to-r from-violet-600 via-indigo-600 to-blue-600 relative overflow-hidden">
-                <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 mixed-blend-overlay"></div>
+                <div
+                  className="absolute inset-0 opacity-20 mix-blend-overlay"
+                  style={{ backgroundImage: `url(${SUBTLE_NOISE_TEXTURE_PLACEHOLDER})` }}
+                />
                 <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-black/20 to-transparent"></div>
               </div>
               

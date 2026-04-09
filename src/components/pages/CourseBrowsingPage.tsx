@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { Course, CourseEnrollment, Tutor } from '../../types';
 import { formatLkr } from '../../utils/currency';
+import { DEFAULT_AVATAR_PLACEHOLDER } from '../../utils/defaultAvatar';
 
 type CourseCheckoutSubmission = {
   paymentReference?: string;
@@ -334,7 +335,7 @@ const QuickPreviewModal: React.FC<QuickPreviewProps> = ({
           {tutor && (
             <div className="flex items-center gap-3 p-4 bg-slate-50 rounded-xl border border-slate-100">
               <img
-                src={tutor.avatar || 'https://via.placeholder.com/40'}
+                src={tutor.avatar || DEFAULT_AVATAR_PLACEHOLDER}
                 alt=""
                 className="w-10 h-10 rounded-full object-cover border-2 border-white shadow-sm"
                 referrerPolicy="no-referrer"

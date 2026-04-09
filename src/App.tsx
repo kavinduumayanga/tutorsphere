@@ -51,6 +51,11 @@ import CountUp from 'react-countup';
 import { localService } from './services/localService';
 import { apiService } from './services/apiService';
 import { formatLkr } from './utils/currency';
+import { DEFAULT_AVATAR_PLACEHOLDER } from './utils/defaultAvatar';
+import {
+  DEFAULT_COURSE_THUMBNAIL_PLACEHOLDER,
+  DEFAULT_HERO_IMAGE_PLACEHOLDER,
+} from './utils/defaultImages';
 
 import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz, TimeSlot, CourseEnrollment, CourseCoupon, WithdrawalRequest, WithdrawalSummary, AppNotification } from './types';
 import { TutorProfilePage } from './components/pages/TutorProfilePage';
@@ -970,6 +975,30 @@ export default function App() {
   useEffect(() => {
     setIsNotificationPanelOpen(false);
   }, [activeTab]);
+
+  useEffect(() => {
+    const handleApiUnauthorized = () => {
+      clearStoredSessions();
+      setCurrentUser(null);
+      setNotifications([]);
+      setUnreadNotificationCount(0);
+      setNotificationsError(null);
+      setIsNotificationPanelOpen(false);
+      setActiveLearningCourseId(null);
+      setIsUserMenuOpen(false);
+      setSessionPersistence('session');
+      setRememberMe(false);
+      setAuthMode('login');
+      setShowAuthModal(true);
+      setActiveTab('home', { replace: true });
+    };
+
+    window.addEventListener('tutorsphere:api-unauthorized', handleApiUnauthorized);
+
+    return () => {
+      window.removeEventListener('tutorsphere:api-unauthorized', handleApiUnauthorized);
+    };
+  }, [setActiveTab]);
 
   useEffect(() => {
     if (!bookingCancelNotice) {
@@ -2436,7 +2465,7 @@ export default function App() {
       price: courseForm.isFree ? 0 : normalizedPrice,
       thumbnail:
         courseForm.thumbnail.trim() ||
-        `https://picsum.photos/seed/${encodeURIComponent(courseForm.title.trim())}/900/560`,
+        DEFAULT_COURSE_THUMBNAIL_PLACEHOLDER,
       thumbnailBlobName: courseForm.thumbnailBlobName,
       thumbnailMimeType: courseForm.thumbnailMimeType,
       thumbnailSize: courseForm.thumbnailSize,
@@ -2807,7 +2836,13 @@ export default function App() {
     }
   };
 
-  const handleSignOut = () => {
+  const handleSignOut = async () => {
+    try {
+      await apiService.logout();
+    } catch (error) {
+      console.error('Failed to sign out from server session:', error);
+    }
+
     clearStoredSessions();
     setCurrentUser(null);
     setNotifications([]);
@@ -4760,7 +4795,7 @@ export default function App() {
                                 <h4 className="text-xs font-black uppercase tracking-widest text-slate-600 mb-4">About Your Instructor</h4>
                                 <div className="flex items-start gap-4">
                                   <img
-                                    src={courseTutor.avatar || 'https://via.placeholder.com/150'}
+                                    src={courseTutor.avatar || DEFAULT_AVATAR_PLACEHOLDER}
                                     alt={getTutorDisplayName(courseTutor)}
                                     className="w-16 h-16 rounded-full object-cover border-2 border-white shadow-md flex-shrink-0"
                                   />
@@ -5071,6 +5106,10 @@ export default function App() {
                   setActiveTab('tutorProfile');
                 }
               }}
+              onBackToDashboard={() => {
+                setBookingTutorId(null);
+                setActiveTab('dashboard');
+              }}
               onConfirmBooking={async (bookingIntent) => {
                 const tutor = tutors.find(t => t.id === bookingTutorId);
                 if (!tutor) {
@@ -5133,7 +5172,7 @@ export default function App() {
                   <div className="absolute -inset-4 bg-gradient-to-tr from-indigo-500/20 to-violet-500/20 blur-3xl rounded-full" />
                   <div className="relative bg-white p-4 rounded-[2.5rem] shadow-2xl border border-slate-100 overflow-hidden">
                     <img
-                      src="https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&q=80&w=1200&h=900"
+                      src={DEFAULT_HERO_IMAGE_PLACEHOLDER}
                       alt="Learning"
                       className="rounded-[2rem] w-full object-cover aspect-[4/3]"
                       referrerPolicy="no-referrer"

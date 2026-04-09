@@ -40,6 +40,7 @@ type BookingCheckoutResponse = {
 interface TutorBookingPageProps {
   tutor: any;
   onBack: () => void;
+  onBackToDashboard: () => void;
   onConfirmBooking: (payload: BookingCheckoutPayload) => Promise<BookingCheckoutResponse>;
 }
 
@@ -266,7 +267,7 @@ const createPaymentReference = (): string => {
   return `PAY-${stamp}-${nonce}`;
 };
 
-export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBookingPageProps) {
+export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBooking }: TutorBookingPageProps) {
   const [selectedDate, setSelectedDate] = useState<Date>(() => BOOKING_MIN_DATE);
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => startOfMonth(BOOKING_MIN_DATE));
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
@@ -577,7 +578,7 @@ export function TutorBookingPage({ tutor, onBack, onConfirmBooking }: TutorBooki
               <div className="flex flex-col gap-3">
                 {isSuccess ? (
                   <button
-                    onClick={onBack}
+                    onClick={onBackToDashboard}
                     className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200 flex items-center justify-center gap-2"
                   >
                     <CalendarCheck className="w-5 h-5" />

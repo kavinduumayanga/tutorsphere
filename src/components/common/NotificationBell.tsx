@@ -236,10 +236,17 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({
               {previewNotifications.map((notification) => {
                 const { Icon, iconClassName, iconBgClassName } = getNotificationVisual(notification.type);
                 return (
-                  <button
+                  <div
                     key={notification.id}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => onNotificationClick(notification)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        onNotificationClick(notification);
+                      }
+                    }}
                     className={`w-full text-left rounded-xl border p-3 transition-all ${notification.isRead
                       ? 'border-slate-100 bg-white hover:bg-slate-50'
                       : 'border-indigo-100 bg-indigo-50/40 hover:bg-indigo-50'
@@ -281,7 +288,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({
                         </div>
                       </div>
                     </div>
-                  </button>
+                  </div>
                 );
               })}
             </div>

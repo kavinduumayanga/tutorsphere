@@ -222,11 +222,18 @@ export const NotificationsPage: React.FC<NotificationsPageProps> = ({
             {filteredNotifications.map((notification) => {
               const { Icon, iconClassName, iconBgClassName } = getNotificationVisual(notification.type);
               return (
-                <motion.button
+                <motion.div
                   key={notification.id}
                   layout
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => onNotificationClick(notification)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      onNotificationClick(notification);
+                    }
+                  }}
                   className={`w-full text-left rounded-2xl border p-4 md:p-5 transition-all ${notification.isRead
                     ? 'bg-white border-slate-200 hover:bg-slate-50'
                     : 'bg-indigo-50/40 border-indigo-100 hover:bg-indigo-50'
@@ -264,7 +271,7 @@ export const NotificationsPage: React.FC<NotificationsPageProps> = ({
                       </div>
                     </div>
                   </div>
-                </motion.button>
+                </motion.div>
               );
             })}
           </div>

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle, Calendar, MessageCircle, Star, GraduationCap, ArrowRight, User } from 'lucide-react';
 import { User as UserType, Tutor } from '../../types';
+import { DEFAULT_HERO_IMAGE_PLACEHOLDER } from '../../utils/defaultImages';
 
 type Tab =
   | 'home'
@@ -127,7 +128,7 @@ export const HomePage: React.FC<HomePageProps> = ({ setActiveTab, currentUser, t
           <div className="absolute -inset-4 bg-gradient-to-tr from-indigo-500/20 to-violet-500/20 blur-3xl rounded-full" />
           <div className="relative bg-white p-4 rounded-[2.5rem] shadow-2xl border border-slate-100 overflow-hidden">
             <img
-              src="https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&q=80&w=1200&h=900"
+              src={DEFAULT_HERO_IMAGE_PLACEHOLDER}
               alt="Learning"
               className="rounded-[2rem] w-full object-cover aspect-[4/3]"
               referrerPolicy="no-referrer"

@@ -1,5 +1,81 @@
 export type UserRole = 'student' | 'tutor' | 'admin';
 
+export type NotificationType =
+  | 'booking_update'
+  | 'session_confirmed'
+  | 'session_cancelled'
+  | 'session_rescheduled'
+  | 'session_completed'
+  | 'payment_success'
+  | 'course_enrolled'
+  | 'course_completed'
+  | 'profile_update'
+  | 'meeting_link_available'
+  | 'meeting_link_updated'
+  | 'system';
+
+export interface AppNotification {
+  id: string;
+  userId: string;
+  type: NotificationType | string;
+  title: string;
+  message: string;
+  isRead: boolean;
+  createdAt: string;
+  link?: string;
+  targetTab?: string;
+  relatedEntityId?: string;
+}
+
+export interface MessagingUserSummary {
+  id: string;
+  firstName: string;
+  lastName: string;
+  role: UserRole;
+  avatar?: string;
+  isOnline?: boolean;
+  lastSeenAt?: string | null;
+}
+
+export interface MessageConversation {
+  id: string;
+  studentId: string;
+  tutorId: string;
+  otherParticipant: MessagingUserSummary;
+  lastMessagePreview: string;
+  lastMessageAt?: string | null;
+  lastMessageSenderId?: string;
+  unreadCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DirectMessage {
+  id: string;
+  conversationId: string;
+  senderId: string;
+  recipientId: string;
+  content: string;
+  isRead: boolean;
+  isDeleted?: boolean;
+  deletedAt?: string | null;
+  deletedBy?: string;
+  readAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MessageConversationsResponse {
+  conversations: MessageConversation[];
+  totalUnreadCount: number;
+}
+
+export interface ConversationMessagesResponse {
+  conversation: MessageConversation;
+  messages: DirectMessage[];
+  hasMore: boolean;
+}
+
 export interface User {
   id: string;
   firstName: string;
@@ -48,6 +124,8 @@ export interface Booking {
   paidAt?: string;
   hiddenForTutor?: boolean;
   hiddenForStudent?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface Question {

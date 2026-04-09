@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactCrop, { Crop, PixelCrop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
@@ -52,7 +52,7 @@ import { localService } from './services/localService';
 import { apiService } from './services/apiService';
 import { formatLkr } from './utils/currency';
 
-import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz, TimeSlot, CourseEnrollment, CourseCoupon, WithdrawalRequest, WithdrawalSummary } from './types';
+import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz, TimeSlot, CourseEnrollment, CourseCoupon, WithdrawalRequest, WithdrawalSummary, AppNotification } from './types';
 import { TutorProfilePage } from './components/pages/TutorProfilePage';
 import { GetStartedSection } from "./components/pages/GetStartedSection";
 import { TutorBookingPage } from './components/pages/TutorBookingPage';
@@ -71,11 +71,17 @@ import { FindTutorsPage } from './components/pages/FindTutorsPage';
 import { CertificateModal } from './components/common/CertificateModal';
 import { ForgotPasswordPage } from './components/pages/ForgotPasswordPage';
 import { TutorDashboardPage } from './components/pages/TutorDashboardPage';
+import { StudentDashboardPage } from './components/pages/StudentDashboardPage';
 import { TutorEarningsPage } from './components/pages/TutorEarningsPage';
+import { TutorSessionsPage } from './components/pages/TutorSessionsPage';
+import { StudentSessionsPage } from './components/pages/StudentSessionsPage';
+import { NotificationBell } from './components/common/NotificationBell';
+import { NotificationsPage } from './components/pages/NotificationsPage';
+import { MessagesPage } from './components/pages/MessagesPage';
 
 const STEM_SUBJECTS: string[] = [...ALLOWED_TUTOR_SUBJECTS];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'earnings' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'about';
+type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'tutorSessions' | 'studentSessions' | 'messages' | 'earnings' | 'settings' | 'notifications' | 'tutorProfile' | 'tutorBooking' | 'about';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
@@ -92,8 +98,12 @@ const NAV_LABELS: Record<Tab, string> = {
   forgotPassword: 'Forgot Password',
   register: 'Profile',
   dashboard: 'Dashboard',
+  tutorSessions: 'Tutor Sessions',
+  studentSessions: 'My Sessions',
+  messages: 'Messages',
   earnings: 'Earnings',
   settings: 'Settings',
+  notifications: 'Notifications',
   tutorProfile: 'Tutor Profile',
   tutorBooking: 'Book Session',
   about: 'About Us'
@@ -118,17 +128,226 @@ const getAllowedTabs = (user: AppUser | null): Tab[] => {
   }
 
   if (user.role === 'student') {
-    return ['home', 'tutors', 'questions', 'courses', 'resources', 'quizzes', 'dashboard', 'settings', 'about'];
+    return ['home', 'tutors', 'questions', 'courses', 'resources', 'quizzes', 'dashboard', 'studentSessions', 'messages', 'settings', 'notifications', 'about'];
   }
 
   if (user.role === 'tutor') {
-    return ['home', 'dashboard', 'earnings', 'manageAvailability', 'register', 'courses', 'resources', 'quizzes', 'settings', 'about'];
+    return ['home', 'dashboard', 'tutorSessions', 'messages', 'earnings', 'manageAvailability', 'register', 'courses', 'resources', 'quizzes', 'settings', 'notifications', 'about'];
   }
 
   return ['home', 'about'];
 };
 
 const canAccessTab = (tab: Tab, user: AppUser | null) => getAllowedTabs(user).includes(tab);
+
+type RouteTarget = {
+  tab: Tab;
+  tutorId?: string;
+  bookingTutorId?: string;
+  courseId?: string;
+};
+
+type HistoryMode = 'push' | 'replace';
+type TabNavigationOptions = {
+  replace?: boolean;
+};
+
+const normalizePathname = (pathname: string): string => {
+  const trimmed = pathname.trim();
+  if (!trimmed || trimmed === '/') {
+    return '/';
+  }
+
+  const normalized = trimmed.replace(/\/+$/, '');
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
+};
+
+const decodePathParam = (value: string): string => {
+  try {
+    return decodeURIComponent(value).trim();
+  } catch {
+    return value.trim();
+  }
+};
+
+const encodePathParam = (value: string): string => encodeURIComponent(value.trim());
+
+const resolveProfileTabForUser = (user: AppUser | null): Tab => {
+  if (!user) {
+    return 'home';
+  }
+
+  return user.role === 'tutor' ? 'register' : 'settings';
+};
+
+const parseRouteFromLocation = (
+  pathname: string,
+  search: string,
+  user: AppUser | null
+): RouteTarget => {
+  const normalizedPath = normalizePathname(pathname);
+  const staticPath = normalizedPath.toLowerCase();
+
+  const tutorBookingMatch = normalizedPath.match(/^\/tutors\/([^/]+)\/book$/i);
+  if (tutorBookingMatch) {
+    const tutorId = decodePathParam(tutorBookingMatch[1]);
+    return { tab: 'tutorBooking', bookingTutorId: tutorId, tutorId };
+  }
+
+  const tutorProfileMatch = normalizedPath.match(/^\/tutors\/([^/]+)$/i);
+  if (tutorProfileMatch) {
+    return { tab: 'tutorProfile', tutorId: decodePathParam(tutorProfileMatch[1]) };
+  }
+
+  const courseLearningMatch = normalizedPath.match(/^\/courses\/learn\/([^/]+)$/i);
+  if (courseLearningMatch) {
+    return { tab: 'courseLearning', courseId: decodePathParam(courseLearningMatch[1]) };
+  }
+
+  if (staticPath === '/profile') {
+    return { tab: resolveProfileTabForUser(user) };
+  }
+
+  const staticRouteMap: Record<string, Tab> = {
+    '/': 'home',
+    '/home': 'home',
+    '/tutors': 'tutors',
+    '/questions': 'questions',
+    '/qa': 'questions',
+    '/availability': 'manageAvailability',
+    '/manage-availability': 'manageAvailability',
+    '/courses': 'courses',
+    '/resources': 'resources',
+    '/aiassistant': 'quizzes',
+    '/assistant': 'quizzes',
+    '/quizzes': 'quizzes',
+    '/register': 'registerSelect',
+    '/register/student': 'registerStudent',
+    '/register/tutor': 'registerTutor',
+    '/forgot-password': 'forgotPassword',
+    '/dashboard': 'dashboard',
+    '/sessions/tutor': 'tutorSessions',
+    '/sessions/student': 'studentSessions',
+    '/tutorsessions': 'tutorSessions',
+    '/studentsessions': 'studentSessions',
+    '/messages': 'messages',
+    '/earnings': 'earnings',
+    '/settings': 'settings',
+    '/notifications': 'notifications',
+    '/about': 'about',
+  };
+
+  const mappedTab = staticRouteMap[staticPath];
+  if (mappedTab) {
+    return { tab: mappedTab };
+  }
+
+  if (search) {
+    // Keep this parse to tolerate legacy links with query-only navigation hints.
+    const params = new URLSearchParams(search);
+    const routeHint = params.get('tab');
+    if (routeHint) {
+      const candidate = routeHint.trim() as Tab;
+      if (candidate in NAV_LABELS) {
+        return { tab: candidate };
+      }
+    }
+  }
+
+  return { tab: 'home' };
+};
+
+const normalizeRouteTarget = (route: RouteTarget, user: AppUser | null): RouteTarget => {
+  let nextTab = route.tab;
+
+  if (nextTab === 'register') {
+    if (!user) {
+      nextTab = 'home';
+    } else if (user.role !== 'tutor') {
+      nextTab = 'settings';
+    }
+  }
+
+  if (nextTab === 'courseLearning') {
+    if (!route.courseId) {
+      nextTab = 'courses';
+    } else if (!user || user.role !== 'student') {
+      nextTab = user ? 'dashboard' : 'home';
+    }
+  }
+
+  if (nextTab === 'tutorProfile' && !route.tutorId) {
+    nextTab = 'tutors';
+  }
+
+  if (nextTab === 'tutorBooking' && !route.bookingTutorId) {
+    nextTab = 'tutors';
+  }
+
+  if (!isInternalTab(nextTab) && !canAccessTab(nextTab, user)) {
+    nextTab = user ? 'dashboard' : 'home';
+  }
+
+  return {
+    tab: nextTab,
+    tutorId: nextTab === 'tutorProfile' ? route.tutorId : undefined,
+    bookingTutorId: nextTab === 'tutorBooking' ? route.bookingTutorId : undefined,
+    courseId: nextTab === 'courseLearning' ? route.courseId : undefined,
+  };
+};
+
+const routeTargetToPath = (route: RouteTarget): string => {
+  switch (route.tab) {
+    case 'home':
+      return '/home';
+    case 'tutors':
+      return '/tutors';
+    case 'questions':
+      return '/questions';
+    case 'manageAvailability':
+      return '/availability';
+    case 'courses':
+      return '/courses';
+    case 'courseLearning':
+      return route.courseId ? `/courses/learn/${encodePathParam(route.courseId)}` : '/courses';
+    case 'resources':
+      return '/resources';
+    case 'quizzes':
+      return '/aiassistant';
+    case 'registerSelect':
+      return '/register';
+    case 'registerStudent':
+      return '/register/student';
+    case 'registerTutor':
+      return '/register/tutor';
+    case 'forgotPassword':
+      return '/forgot-password';
+    case 'register':
+      return '/profile';
+    case 'dashboard':
+      return '/dashboard';
+    case 'tutorSessions':
+      return '/sessions/tutor';
+    case 'studentSessions':
+      return '/sessions/student';
+    case 'messages':
+      return '/messages';
+    case 'earnings':
+      return '/earnings';
+    case 'settings':
+      return '/settings';
+    case 'notifications':
+      return '/notifications';
+    case 'tutorProfile':
+      return route.tutorId ? `/tutors/${encodePathParam(route.tutorId)}` : '/tutors';
+    case 'tutorBooking':
+      return route.bookingTutorId ? `/tutors/${encodePathParam(route.bookingTutorId)}/book` : '/tutors';
+    case 'about':
+      return '/about';
+    default:
+      return '/home';
+  }
+};
 
 const getTutorDisplayName = (tutor: Tutor & { name?: string }) => {
   const firstName = tutor.firstName?.trim();
@@ -247,6 +466,7 @@ type ResourceUploadStatus = 'idle' | 'uploading' | 'uploaded' | 'error';
 type SessionPersistenceMode = 'session' | 'remember';
 type BookingStatusFilter = 'all' | 'pending' | 'confirmed' | 'completed' | 'cancelled';
 type SessionTimelineFilter = 'all' | 'upcoming' | 'past';
+type NotificationFilter = 'all' | 'unread' | 'read';
 
 type SessionRatingDraft = {
   rating: number;
@@ -408,11 +628,21 @@ const normalizeSriLankanPhone = (value: string): string | null => {
 
 export default function App() {
   const [selectedTutor, setSelectedTutor] = useState<Tutor | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>('home');
+  const [activeTab, setActiveTabState] = useState<Tab>('home');
   const [viewingTutorId, setViewingTutorId] = useState<string | null>(null);
   const [bookingTutorId, setBookingTutorId] = useState<string | null>(null);
+  const [pendingMessageParticipantId, setPendingMessageParticipantId] = useState<string | null>(null);
+  const [activeLearningCourseId, setActiveLearningCourseId] = useState<string | null>(null);
+  const [activeVideoModuleId, setActiveVideoModuleId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
+  const [isLoadingNotifications, setIsLoadingNotifications] = useState(false);
+  const [notificationsError, setNotificationsError] = useState<string | null>(null);
+  const [notificationFilter, setNotificationFilter] = useState<NotificationFilter>('all');
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [authData, setAuthData] = useState({ email: '', password: '', firstName: '', lastName: '', confirmPassword: '', role: 'student' as 'student' | 'tutor' });
@@ -481,21 +711,130 @@ export default function App() {
   const [crop, setCrop] = useState<Crop>({ unit: '%', width: 50, height: 50, x: 25, y: 25 });
   const [completedCrop, setCompletedCrop] = useState<PixelCrop | null>(null);
   const cropImageRef = useRef<HTMLImageElement | null>(null);
+  const activeNotificationUserIdRef = useRef<string | null>(null);
+  const hasInitializedRoutingRef = useRef(false);
+  const pendingHistoryModeRef = useRef<HistoryMode>('replace');
+
+  const setActiveTab = useCallback((tab: Tab, options?: TabNavigationOptions) => {
+    pendingHistoryModeRef.current = options?.replace ? 'replace' : 'push';
+    setActiveTabState(tab);
+  }, []);
 
   const [certificateModalData, setCertificateModalData] = useState<{ enrollment: CourseEnrollment, courseTitle: string } | null>(null);
 
-  // Load user and activeTab from persisted storage on app start
+  // Load user and initial route state from URL/session.
   useEffect(() => {
     const storedSession = loadStoredSession();
+    const restoredUser = storedSession?.session.user || null;
+
+    if (restoredUser) {
+      setCurrentUser(restoredUser);
+    }
+
+    const pathname = normalizePathname(window.location.pathname);
+    const shouldRestoreSessionTab = pathname === '/' && Boolean(storedSession);
+
+    const sessionFallbackRoute: RouteTarget = {
+      tab: storedSession
+        ? isInternalTab(storedSession.session.activeTab)
+          ? restoredUser
+            ? 'dashboard'
+            : 'home'
+          : storedSession.session.activeTab
+        : 'home',
+    };
+
+    const initialRoute = normalizeRouteTarget(
+      shouldRestoreSessionTab
+        ? sessionFallbackRoute
+        : parseRouteFromLocation(pathname, window.location.search, restoredUser),
+      restoredUser
+    );
+
+    setViewingTutorId(initialRoute.tutorId || null);
+    setBookingTutorId(initialRoute.bookingTutorId || null);
+    setActiveLearningCourseId(initialRoute.courseId || null);
+    setActiveVideoModuleId(null);
+    setActiveTabState(initialRoute.tab);
+
     if (storedSession) {
-      setCurrentUser(storedSession.session.user);
-      const restoredTab: Tab = storedSession.session.activeTab || 'home';
-      setActiveTab(isInternalTab(restoredTab) ? 'home' : restoredTab);
       setSessionPersistence(storedSession.persistence);
     }
 
+    hasInitializedRoutingRef.current = true;
+    pendingHistoryModeRef.current = 'replace';
     setHasLoadedSession(true);
   }, []);
+
+  useEffect(() => {
+    if (!hasInitializedRoutingRef.current) {
+      return;
+    }
+
+    const handlePopState = () => {
+      const routeFromUrl = normalizeRouteTarget(
+        parseRouteFromLocation(window.location.pathname, window.location.search, currentUser),
+        currentUser
+      );
+
+      pendingHistoryModeRef.current = 'replace';
+      setViewingTutorId(routeFromUrl.tutorId || null);
+      setBookingTutorId(routeFromUrl.bookingTutorId || null);
+      setActiveLearningCourseId(routeFromUrl.courseId || null);
+      setActiveVideoModuleId(null);
+      setActiveTabState(routeFromUrl.tab);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!hasInitializedRoutingRef.current) {
+      return;
+    }
+
+    const normalizedRoute = normalizeRouteTarget(
+      {
+        tab: activeTab,
+        tutorId: viewingTutorId || undefined,
+        bookingTutorId: bookingTutorId || undefined,
+        courseId: activeLearningCourseId || undefined,
+      },
+      currentUser
+    );
+
+    const needsStateCorrection =
+      normalizedRoute.tab !== activeTab ||
+      (normalizedRoute.tutorId || null) !== viewingTutorId ||
+      (normalizedRoute.bookingTutorId || null) !== bookingTutorId ||
+      (normalizedRoute.courseId || null) !== activeLearningCourseId;
+
+    if (needsStateCorrection) {
+      pendingHistoryModeRef.current = 'replace';
+      setViewingTutorId(normalizedRoute.tutorId || null);
+      setBookingTutorId(normalizedRoute.bookingTutorId || null);
+      setActiveLearningCourseId(normalizedRoute.courseId || null);
+      setActiveVideoModuleId(null);
+      setActiveTabState(normalizedRoute.tab);
+      return;
+    }
+
+    const nextPath = routeTargetToPath(normalizedRoute);
+    const currentPath = `${normalizePathname(window.location.pathname)}${window.location.search}`;
+
+    if (currentPath !== nextPath) {
+      if (pendingHistoryModeRef.current === 'replace') {
+        window.history.replaceState(null, '', nextPath);
+      } else {
+        window.history.pushState(null, '', nextPath);
+      }
+    }
+
+    pendingHistoryModeRef.current = 'push';
+  }, [activeTab, viewingTutorId, bookingTutorId, activeLearningCourseId, currentUser]);
 
   // Persist session when user, tab, or persistence mode changes
   useEffect(() => {
@@ -520,12 +859,12 @@ export default function App() {
 
   useEffect(() => {
     if (activeTab === 'tutorProfile' && !viewingTutorId) {
-      setActiveTab('tutors');
+      setActiveTab('tutors', { replace: true });
       return;
     }
 
     if (activeTab === 'tutorBooking' && !bookingTutorId) {
-      setActiveTab('tutors');
+      setActiveTab('tutors', { replace: true });
       return;
     }
 
@@ -538,7 +877,7 @@ export default function App() {
     if (canAccessTab(activeTab, currentUser)) {
       return;
     }
-    setActiveTab(currentUser ? 'dashboard' : 'home');
+    setActiveTab(currentUser ? 'dashboard' : 'home', { replace: true });
   }, [activeTab, currentUser, viewingTutorId, bookingTutorId]);
 
   useEffect(() => {
@@ -546,6 +885,76 @@ export default function App() {
       setShowAuthModal(false);
       setAuthMode('login');
     }
+  }, [activeTab]);
+
+  useEffect(() => {
+    activeNotificationUserIdRef.current = currentUser?.id || null;
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (!currentUser?.id) {
+      setNotifications([]);
+      setUnreadNotificationCount(0);
+      setNotificationsError(null);
+      setIsLoadingNotifications(false);
+      setNotificationFilter('all');
+      setIsNotificationPanelOpen(false);
+      return;
+    }
+
+    const userId = currentUser.id;
+    activeNotificationUserIdRef.current = userId;
+
+    void loadNotifications(userId);
+
+    const pollIntervalId = window.setInterval(() => {
+      void loadNotifications(userId, true);
+    }, 25000);
+
+    return () => {
+      window.clearInterval(pollIntervalId);
+    };
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (!currentUser?.id) {
+      setUnreadMessageCount(0);
+      setPendingMessageParticipantId(null);
+      return;
+    }
+
+    let isCancelled = false;
+
+    const loadUnreadMessageCount = async (silent = false) => {
+      try {
+        const response = await apiService.getMessageUnreadCount(currentUser.id);
+        if (isCancelled) {
+          return;
+        }
+
+        const nextUnreadCount = Math.max(0, Number(response.totalUnreadCount || 0));
+        setUnreadMessageCount(nextUnreadCount);
+      } catch (error) {
+        if (!silent) {
+          console.error('Failed to load unread message count:', error);
+        }
+      }
+    };
+
+    void loadUnreadMessageCount();
+
+    const pollIntervalId = window.setInterval(() => {
+      void loadUnreadMessageCount(true);
+    }, 22000);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(pollIntervalId);
+    };
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    setIsNotificationPanelOpen(false);
   }, [activeTab]);
 
   useEffect(() => {
@@ -626,8 +1035,6 @@ export default function App() {
   const [resourceUploadStatus, setResourceUploadStatus] = useState<ResourceUploadStatus>('idle');
   const [resourceUploadProgress, setResourceUploadProgress] = useState(0);
   const [resourceUploadStatusMessage, setResourceUploadStatusMessage] = useState('');
-  const [activeLearningCourseId, setActiveLearningCourseId] = useState<string | null>(null);
-  const [activeVideoModuleId, setActiveVideoModuleId] = useState<string | null>(null);
   const [learningContentTab, setLearningContentTab] = useState<'overview' | 'notes' | 'resources' | 'qa'>('overview');
   const [bookmarkedModules, setBookmarkedModules] = useState<Set<string>>(new Set());
   const [playbackSpeed, setPlaybackSpeed] = useState<'0.75' | '1' | '1.25' | '1.5'>('1');
@@ -675,12 +1082,12 @@ export default function App() {
     }
 
     if (!activeLearningCourseId) {
-      setActiveTab('courses');
+      setActiveTab('courses', { replace: true });
       return;
     }
 
     if (!currentUser || currentUser.role !== 'student') {
-      setActiveTab(currentUser ? 'dashboard' : 'home');
+      setActiveTab(currentUser ? 'dashboard' : 'home', { replace: true });
       return;
     }
 
@@ -694,7 +1101,7 @@ export default function App() {
       MOCK_COURSES.some((course) => course.id === activeLearningCourseId);
 
     if (!hasSelectedCourse) {
-      setActiveTab('courses');
+      setActiveTab('courses', { replace: true });
       return;
     }
 
@@ -712,7 +1119,7 @@ export default function App() {
       );
 
     if (!hasEnrollment && !hasEnrollmentFallback) {
-      setActiveTab('courses');
+      setActiveTab('courses', { replace: true });
     }
   }, [
     activeTab,
@@ -858,6 +1265,141 @@ export default function App() {
   const primaryNavTabs: Tab[] = ['home', 'tutors', 'courses', 'resources', 'quizzes'];
   const navTabs = currentUser ? availableTabs.filter(tab => primaryNavTabs.includes(tab)) : primaryNavTabs;
   const canUseChatbot = (!currentUser || isStudent) && activeTab === 'home';
+
+  const resolveNotificationTargetTab = (notification: AppNotification): Tab => {
+    const candidate = String(notification.targetTab || '').trim() as Tab;
+    if (candidate && (canAccessTab(candidate, currentUser) || isInternalTab(candidate))) {
+      return candidate;
+    }
+
+    const link = String(notification.link || '').toLowerCase();
+    if (link.includes('/sessions/student') || link.includes('studentsessions')) {
+      return 'studentSessions';
+    }
+    if (link.includes('/sessions/tutor') || link.includes('tutorsessions')) {
+      return 'tutorSessions';
+    }
+    if (link.includes('aiassistant') || link.includes('/quizzes')) {
+      return 'quizzes';
+    }
+    if (link.includes('courses')) {
+      return 'courses';
+    }
+    if (link.includes('messages')) {
+      return 'messages';
+    }
+    if (link.includes('profile')) {
+      return resolveProfileTabForUser(currentUser);
+    }
+    if (link.includes('settings')) {
+      return 'settings';
+    }
+    if (link.includes('dashboard')) {
+      return 'dashboard';
+    }
+
+    if (currentUser?.role === 'student') {
+      return 'studentSessions';
+    }
+
+    if (currentUser?.role === 'tutor') {
+      return 'tutorSessions';
+    }
+
+    return 'notifications';
+  };
+
+  const loadNotifications = async (userId: string, silent = false): Promise<void> => {
+    if (!userId) {
+      return;
+    }
+
+    if (!silent) {
+      setIsLoadingNotifications(true);
+      setNotificationsError(null);
+    }
+
+    try {
+      const response = await apiService.getNotifications(userId, { limit: 60 });
+
+      if (activeNotificationUserIdRef.current !== userId) {
+        return;
+      }
+
+      setNotifications(response.notifications || []);
+      setUnreadNotificationCount(Math.max(0, Number(response.unreadCount || 0)));
+      setNotificationsError(null);
+    } catch (error) {
+      if (activeNotificationUserIdRef.current !== userId || silent) {
+        return;
+      }
+
+      const message = error instanceof Error ? error.message : 'Failed to load notifications.';
+      setNotificationsError(message);
+    } finally {
+      if (!silent && activeNotificationUserIdRef.current === userId) {
+        setIsLoadingNotifications(false);
+      }
+    }
+  };
+
+  const handleRefreshNotifications = async () => {
+    if (!currentUser) {
+      return;
+    }
+
+    await loadNotifications(currentUser.id);
+  };
+
+  const handleMarkNotificationAsRead = async (notification: AppNotification) => {
+    if (!currentUser || notification.isRead) {
+      return;
+    }
+
+    try {
+      const response = await apiService.markNotificationAsRead(notification.id, currentUser.id);
+      setNotifications((prev) =>
+        prev.map((entry) =>
+          entry.id === notification.id
+            ? { ...entry, ...(response.notification || {}), isRead: true }
+            : entry
+        )
+      );
+      setUnreadNotificationCount(Math.max(0, Number(response.unreadCount || 0)));
+    } catch (error) {
+      console.error('Failed to mark notification as read:', error);
+      const message = error instanceof Error ? error.message : 'Failed to update notification.';
+      setNotificationsError(message);
+    }
+  };
+
+  const handleMarkAllNotificationsAsRead = async () => {
+    if (!currentUser || unreadNotificationCount <= 0) {
+      return;
+    }
+
+    try {
+      await apiService.markAllNotificationsAsRead(currentUser.id);
+      setNotifications((prev) => prev.map((notification) => ({ ...notification, isRead: true })));
+      setUnreadNotificationCount(0);
+      setNotificationsError(null);
+    } catch (error) {
+      console.error('Failed to mark all notifications as read:', error);
+      const message = error instanceof Error ? error.message : 'Failed to mark all notifications as read.';
+      setNotificationsError(message);
+    }
+  };
+
+  const handleNotificationClick = (notification: AppNotification) => {
+    const nextTab = resolveNotificationTargetTab(notification);
+    setIsNotificationPanelOpen(false);
+
+    if (!notification.isRead) {
+      void handleMarkNotificationAsRead(notification);
+    }
+
+    setActiveTab(nextTab);
+  };
 
   const resetWithdrawalSummaryState = () => {
     setWithdrawalSummary({
@@ -2184,13 +2726,17 @@ export default function App() {
   const handleSignOut = () => {
     clearStoredSessions();
     setCurrentUser(null);
+    setNotifications([]);
+    setUnreadNotificationCount(0);
+    setNotificationsError(null);
+    setIsNotificationPanelOpen(false);
     setActiveLearningCourseId(null);
     setIsUserMenuOpen(false);
     setSessionPersistence('session');
     setRememberMe(false);
     setAuthMode('login');
     setShowAuthModal(true);
-    setActiveTab('home');
+    setActiveTab('home', { replace: true });
   };
 
   const handleDeleteAccount = async () => {
@@ -2244,13 +2790,17 @@ export default function App() {
 
       clearStoredSessions();
       setCurrentUser(null);
+      setNotifications([]);
+      setUnreadNotificationCount(0);
+      setNotificationsError(null);
+      setIsNotificationPanelOpen(false);
       setActiveLearningCourseId(null);
       setIsUserMenuOpen(false);
       setShowAuthModal(false);
       setAuthMode('login');
       setSessionPersistence('session');
       setRememberMe(false);
-      setActiveTab('home');
+      setActiveTab('home', { replace: true });
 
       alert('Your account was deleted successfully.');
     } catch (error) {
@@ -2605,6 +3155,25 @@ export default function App() {
     }
 
     return 0;
+  };
+
+  const getBookingLatestActivityTimestamp = (booking: Booking): number => {
+    const updatedTimestamp = Date.parse(String(booking.updatedAt || ''));
+    if (!Number.isNaN(updatedTimestamp)) {
+      return updatedTimestamp;
+    }
+
+    const createdTimestamp = Date.parse(String(booking.createdAt || ''));
+    if (!Number.isNaN(createdTimestamp)) {
+      return createdTimestamp;
+    }
+
+    const paidTimestamp = Date.parse(String(booking.paidAt || ''));
+    if (!Number.isNaN(paidTimestamp)) {
+      return paidTimestamp;
+    }
+
+    return getBookingSortTimestamp(booking);
   };
 
   const isPastSession = (booking: Booking): boolean => {
@@ -3090,16 +3659,22 @@ export default function App() {
         const past = isPastSession(booking);
         return timelineFilter === 'past' ? past : !past;
       })
-      .sort((a, b) => getBookingSortTimestamp(b) - getBookingSortTimestamp(a));
+      .sort((a, b) => getBookingLatestActivityTimestamp(b) - getBookingLatestActivityTimestamp(a));
   };
 
   const tutorDashboardBookings = useMemo(
-    () => bookings.filter((booking) => !booking.hiddenForTutor),
+    () =>
+      bookings
+        .filter((booking) => !booking.hiddenForTutor)
+        .sort((a, b) => getBookingLatestActivityTimestamp(b) - getBookingLatestActivityTimestamp(a)),
     [bookings]
   );
 
   const studentDashboardBookings = useMemo(
-    () => bookings.filter((booking) => !booking.hiddenForStudent),
+    () =>
+      bookings
+        .filter((booking) => !booking.hiddenForStudent)
+        .sort((a, b) => getBookingLatestActivityTimestamp(b) - getBookingLatestActivityTimestamp(a)),
     [bookings]
   );
 
@@ -3583,59 +4158,116 @@ export default function App() {
                   </button>
                 </>
               ) : (
-                <div className="relative user-menu">
-                  <button
-                    onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-                    className="flex items-center gap-2 text-sm font-bold text-indigo-700 bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100 hover:bg-indigo-100 transition-colors whitespace-nowrap"
-                  >
-                    <User className="w-4 h-4" /> {currentUser.firstName} {currentUser.lastName}
-                  </button>
+                <div className="flex items-center gap-2">
+                  <NotificationBell
+                    notifications={notifications}
+                    unreadCount={unreadNotificationCount}
+                    isOpen={isNotificationPanelOpen}
+                    isLoading={isLoadingNotifications}
+                    error={notificationsError}
+                    onToggle={() => {
+                      setIsNotificationPanelOpen((prev) => {
+                        const next = !prev;
+                        if (next && currentUser) {
+                          void loadNotifications(currentUser.id, true);
+                        }
+                        return next;
+                      });
+                      setIsUserMenuOpen(false);
+                    }}
+                    onClose={() => setIsNotificationPanelOpen(false)}
+                    onRefresh={() => {
+                      void handleRefreshNotifications();
+                    }}
+                    onNotificationClick={handleNotificationClick}
+                    onMarkAsRead={(notification) => {
+                      void handleMarkNotificationAsRead(notification);
+                    }}
+                    onMarkAllAsRead={() => {
+                      void handleMarkAllNotificationsAsRead();
+                    }}
+                    onViewAll={() => {
+                      setIsNotificationPanelOpen(false);
+                      setActiveTab('notifications');
+                    }}
+                  />
 
-                  {isUserMenuOpen && (
-                    <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-lg border border-slate-200 py-2 z-50">
-                      <button
-                        onClick={() => { setActiveTab('dashboard'); setIsUserMenuOpen(false) }}
-                        className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                      >
-                        <User className="w-4 h-4" />
-                        Dashboard
-                      </button>
-                      {isTutor && currentTutor && (
+                  <div className="relative user-menu">
+                    <button
+                      onClick={() => {
+                        setIsUserMenuOpen(!isUserMenuOpen);
+                        setIsNotificationPanelOpen(false);
+                      }}
+                      className="relative flex items-center gap-2 text-sm font-bold text-indigo-700 bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100 hover:bg-indigo-100 transition-colors whitespace-nowrap"
+                    >
+                      <User className="w-4 h-4" /> {currentUser.firstName} {currentUser.lastName}
+                      {unreadMessageCount > 0 && (
+                        <span className="absolute -right-1 -top-1 inline-flex min-w-[1.2rem] items-center justify-center rounded-full bg-indigo-600 px-1 py-0.5 text-[10px] font-black leading-none text-white">
+                          {unreadMessageCount > 9 ? '9+' : unreadMessageCount}
+                        </span>
+                      )}
+                    </button>
+
+                    {isUserMenuOpen && (
+                      <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-lg border border-slate-200 py-2 z-50">
                         <button
-                          onClick={() => {
-                            setViewingTutorId(currentTutor.id);
-                            setActiveTab('tutorProfile');
-                            setIsUserMenuOpen(false);
-                          }}
+                          onClick={() => { setActiveTab('dashboard'); setIsUserMenuOpen(false) }}
+                          className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                        >
+                          <User className="w-4 h-4" />
+                          Dashboard
+                        </button>
+                        <button
+                          onClick={() => { setActiveTab('messages'); setIsUserMenuOpen(false) }}
+                          className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center justify-between gap-2"
+                        >
+                          <span className="inline-flex items-center gap-2">
+                            <MessageCircle className="w-4 h-4" />
+                            Messages
+                          </span>
+                          {unreadMessageCount > 0 && (
+                            <span className="inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-indigo-600 px-1.5 py-0.5 text-[10px] font-black text-white">
+                              {unreadMessageCount > 9 ? '9+' : unreadMessageCount}
+                            </span>
+                          )}
+                        </button>
+                        {isTutor && currentTutor && (
+                          <button
+                            onClick={() => {
+                              setViewingTutorId(currentTutor.id);
+                              setActiveTab('tutorProfile');
+                              setIsUserMenuOpen(false);
+                            }}
+                            className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                            My Profile
+                          </button>
+                        )}
+                        <button
+                          onClick={() => { setActiveTab('settings'); setIsUserMenuOpen(false) }}
                           className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
                         >
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                           </svg>
-                          My Profile
+                          Settings
                         </button>
-                      )}
-                      <button
-                        onClick={() => { setActiveTab('settings'); setIsUserMenuOpen(false) }}
-                        className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                        </svg>
-                        Settings
-                      </button>
-                      <button
-                        onClick={handleSignOut}
-                        className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-red-50 hover:text-red-600 flex items-center gap-2"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                        </svg>
-                        Sign Out
-                      </button>
-                    </div>
-                  )}
+                        <button
+                          onClick={handleSignOut}
+                          className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-red-50 hover:text-red-600 flex items-center gap-2"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                          </svg>
+                          Sign Out
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -4344,6 +4976,10 @@ export default function App() {
               onBookSession={(id) => {
                 setBookingTutorId(id);
                 setActiveTab('tutorBooking');
+              }}
+              onMessageTutor={(id) => {
+                setPendingMessageParticipantId(id);
+                setActiveTab('messages');
               }}
               isLoggedIn={!!currentUser}
               isStudent={isStudent}
@@ -5302,332 +5938,110 @@ export default function App() {
           )}
 
           {activeTab === 'dashboard' && currentUser && isStudent && (
-            <div className="space-y-8">
-              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-5">
-                  <div className="flex items-center gap-4">
-                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center font-black text-xl shadow-lg shadow-indigo-200">
-                      {(currentUser.firstName + ' ' + currentUser.lastName).charAt(0)}
-                    </div>
-                    <div>
-                      <h2 className="text-3xl font-black text-slate-900 tracking-tight">Student Dashboard</h2>
-                      <p className="text-slate-500 font-medium">Focus on sessions, courses, certificates, and learning progress.</p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setActiveTab('courses')}
-                    className="px-6 py-3 rounded-2xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
-                  >
-                    Browse Courses
-                  </button>
-                </div>
+            <StudentDashboardPage
+              currentUser={currentUser}
+              studentDashboardBookings={studentDashboardBookings}
+              studentEnrolledCourses={studentEnrolledCourses}
+              filteredStudentBookings={filteredStudentBookings}
+              studentBookingStatusFilter={studentBookingStatusFilter}
+              setStudentBookingStatusFilter={setStudentBookingStatusFilter}
+              studentSessionTimelineFilter={studentSessionTimelineFilter}
+              setStudentSessionTimelineFilter={setStudentSessionTimelineFilter}
+              activeBookingActionId={activeBookingActionId}
+              studentReviewsBySessionId={studentReviewsBySessionId}
+              sessionRatingDrafts={sessionRatingDrafts}
+              setSessionRatingDrafts={setSessionRatingDrafts}
+              activeRatingActionBookingId={activeRatingActionBookingId}
+              handleHideBookingForCurrentUser={handleHideBookingForCurrentUser}
+              getBookingPaymentStatus={getBookingPaymentStatus}
+              getBookingStatusPillClassName={getBookingStatusPillClassName}
+              getBookingPaymentPillClassName={getBookingPaymentPillClassName}
+              canStudentManageBeforeStart={canStudentManageBeforeStart}
+              isValidMeetingLink={isValidMeetingLink}
+              handleStudentCancelBooking={handleStudentCancelBooking}
+              handleSubmitSessionRating={handleSubmitSessionRating}
+              handleOpenCourseLearning={handleOpenCourseLearning}
+              handleShowCertificateModal={handleShowCertificateModal}
+              getBookingTutorName={getBookingTutorName}
+              setActiveTab={(tab: string) => setActiveTab(tab as Tab)}
+            />
+          )}
 
-                <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4 mt-8">
-                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Booked Sessions</p>
-                    <p className="text-3xl font-black text-slate-900 mt-2">{studentDashboardBookings.length}</p>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Ready to Join</p>
-                    <p className="text-3xl font-black text-emerald-600 mt-2">
-                      {studentDashboardBookings.filter((booking) => isValidMeetingLink(booking.meetingLink)).length}
-                    </p>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Enrolled Courses</p>
-                    <p className="text-3xl font-black text-indigo-600 mt-2">{studentEnrolledCourses.length}</p>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Avg. Progress</p>
-                    <p className="text-3xl font-black text-violet-600 mt-2">
-                      {studentEnrolledCourses.length
-                        ? Math.round(
-                          studentEnrolledCourses.reduce((sum, entry) => sum + entry.enrollment.progress, 0) /
-                            studentEnrolledCourses.length
-                        )
-                        : 0}
-                      %
-                    </p>
-                  </div>
-                </div>
-              </div>
+          {activeTab === 'tutorSessions' && currentUser && isTutor && (
+            <TutorSessionsPage
+              filteredTutorBookings={filteredTutorBookings}
+              tutorBookingStatusFilter={tutorBookingStatusFilter}
+              setTutorBookingStatusFilter={setTutorBookingStatusFilter}
+              tutorSessionTimelineFilter={tutorSessionTimelineFilter}
+              setTutorSessionTimelineFilter={setTutorSessionTimelineFilter}
+              activeBookingActionId={activeBookingActionId}
+              handleTutorBookingStatusChange={handleTutorBookingStatusChange}
+              handleTutorRescheduleBooking={handleTutorRescheduleBooking}
+              handleTutorMeetingLinkUpdate={handleTutorMeetingLinkUpdate}
+              handleHideBookingForCurrentUser={handleHideBookingForCurrentUser}
+              getBookingPaymentStatus={getBookingPaymentStatus}
+              getBookingStatusPillClassName={getBookingStatusPillClassName}
+              getBookingPaymentPillClassName={getBookingPaymentPillClassName}
+              getBookingStudentName={getBookingStudentName}
+              isValidMeetingLink={isValidMeetingLink}
+              canStudentManageBeforeStart={canStudentManageBeforeStart}
+            />
+          )}
 
-              <div className="grid xl:grid-cols-5 gap-8">
-                <div className="xl:col-span-3 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-black text-2xl text-slate-900">My Sessions</h3>
-                      <Calendar className="w-5 h-5 text-slate-400" />
-                    </div>
-                    <div className="flex flex-wrap items-end gap-3">
-                      <span className="text-xs font-black uppercase tracking-widest px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
-                        {filteredStudentBookings.length} sessions shown
-                      </span>
-                      <label className="flex flex-col gap-1">
-                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Status</span>
-                        <select
-                          value={studentBookingStatusFilter}
-                          onChange={(event) => setStudentBookingStatusFilter(event.target.value as BookingStatusFilter)}
-                          className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
-                        >
-                          <option value="all">All Statuses</option>
-                          <option value="pending">Pending</option>
-                          <option value="confirmed">Confirmed</option>
-                          <option value="completed">Completed</option>
-                          <option value="cancelled">Cancelled</option>
-                        </select>
-                      </label>
-                      <label className="flex flex-col gap-1">
-                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Time</span>
-                        <select
-                          value={studentSessionTimelineFilter}
-                          onChange={(event) => setStudentSessionTimelineFilter(event.target.value as SessionTimelineFilter)}
-                          className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase tracking-widest bg-white text-slate-700"
-                        >
-                          <option value="all">Any Time</option>
-                          <option value="upcoming">Upcoming</option>
-                          <option value="past">Past</option>
-                        </select>
-                      </label>
-                    </div>
-                  </div>
+          {activeTab === 'studentSessions' && currentUser && isStudent && (
+            <StudentSessionsPage
+              filteredStudentBookings={filteredStudentBookings}
+              studentBookingStatusFilter={studentBookingStatusFilter}
+              setStudentBookingStatusFilter={setStudentBookingStatusFilter}
+              studentSessionTimelineFilter={studentSessionTimelineFilter}
+              setStudentSessionTimelineFilter={setStudentSessionTimelineFilter}
+              activeBookingActionId={activeBookingActionId}
+              studentReviewsBySessionId={studentReviewsBySessionId}
+              sessionRatingDrafts={sessionRatingDrafts}
+              setSessionRatingDrafts={setSessionRatingDrafts}
+              activeRatingActionBookingId={activeRatingActionBookingId}
+              getBookingPaymentStatus={getBookingPaymentStatus}
+              getBookingTutorName={getBookingTutorName}
+              getBookingStatusPillClassName={getBookingStatusPillClassName}
+              getBookingPaymentPillClassName={getBookingPaymentPillClassName}
+              canStudentManageBeforeStart={canStudentManageBeforeStart}
+              isValidMeetingLink={isValidMeetingLink}
+              handleHideBookingForCurrentUser={handleHideBookingForCurrentUser}
+              handleStudentCancelBooking={handleStudentCancelBooking}
+              handleSubmitSessionRating={handleSubmitSessionRating}
+            />
+          )}
 
-                  {filteredStudentBookings.length === 0 ? (
-                    <div className="text-center py-16 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
-                      <Clock className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                      <p className="font-bold text-slate-500">No sessions match your filters.</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {filteredStudentBookings.map((booking) => {
-                        const isLoading = activeBookingActionId === booking.id;
-                        const isSubmittingRating = activeRatingActionBookingId === booking.id;
-                        const paymentStatus = getBookingPaymentStatus(booking);
-                        const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed' && canStudentManageBeforeStart(booking);
-                        const hasValidMeetingLink = isValidMeetingLink(booking.meetingLink);
-                        const canJoinMeeting = hasValidMeetingLink && booking.status !== 'cancelled';
-                        const existingReview = studentReviewsBySessionId.get(booking.id);
-                        const ratingDraft = sessionRatingDrafts[booking.id] || { rating: 0, feedback: '' };
+          {activeTab === 'messages' && currentUser && (
+            <MessagesPage
+              currentUser={currentUser}
+              initialParticipantId={pendingMessageParticipantId}
+              onInitialParticipantHandled={() => {
+                setPendingMessageParticipantId(null);
+              }}
+              onUnreadCountChange={setUnreadMessageCount}
+            />
+          )}
 
-                        return (
-                          <div key={booking.id} className="relative rounded-3xl border border-slate-200 bg-slate-50 p-5 pr-14 space-y-4">
-                            <button
-                              type="button"
-                              disabled={isLoading}
-                              onClick={() => handleHideBookingForCurrentUser(booking)}
-                              className="absolute right-4 top-4 h-8 w-8 rounded-full border border-slate-300 bg-white text-slate-500 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-60 flex items-center justify-center"
-                              aria-label="Hide session card"
-                              title="Hide session card"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                            <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
-                              <div>
-                                <p className="text-lg font-black text-slate-900">{booking.subject} Session</p>
-                                <p className="text-xs text-slate-500 font-semibold mt-1">
-                                  {booking.date}
-                                  {booking.timeSlot ? ` • ${booking.timeSlot}` : ''}
-                                  {' • Tutor: '}
-                                  {getBookingTutorName(booking)}
-                                </p>
-                              </div>
-                              <div className="flex flex-wrap gap-2">
-                                <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getBookingPaymentPillClassName(paymentStatus)}`}>
-                                  payment {paymentStatus}
-                                </span>
-                                <span className={`text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-full border ${getBookingStatusPillClassName(booking.status)}`}>
-                                  {booking.status}
-                                </span>
-                              </div>
-                            </div>
-
-                            {!hasValidMeetingLink && paymentStatus === 'paid' && booking.status === 'confirmed' && (
-                              <p className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                                Waiting for tutor to submit a valid meeting link.
-                              </p>
-                            )}
-
-                            {!canStudentManageBeforeStart(booking) && booking.status !== 'cancelled' && booking.status !== 'completed' && (
-                              <p className="text-[11px] font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg px-3 py-2">
-                                Session has started or passed. Cancel action is now disabled.
-                              </p>
-                            )}
-
-                            <div className="flex flex-wrap gap-2">
-                              {canCancel && (
-                                <button
-                                  type="button"
-                                  disabled={isLoading}
-                                  onClick={() => handleStudentCancelBooking(booking)}
-                                  className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
-                                >
-                                  Cancel Booking
-                                </button>
-                              )}
-
-                              {canJoinMeeting ? (
-                                <a
-                                  href={booking.meetingLink}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-indigo-600 text-white hover:bg-indigo-700"
-                                >
-                                  Join Meeting
-                                </a>
-                              ) : (
-                                <button
-                                  type="button"
-                                  disabled
-                                  className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-slate-300 text-slate-600"
-                                >
-                                  Join Meeting
-                                </button>
-                              )}
-                            </div>
-
-                            {booking.status === 'completed' && (
-                              <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
-                                <p className="text-xs font-black uppercase tracking-widest text-slate-500">Rate This Session</p>
-
-                                {existingReview ? (
-                                  <div className="space-y-2">
-                                    <div className="flex items-center gap-1">
-                                      {[1, 2, 3, 4, 5].map((value) => (
-                                        <Star
-                                          key={value}
-                                          className={`w-4 h-4 ${value <= existingReview.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-300'}`}
-                                        />
-                                      ))}
-                                    </div>
-                                    <p className="text-sm text-slate-700">{existingReview.comment || 'Rating submitted.'}</p>
-                                  </div>
-                                ) : (
-                                  <>
-                                    <div className="flex items-center gap-1">
-                                      {[1, 2, 3, 4, 5].map((value) => (
-                                        <button
-                                          key={value}
-                                          type="button"
-                                          onClick={() =>
-                                            setSessionRatingDrafts((prev) => ({
-                                              ...prev,
-                                              [booking.id]: {
-                                                rating: value,
-                                                feedback: prev[booking.id]?.feedback || '',
-                                              },
-                                            }))
-                                          }
-                                          className="p-0.5"
-                                        >
-                                          <Star
-                                            className={`w-5 h-5 ${value <= ratingDraft.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-300 hover:text-amber-300'}`}
-                                          />
-                                        </button>
-                                      ))}
-                                    </div>
-                                    <textarea
-                                      value={ratingDraft.feedback}
-                                      onChange={(event) =>
-                                        setSessionRatingDrafts((prev) => ({
-                                          ...prev,
-                                          [booking.id]: {
-                                            rating: prev[booking.id]?.rating || 0,
-                                            feedback: event.target.value,
-                                          },
-                                        }))
-                                      }
-                                      placeholder="Optional feedback"
-                                      rows={3}
-                                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                                    />
-                                    <button
-                                      type="button"
-                                      disabled={isSubmittingRating || ratingDraft.rating < 1}
-                                      onClick={() => handleSubmitSessionRating(booking)}
-                                      className="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
-                                    >
-                                      {isSubmittingRating ? 'Submitting...' : 'Submit Rating'}
-                                    </button>
-                                  </>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                <div className="xl:col-span-2 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                  <div className="flex items-center justify-between mb-6">
-                    <h3 className="font-black text-2xl text-slate-900">Course Progress</h3>
-                    <BookOpen className="w-5 h-5 text-slate-400" />
-                  </div>
-
-                  {studentEnrolledCourses.length === 0 ? (
-                    <div className="text-center py-12 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
-                      <BookMarked className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                      <p className="font-bold text-slate-500">No enrolled courses yet.</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {studentEnrolledCourses.map(({ course, enrollment }) => {
-                        const isCompleted = enrollment.progress >= 100;
-
-                        return (
-                          <div key={course.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                            <p className="font-bold text-slate-900 line-clamp-2">{course.title}</p>
-                            <p className="text-xs font-semibold text-slate-500 mt-1">{course.subject}</p>
-
-                            <div className="mt-3">
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">Progress</span>
-                                <span className="text-sm font-black text-indigo-600">{enrollment.progress}%</span>
-                              </div>
-                              <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
-                                <div
-                                  className={`h-full rounded-full ${isCompleted ? 'bg-emerald-500' : 'bg-indigo-600'}`}
-                                  style={{ width: `${enrollment.progress}%` }}
-                                />
-                              </div>
-                            </div>
-
-                            <div className="mt-4 flex flex-wrap gap-2">
-                              <button
-                                type="button"
-                                onClick={() => handleOpenCourseLearning(course.id)}
-                                className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest bg-indigo-600 text-white hover:bg-indigo-700"
-                              >
-                                Continue Learning
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (!isCompleted) {
-                                    alert('Complete all modules to unlock your certificate.');
-                                    return;
-                                  }
-                                  handleShowCertificateModal(enrollment, course.title);
-                                }}
-                                disabled={!isCompleted}
-                                className={`px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest ${
-                                  isCompleted
-                                    ? 'bg-amber-500 text-white hover:bg-amber-600'
-                                    : 'bg-slate-300 text-slate-600 cursor-not-allowed'
-                                }`}
-                              >
-                                View Certificate
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
+          {activeTab === 'notifications' && currentUser && (
+            <NotificationsPage
+              notifications={notifications}
+              unreadCount={unreadNotificationCount}
+              isLoading={isLoadingNotifications}
+              error={notificationsError}
+              filter={notificationFilter}
+              onFilterChange={setNotificationFilter}
+              onRefresh={() => {
+                void handleRefreshNotifications();
+              }}
+              onNotificationClick={handleNotificationClick}
+              onMarkAsRead={(notification) => {
+                void handleMarkNotificationAsRead(notification);
+              }}
+              onMarkAllAsRead={() => {
+                void handleMarkAllNotificationsAsRead();
+              }}
+            />
           )}
 
           {activeTab === 'earnings' && currentUser && isTutor && (
@@ -6450,59 +6864,84 @@ export default function App() {
           <AnimatePresence>
             {isChatOpen && (
               <motion.div
-                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                initial={{ opacity: 0, scale: 0.92, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                className="bg-white w-80 md:w-96 h-[500px] rounded-3xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden mb-4"
+                exit={{ opacity: 0, scale: 0.92, y: 20 }}
+                transition={{ type: 'spring', stiffness: 300, damping: 24 }}
+                className="chatbot-widget-panel w-80 md:w-[26rem] h-[520px] rounded-2xl shadow-2xl border border-slate-200/60 flex flex-col overflow-hidden mb-4"
               >
-                <div className="bg-indigo-600 p-4 text-white flex justify-between items-center">
-                  <div className="flex items-center gap-2">
-                    <Bot className="w-5 h-5" />
-                    <span className="font-bold">TutorSphere Assistant</span>
+                {/* Header */}
+                <div className="chatbot-widget-header px-5 py-4 text-white flex justify-between items-center">
+                  <div className="flex items-center gap-3">
+                    <div className="h-9 w-9 rounded-xl bg-white/15 backdrop-blur-sm flex items-center justify-center">
+                      <Bot className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="font-bold text-sm block">TutorSphere Assistant</span>
+                      <span className="text-[10px] font-medium text-white/60 flex items-center gap-1">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 inline-block animate-pulse" />
+                        Online
+                      </span>
+                    </div>
                   </div>
-                  <button onClick={() => setIsChatOpen(false)}><X className="w-5 h-5" /></button>
+                  <button
+                    onClick={() => setIsChatOpen(false)}
+                    className="h-8 w-8 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-all"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+
+                {/* Messages */}
+                <div className="flex-1 overflow-y-auto custom-scrollbar px-4 py-4 space-y-3 bg-gradient-to-b from-slate-50/80 to-white">
                   {chatMessages.map((msg, i) => (
                     <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                      <div className={`max-w-[80%] p-3 rounded-2xl text-sm relative group ${msg.role === 'user'
-                          ? 'bg-indigo-600 text-white rounded-tr-none'
-                          : 'bg-slate-100 text-slate-700 rounded-tl-none'
+                      <div className={`max-w-[82%] px-4 py-2.5 text-[13px] leading-relaxed relative group ${msg.role === 'user'
+                          ? 'chatbot-widget-message-user rounded-2xl rounded-tr-md font-medium shadow-sm'
+                          : 'chatbot-widget-message-bot rounded-2xl rounded-tl-md text-slate-700 shadow-sm'
                         }`}>
                         <div className="whitespace-pre-line break-words">{msg.text}</div>
                         {msg.role === 'bot' && msg.meta !== 'typing' && (
                           <button
                             onClick={() => handleSpeak(msg.text, i)}
-                            className={`absolute -right-8 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-white border border-slate-100 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity ${isSpeaking === i.toString() ? 'text-indigo-600 animate-pulse' : 'text-slate-400 hover:text-indigo-600'}`}
+                            className={`absolute -right-8 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-white border border-slate-100 shadow-sm opacity-0 group-hover:opacity-100 transition-all ${isSpeaking === i.toString() ? 'text-indigo-600 animate-pulse' : 'text-slate-400 hover:text-indigo-600'}`}
                           >
-                            <Volume2 className="w-3.5 h-3.5" />
+                            <Volume2 className="w-3 h-3" />
                           </button>
                         )}
                       </div>
                     </div>
                   ))}
                 </div>
-                <form onSubmit={handleChatSubmit} className="p-4 border-t border-slate-100 flex gap-2">
-                  <input
-                    type="text"
-                    value={chatInput}
-                    onChange={e => setChatInput(e.target.value)}
-                    placeholder="Ask me anything..."
-                    disabled={isChatTyping}
-                    className="flex-1 px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-                  />
-                  <button type="submit" disabled={isChatTyping} className="bg-indigo-600 text-white p-2 rounded-xl disabled:opacity-60">
-                    <Send className="w-4 h-4" />
-                  </button>
+
+                {/* Input */}
+                <form onSubmit={handleChatSubmit} className="px-4 py-3 border-t border-slate-100 bg-white/95">
+                  <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50/80 px-1 py-1 transition-all focus-within:border-indigo-300 focus-within:bg-white focus-within:shadow-[0_0_0_3px_rgba(99,102,241,0.06)]">
+                    <input
+                      type="text"
+                      value={chatInput}
+                      onChange={e => setChatInput(e.target.value)}
+                      placeholder="Ask me anything..."
+                      disabled={isChatTyping}
+                      className="flex-1 bg-transparent px-3 py-2 text-sm font-medium text-slate-700 outline-none placeholder:text-slate-400"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isChatTyping}
+                      className="h-8 w-8 rounded-lg bg-gradient-to-br from-indigo-600 to-violet-600 text-white flex items-center justify-center shadow-md transition-all hover:shadow-lg disabled:opacity-50 active:scale-90"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </form>
               </motion.div>
             )}
           </AnimatePresence>
           <button
             onClick={() => setIsChatOpen(!isChatOpen)}
-            className="bg-indigo-600 text-white p-4 rounded-full shadow-lg hover:bg-indigo-700 transition-all hover:scale-110"
+            className="chatbot-widget-fab text-white p-4 rounded-2xl"
           >
-            {isChatOpen ? <X /> : <MessageSquare />}
+            {isChatOpen ? <X className="w-5 h-5" /> : <MessageSquare className="w-5 h-5" />}
           </button>
         </div>
       )}
@@ -6537,9 +6976,9 @@ export default function App() {
               <h4 className="text-white font-semibold mb-6">Company</h4>
               <ul className="space-y-4 text-sm">
                 <li><button onClick={() => setActiveTab('about')} className="hover:text-indigo-400 transition-colors">About Us</button></li>
-                <li><a href="#" className="hover:text-indigo-400 transition-colors">Careers</a></li>
-                <li><a href="#" className="hover:text-indigo-400 transition-colors">Privacy Policy</a></li>
-                <li><a href="#" className="hover:text-indigo-400 transition-colors">Terms of Service</a></li>
+                <li><span className="text-slate-500">Careers (Coming Soon)</span></li>
+                <li><span className="text-slate-500">Privacy Policy (Coming Soon)</span></li>
+                <li><span className="text-slate-500">Terms of Service (Coming Soon)</span></li>
               </ul>
             </div>
 

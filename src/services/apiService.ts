@@ -12,8 +12,13 @@ import {
   CourseEnrollment,
   CourseModuleResource,
   CourseCoupon,
+  AppNotification,
   WithdrawalRequest,
   WithdrawalSummary,
+  MessageConversation,
+  DirectMessage,
+  MessageConversationsResponse,
+  ConversationMessagesResponse,
 } from '../types';
 import { normalizeTutorSubjects } from '../data/tutorSubjects';
 
@@ -81,6 +86,9 @@ const shouldRetryApiRequest = (error: unknown): boolean => {
     message.includes('404') ||
     message.includes('load failed') ||
     message.includes('failed to fetch') ||
+    message.includes('failed to parse url') ||
+    message.includes('invalid url') ||
+    message.includes('did not match the expected pattern') ||
     message.includes('network') ||
     message.includes('cors')
   );
@@ -182,6 +190,11 @@ export type ResetPasswordResponse = {
 
 export type ChangePasswordResponse = {
   message: string;
+};
+
+export type NotificationsResponse = {
+  notifications: AppNotification[];
+  unreadCount: number;
 };
 
 class ApiService {
@@ -305,7 +318,7 @@ class ApiService {
     } as Resource;
   }
 
-  private async fetchWithApiFallback(endpoint: string, options?: RequestInit): Promise<Response> {
+  private async fetchWithApiFallback(endpoint: string, options?: RequestInit, expectJson = false): Promise<Response> {
     const baseCandidates = getApiBaseCandidates();
     let lastError: unknown;
 
@@ -316,6 +329,19 @@ class ApiService {
       try {
         const response = await fetch(`${baseUrl}${endpoint}`, options);
 
+        if (expectJson && response.ok) {
+          const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+          const isJsonLike =
+            contentType.includes('application/json') ||
+            contentType.includes('application/problem+json') ||
+            contentType.includes('+json');
+
+          // Some dev setups can return SPA HTML for missing API routes.
+          if (!isJsonLike && !isLastCandidate) {
+            continue;
+          }
+        }
+
         if (!isLastCandidate && (response.status === 404 || response.status === 405)) {
           continue;
         }
@@ -323,7 +349,11 @@ class ApiService {
         return response;
       } catch (error) {
         lastError = error;
-        if (isLastCandidate || !shouldRetryApiRequest(error)) {
+        const canRetryByType =
+          error instanceof TypeError ||
+          (typeof DOMException !== 'undefined' && error instanceof DOMException);
+
+        if (isLastCandidate || (!canRetryByType && !shouldRetryApiRequest(error))) {
           throw error;
         }
       }
@@ -362,13 +392,17 @@ class ApiService {
         },
     };
 
-    const response = await this.fetchWithApiFallback(endpoint, requestOptions);
+    const response = await this.fetchWithApiFallback(endpoint, requestOptions, true);
 
     if (!response.ok) {
       throw await this.createApiError(response);
     }
 
-    return response.json();
+    try {
+      return await response.json();
+    } catch {
+      throw new Error('The API returned an invalid response format. Please restart the TutorSphere server and try again.');
+    }
   }
 
   // Auth methods
@@ -872,6 +906,193 @@ class ApiService {
     return this.request(`/bookings/${id}`, {
       method: 'DELETE',
     });
+  }
+
+  async getNotifications(
+    userId: string,
+    options?: { limit?: number; isRead?: boolean }
+  ): Promise<NotificationsResponse> {
+    const params = new URLSearchParams({ userId });
+
+    if (typeof options?.limit === 'number' && Number.isFinite(options.limit) && options.limit > 0) {
+      params.set('limit', String(Math.floor(options.limit)));
+    }
+
+    if (typeof options?.isRead === 'boolean') {
+      params.set('isRead', String(options.isRead));
+    }
+
+    return this.request(`/notifications?${params.toString()}`);
+  }
+
+  async createNotification(payload: {
+    userId: string;
+    type: string;
+    title: string;
+    message: string;
+    link?: string;
+    targetTab?: string;
+    relatedEntityId?: string;
+    isRead?: boolean;
+  }): Promise<{ notification: AppNotification; unreadCount: number }> {
+    return this.request('/notifications', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async markNotificationAsRead(
+    notificationId: string,
+    userId: string
+  ): Promise<{ notification: AppNotification; unreadCount: number }> {
+    return this.request(`/notifications/${notificationId}/read`, {
+      method: 'PUT',
+      body: JSON.stringify({ userId }),
+    });
+  }
+
+  async markAllNotificationsAsRead(userId: string): Promise<{ modifiedCount: number; unreadCount: number }> {
+    return this.request('/notifications/read-all', {
+      method: 'PUT',
+      body: JSON.stringify({ userId }),
+    });
+  }
+
+  async getMessageConversations(userId: string, search?: string): Promise<MessageConversationsResponse> {
+    const params = new URLSearchParams();
+    if (userId && userId.trim()) {
+      params.set('userId', userId.trim());
+    }
+    if (search && search.trim()) {
+      params.set('search', search.trim());
+    }
+
+    const query = params.toString();
+    return this.request(`/messages/conversations${query ? `?${query}` : ''}`);
+  }
+
+  async getMessageUnreadCount(userId: string): Promise<{ totalUnreadCount: number }> {
+    const params = new URLSearchParams();
+    if (userId && userId.trim()) {
+      params.set('userId', userId.trim());
+    }
+
+    const query = params.toString();
+    return this.request(`/messages/unread-count${query ? `?${query}` : ''}`);
+  }
+
+  async pingMessagePresence(userId: string): Promise<{ isOnline: boolean; lastActiveAt: string | null }> {
+    return this.request('/messages/presence/ping', {
+      method: 'POST',
+      body: JSON.stringify({ userId }),
+    });
+  }
+
+  async openDirectConversation(
+    participantUserId: string,
+    userId: string
+  ): Promise<{ conversation: MessageConversation; created: boolean }> {
+    return this.request('/messages/conversations/direct', {
+      method: 'POST',
+      body: JSON.stringify({ participantUserId, userId }),
+    });
+  }
+
+  async getConversationMessages(
+    conversationId: string,
+    userId: string,
+    options?: { limit?: number; before?: string }
+  ): Promise<ConversationMessagesResponse> {
+    const params = new URLSearchParams();
+
+    if (userId && userId.trim()) {
+      params.set('userId', userId.trim());
+    }
+
+    if (typeof options?.limit === 'number' && Number.isFinite(options.limit) && options.limit > 0) {
+      params.set('limit', String(Math.floor(options.limit)));
+    }
+
+    if (typeof options?.before === 'string' && options.before.trim()) {
+      params.set('before', options.before.trim());
+    }
+
+    const query = params.toString();
+    return this.request(`/messages/conversations/${encodeURIComponent(conversationId)}/messages${query ? `?${query}` : ''}`);
+  }
+
+  async sendConversationMessage(
+    conversationId: string,
+    content: string,
+    userId: string
+  ): Promise<{ message: DirectMessage; conversation: MessageConversation; totalUnreadCount: number }> {
+    return this.request(`/messages/conversations/${encodeURIComponent(conversationId)}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ content, userId }),
+    });
+  }
+
+  async markConversationAsRead(
+    conversationId: string,
+    userId: string
+  ): Promise<{ conversationId: string; unreadCount: number; modifiedCount: number; totalUnreadCount: number }> {
+    return this.request(`/messages/conversations/${encodeURIComponent(conversationId)}/read`, {
+      method: 'POST',
+      body: JSON.stringify({ userId }),
+    });
+  }
+
+  async deleteConversationMessage(
+    conversationId: string,
+    messageId: string,
+    userId: string
+  ): Promise<{ message: DirectMessage; conversation: MessageConversation; totalUnreadCount: number }> {
+    const params = new URLSearchParams();
+    if (userId && userId.trim()) {
+      params.set('userId', userId.trim());
+    }
+
+    const query = params.toString();
+    return this.request(
+      `/messages/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}${query ? `?${query}` : ''}`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
+  async deleteMessageConversation(
+    conversationId: string,
+    userId: string
+  ): Promise<{ conversationId: string; deletedMessageCount: number; totalUnreadCount: number }> {
+    const params = new URLSearchParams();
+    if (userId && userId.trim()) {
+      params.set('userId', userId.trim());
+    }
+
+    const query = params.toString();
+    const deleteEndpoint = `/messages/conversations/${encodeURIComponent(conversationId)}${query ? `?${query}` : ''}`;
+
+    try {
+      return await this.request(deleteEndpoint, {
+        method: 'DELETE',
+      });
+    } catch (error) {
+      const message = String(error instanceof Error ? error.message : error || '').toLowerCase();
+      const shouldFallback = message.includes('not found') || message.includes('404');
+
+      if (!shouldFallback) {
+        throw error;
+      }
+
+      return this.request(
+        `/messages/conversations/${encodeURIComponent(conversationId)}/delete`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ userId }),
+        }
+      );
+    }
   }
 
   // Question methods

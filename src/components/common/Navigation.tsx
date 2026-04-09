@@ -1,7 +1,20 @@
 import React from 'react';
 import { GraduationCap, User as UserIcon } from 'lucide-react';
 import { User } from '../../types';
-import { Tab } from '../../data/mockData';
+
+type Tab =
+  | 'home'
+  | 'tutors'
+  | 'questions'
+  | 'courses'
+  | 'resources'
+  | 'quizzes'
+  | 'registerSelect'
+  | 'registerStudent'
+  | 'registerTutor'
+  | 'register'
+  | 'dashboard'
+  | 'about';
 
 interface NavigationProps {
   activeTab: Tab;

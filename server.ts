@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs/promises";
 import { Readable } from "stream";
+import { randomBytes } from "crypto";
 import dotenv from "dotenv";
 import multer from "multer";
 import Busboy from "busboy";
@@ -1275,55 +1276,200 @@ async function migrateUsers() {
   }
 }
 
-async function migrateMockData() {
+const escapeRegexPattern = (value: string): string => {
+  return value.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+};
+
+const normalizeEmailAddress = (value: unknown): string => {
+  return String(value || '').trim().toLowerCase();
+};
+
+const normalizeNameValue = (value: unknown): string => {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+};
+
+const splitNameParts = (rawName: string): { firstName: string; lastName: string } => {
+  const normalizedName = normalizeNameValue(rawName);
+  if (!normalizedName) {
+    return { firstName: 'Tutor', lastName: 'Account' };
+  }
+
+  const [firstNameRaw, ...lastNameParts] = normalizedName.split(' ');
+  const firstName = firstNameRaw || 'Tutor';
+  const lastName = lastNameParts.join(' ').trim() || 'Account';
+
+  return { firstName, lastName };
+};
+
+const resolveTutorNameParts = (tutor: any): { firstName: string; lastName: string } => {
+  const firstName = normalizeNameValue(tutor?.firstName);
+  const lastName = normalizeNameValue(tutor?.lastName);
+
+  if (firstName || lastName) {
+    return {
+      firstName: firstName || 'Tutor',
+      lastName: lastName || 'Account',
+    };
+  }
+
+  const fullName = normalizeNameValue(tutor?.name);
+  if (fullName) {
+    return splitNameParts(fullName);
+  }
+
+  const emailLocalPart = normalizeEmailAddress(tutor?.email).split('@')[0] || '';
+  const readableLocalPart = normalizeNameValue(emailLocalPart.replace(/[._-]+/g, ' '));
+  if (readableLocalPart) {
+    return splitNameParts(readableLocalPart);
+  }
+
+  return { firstName: 'Tutor', lastName: 'Account' };
+};
+
+const createTemporaryTutorPassword = (): string => {
+  return `${randomBytes(12).toString('hex')}Aa1!`;
+};
+
+async function syncTutorProfilesToUserAccounts() {
   try {
-    // Check if mock data already exists
-    const tutorCount = await Tutor.countDocuments();
-    if (tutorCount > 0) {
+    const tutors = await Tutor.find();
+    if (tutors.length === 0) {
       return;
     }
 
-    // Import mock data
-    const { MOCK_TUTORS, MOCK_REVIEWS, MOCK_COURSES, MOCK_RESOURCES } = await import('./src/data/mockData.js');
+    let usersCreated = 0;
+    let usersUpdated = 0;
+    let tutorsNormalized = 0;
+    let skipped = 0;
+    let idMismatches = 0;
+    let conflicts = 0;
+    let failed = 0;
 
-    // Migrate tutors
-    for (const tutorData of MOCK_TUTORS) {
-      const existingTutor = await Tutor.findOne({ email: tutorData.email });
-      if (!existingTutor) {
-        await Tutor.create(tutorData);
+    for (const tutor of tutors) {
+      try {
+        const tutorId = String((tutor as any).id || '').trim();
+        const tutorEmail = normalizeEmailAddress((tutor as any).email);
+
+        if (!tutorId || !tutorEmail) {
+          skipped += 1;
+          continue;
+        }
+
+        const { firstName, lastName } = resolveTutorNameParts(tutor);
+        const normalizedTutorName = `${firstName} ${lastName}`.trim();
+        const tutorAvatar = String((tutor as any).avatar || '').trim();
+
+        const userByTutorId = await User.findOne({ id: tutorId });
+        const userByEmail = await User.findOne({
+          email: { $regex: new RegExp(`^${escapeRegexPattern(tutorEmail)}$`, 'i') },
+        });
+
+        let resolvedUser: any = userByTutorId || userByEmail || null;
+
+        if (!resolvedUser) {
+          const passwordHash = await hashPassword(createTemporaryTutorPassword());
+          await User.create({
+            id: tutorId,
+            firstName,
+            lastName,
+            email: tutorEmail,
+            password: passwordHash,
+            role: 'tutor',
+            ...(tutorAvatar ? { avatar: tutorAvatar } : {}),
+          });
+          usersCreated += 1;
+        } else {
+          if (
+            userByTutorId
+            && userByEmail
+            && String((userByTutorId as any)._id) !== String((userByEmail as any)._id)
+          ) {
+            conflicts += 1;
+            resolvedUser = userByTutorId;
+            console.warn(
+              `[Startup] Tutor account sync found duplicate users for tutor ${tutorId} (${tutorEmail}); keeping user id ${String((userByTutorId as any).id || tutorId)}.`
+            );
+          } else if (
+            !userByTutorId
+            && userByEmail
+            && String((userByEmail as any).id || '').trim() !== tutorId
+          ) {
+            idMismatches += 1;
+            console.warn(
+              `[Startup] Tutor account sync found existing user id ${String((userByEmail as any).id)} for tutor id ${tutorId} via email ${tutorEmail}.`
+            );
+          }
+
+          let userNeedsUpdate = false;
+
+          if (resolvedUser.role !== 'tutor') {
+            resolvedUser.role = 'tutor';
+            userNeedsUpdate = true;
+          }
+
+          const existingUserEmail = normalizeEmailAddress(resolvedUser.email);
+          if (!existingUserEmail) {
+            resolvedUser.email = tutorEmail;
+            userNeedsUpdate = true;
+          } else if (existingUserEmail !== tutorEmail && !userByEmail) {
+            resolvedUser.email = tutorEmail;
+            userNeedsUpdate = true;
+          }
+
+          if (!normalizeNameValue(resolvedUser.firstName)) {
+            resolvedUser.firstName = firstName;
+            userNeedsUpdate = true;
+          }
+
+          if (!normalizeNameValue(resolvedUser.lastName)) {
+            resolvedUser.lastName = lastName;
+            userNeedsUpdate = true;
+          }
+
+          if (!String(resolvedUser.avatar || '').trim() && tutorAvatar) {
+            resolvedUser.avatar = tutorAvatar;
+            userNeedsUpdate = true;
+          }
+
+          if (userNeedsUpdate) {
+            await resolvedUser.save();
+            usersUpdated += 1;
+          }
+        }
+
+        let tutorNeedsUpdate = false;
+        if (String((tutor as any).role || '').trim() !== 'tutor') {
+          (tutor as any).role = 'tutor';
+          tutorNeedsUpdate = true;
+        }
+
+        if (normalizeEmailAddress((tutor as any).email) !== tutorEmail) {
+          (tutor as any).email = tutorEmail;
+          tutorNeedsUpdate = true;
+        }
+
+        if (!normalizeNameValue((tutor as any).name)) {
+          (tutor as any).name = normalizedTutorName;
+          tutorNeedsUpdate = true;
+        }
+
+        if (tutorNeedsUpdate) {
+          await tutor.save();
+          tutorsNormalized += 1;
+        }
+      } catch (tutorError) {
+        failed += 1;
+        console.warn('[Startup] Tutor account sync skipped one tutor due to an error:', tutorError);
       }
     }
-    console.log(`Migrated ${MOCK_TUTORS.length} tutors`);
 
-    // Migrate reviews
-    for (const reviewData of MOCK_REVIEWS) {
-      const existingReview = await Review.findOne({ id: reviewData.id });
-      if (!existingReview) {
-        await Review.create(reviewData);
-      }
+    if (usersCreated || usersUpdated || tutorsNormalized || skipped || idMismatches || conflicts || failed) {
+      console.log(
+        `[Startup] Tutor account sync summary: scanned=${tutors.length}, usersCreated=${usersCreated}, usersUpdated=${usersUpdated}, tutorsNormalized=${tutorsNormalized}, skipped=${skipped}, idMismatches=${idMismatches}, conflicts=${conflicts}, failed=${failed}`
+      );
     }
-    console.log(`Migrated ${MOCK_REVIEWS.length} reviews`);
-
-    // Migrate courses
-    for (const courseData of MOCK_COURSES) {
-      const existingCourse = await Course.findOne({ id: courseData.id });
-      if (!existingCourse) {
-        await Course.create(courseData);
-      }
-    }
-    console.log(`Migrated ${MOCK_COURSES.length} courses`);
-
-    // Migrate resources
-    for (const resourceData of MOCK_RESOURCES) {
-      const existingResource = await Resource.findOne({ id: resourceData.id });
-      if (!existingResource) {
-        await Resource.create(resourceData);
-      }
-    }
-    console.log(`Migrated ${MOCK_RESOURCES.length} resources`);
-
   } catch (error) {
-    console.log('Mock data migration failed:', (error as Error).message);
+    console.log('Tutor account sync skipped or failed:', (error as Error).message);
   }
 }
 
@@ -1448,8 +1594,8 @@ async function startServer() {
   // Migrate existing users from JSON to MongoDB if needed
   await migrateUsers();
 
-  // Migrate mock data to MongoDB if needed
-  await migrateMockData();
+  // Ensure every tutor profile has a real login account in Users.
+  await syncTutorProfilesToUserAccounts();
 
   // Keep legacy courses compatible with free/paid access rules.
   await normalizeCourseAccessData();

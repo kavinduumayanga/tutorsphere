@@ -20,7 +20,7 @@
     "src/database.ts",
     "src/models/**/*.ts",
     "src/server/**/*.ts",
-    "src/data/mockData.ts",
+    "src/data/**/*.ts",
     "src/types.ts"
   ],
   "exclude": [

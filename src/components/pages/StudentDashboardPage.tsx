@@ -10,6 +10,7 @@ import {
   TrendingUp,
   Settings,
   Search,
+  Award,
 } from 'lucide-react';
 
 interface SessionRatingDraft {
@@ -289,9 +290,9 @@ export const StudentDashboardPage: React.FC<StudentDashboardPageProps> = (props)
                           <button
                             type="button"
                             onClick={() => handleShowCertificateModal(enrollment, course.title)}
-                            className="flex-1 px-3 py-2 rounded-lg text-xs font-bold bg-emerald-50 border border-emerald-100 text-emerald-700 hover:bg-emerald-100 transition-colors shadow-sm"
+                            className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold text-amber-900 border border-amber-200 bg-gradient-to-r from-amber-100 via-amber-200 to-yellow-200 hover:from-amber-200 hover:via-amber-200 hover:to-yellow-200 transition-colors shadow-sm"
                           >
-                            Certificate
+                            <Award className="w-3.5 h-3.5" /> Get Certificate
                           </button>
                         )}
                       </div>

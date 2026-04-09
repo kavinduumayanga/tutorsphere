@@ -298,32 +298,6 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
                   <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-4 md:p-5 flex flex-col gap-3">
                     <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Actions</p>
 
-                    {booking.status === 'completed' && (
-                      <div className="w-full">
-                        {existingReview ? (
-                          <div className="bg-white border border-slate-200 p-3 rounded-xl flex flex-col gap-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-black tracking-wider uppercase text-slate-400">Your Review</span>
-                              <div className="flex items-center gap-0.5">
-                                {[1, 2, 3, 4, 5].map((val) => (
-                                  <Star key={val} className={`w-3.5 h-3.5 ${val <= existingReview.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-200'}`} />
-                                ))}
-                              </div>
-                            </div>
-                            {existingReview.comment && <p className="text-xs font-medium text-slate-600 italic line-clamp-2">"{existingReview.comment}"</p>}
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setReviewModalBooking(booking)}
-                            className="w-full inline-flex justify-center items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors shadow-sm border border-indigo-100"
-                          >
-                            <Star className="w-4 h-4" /> Give Review
-                          </button>
-                        )}
-                      </div>
-                    )}
-
                     {canJoinMeeting ? (
                       <a
                         href={booking.meetingLink}
@@ -352,6 +326,32 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
                       >
                         <X className="w-4 h-4" /> Cancel Session
                       </button>
+                    )}
+
+                    {booking.status === 'completed' && (
+                      <div className="w-full">
+                        {existingReview ? (
+                          <div className="bg-white border border-slate-200 p-3 rounded-xl flex flex-col gap-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-black tracking-wider uppercase text-slate-400">Your Review</span>
+                              <div className="flex items-center gap-0.5">
+                                {[1, 2, 3, 4, 5].map((val) => (
+                                  <Star key={val} className={`w-3.5 h-3.5 ${val <= existingReview.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-200'}`} />
+                                ))}
+                              </div>
+                            </div>
+                            {existingReview.comment && <p className="text-xs font-medium text-slate-600 italic line-clamp-2">"{existingReview.comment}"</p>}
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setReviewModalBooking(booking)}
+                            className="w-full inline-flex justify-center items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors shadow-sm border border-indigo-100"
+                          >
+                            <Star className="w-4 h-4" /> Give Review
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>

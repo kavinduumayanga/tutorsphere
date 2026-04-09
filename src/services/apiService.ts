@@ -15,6 +15,10 @@ import {
   AppNotification,
   WithdrawalRequest,
   WithdrawalSummary,
+  MessageConversation,
+  DirectMessage,
+  MessageConversationsResponse,
+  ConversationMessagesResponse,
 } from '../types';
 import { normalizeTutorSubjects } from '../data/tutorSubjects';
 
@@ -952,6 +956,143 @@ class ApiService {
       method: 'PUT',
       body: JSON.stringify({ userId }),
     });
+  }
+
+  async getMessageConversations(userId: string, search?: string): Promise<MessageConversationsResponse> {
+    const params = new URLSearchParams();
+    if (userId && userId.trim()) {
+      params.set('userId', userId.trim());
+    }
+    if (search && search.trim()) {
+      params.set('search', search.trim());
+    }
+
+    const query = params.toString();
+    return this.request(`/messages/conversations${query ? `?${query}` : ''}`);
+  }
+
+  async getMessageUnreadCount(userId: string): Promise<{ totalUnreadCount: number }> {
+    const params = new URLSearchParams();
+    if (userId && userId.trim()) {
+      params.set('userId', userId.trim());
+    }
+
+    const query = params.toString();
+    return this.request(`/messages/unread-count${query ? `?${query}` : ''}`);
+  }
+
+  async pingMessagePresence(userId: string): Promise<{ isOnline: boolean; lastActiveAt: string | null }> {
+    return this.request('/messages/presence/ping', {
+      method: 'POST',
+      body: JSON.stringify({ userId }),
+    });
+  }
+
+  async openDirectConversation(
+    participantUserId: string,
+    userId: string
+  ): Promise<{ conversation: MessageConversation; created: boolean }> {
+    return this.request('/messages/conversations/direct', {
+      method: 'POST',
+      body: JSON.stringify({ participantUserId, userId }),
+    });
+  }
+
+  async getConversationMessages(
+    conversationId: string,
+    userId: string,
+    options?: { limit?: number; before?: string }
+  ): Promise<ConversationMessagesResponse> {
+    const params = new URLSearchParams();
+
+    if (userId && userId.trim()) {
+      params.set('userId', userId.trim());
+    }
+
+    if (typeof options?.limit === 'number' && Number.isFinite(options.limit) && options.limit > 0) {
+      params.set('limit', String(Math.floor(options.limit)));
+    }
+
+    if (typeof options?.before === 'string' && options.before.trim()) {
+      params.set('before', options.before.trim());
+    }
+
+    const query = params.toString();
+    return this.request(`/messages/conversations/${encodeURIComponent(conversationId)}/messages${query ? `?${query}` : ''}`);
+  }
+
+  async sendConversationMessage(
+    conversationId: string,
+    content: string,
+    userId: string
+  ): Promise<{ message: DirectMessage; conversation: MessageConversation; totalUnreadCount: number }> {
+    return this.request(`/messages/conversations/${encodeURIComponent(conversationId)}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ content, userId }),
+    });
+  }
+
+  async markConversationAsRead(
+    conversationId: string,
+    userId: string
+  ): Promise<{ conversationId: string; unreadCount: number; modifiedCount: number; totalUnreadCount: number }> {
+    return this.request(`/messages/conversations/${encodeURIComponent(conversationId)}/read`, {
+      method: 'POST',
+      body: JSON.stringify({ userId }),
+    });
+  }
+
+  async deleteConversationMessage(
+    conversationId: string,
+    messageId: string,
+    userId: string
+  ): Promise<{ message: DirectMessage; conversation: MessageConversation; totalUnreadCount: number }> {
+    const params = new URLSearchParams();
+    if (userId && userId.trim()) {
+      params.set('userId', userId.trim());
+    }
+
+    const query = params.toString();
+    return this.request(
+      `/messages/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}${query ? `?${query}` : ''}`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
+  async deleteMessageConversation(
+    conversationId: string,
+    userId: string
+  ): Promise<{ conversationId: string; deletedMessageCount: number; totalUnreadCount: number }> {
+    const params = new URLSearchParams();
+    if (userId && userId.trim()) {
+      params.set('userId', userId.trim());
+    }
+
+    const query = params.toString();
+    const deleteEndpoint = `/messages/conversations/${encodeURIComponent(conversationId)}${query ? `?${query}` : ''}`;
+
+    try {
+      return await this.request(deleteEndpoint, {
+        method: 'DELETE',
+      });
+    } catch (error) {
+      const message = String(error instanceof Error ? error.message : error || '').toLowerCase();
+      const shouldFallback = message.includes('not found') || message.includes('404');
+
+      if (!shouldFallback) {
+        throw error;
+      }
+
+      return this.request(
+        `/messages/conversations/${encodeURIComponent(conversationId)}/delete`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ userId }),
+        }
+      );
+    }
   }
 
   // Question methods

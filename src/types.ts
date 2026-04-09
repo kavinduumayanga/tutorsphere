@@ -27,6 +27,55 @@ export interface AppNotification {
   relatedEntityId?: string;
 }
 
+export interface MessagingUserSummary {
+  id: string;
+  firstName: string;
+  lastName: string;
+  role: UserRole;
+  avatar?: string;
+  isOnline?: boolean;
+  lastSeenAt?: string | null;
+}
+
+export interface MessageConversation {
+  id: string;
+  studentId: string;
+  tutorId: string;
+  otherParticipant: MessagingUserSummary;
+  lastMessagePreview: string;
+  lastMessageAt?: string | null;
+  lastMessageSenderId?: string;
+  unreadCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DirectMessage {
+  id: string;
+  conversationId: string;
+  senderId: string;
+  recipientId: string;
+  content: string;
+  isRead: boolean;
+  isDeleted?: boolean;
+  deletedAt?: string | null;
+  deletedBy?: string;
+  readAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MessageConversationsResponse {
+  conversations: MessageConversation[];
+  totalUnreadCount: number;
+}
+
+export interface ConversationMessagesResponse {
+  conversation: MessageConversation;
+  messages: DirectMessage[];
+  hasMore: boolean;
+}
+
 export interface User {
   id: string;
   firstName: string;

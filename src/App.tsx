@@ -77,10 +77,11 @@ import { TutorSessionsPage } from './components/pages/TutorSessionsPage';
 import { StudentSessionsPage } from './components/pages/StudentSessionsPage';
 import { NotificationBell } from './components/common/NotificationBell';
 import { NotificationsPage } from './components/pages/NotificationsPage';
+import { MessagesPage } from './components/pages/MessagesPage';
 
 const STEM_SUBJECTS: string[] = [...ALLOWED_TUTOR_SUBJECTS];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'tutorSessions' | 'studentSessions' | 'earnings' | 'settings' | 'notifications' | 'tutorProfile' | 'tutorBooking' | 'about';
+type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'tutorSessions' | 'studentSessions' | 'messages' | 'earnings' | 'settings' | 'notifications' | 'tutorProfile' | 'tutorBooking' | 'about';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
@@ -99,6 +100,7 @@ const NAV_LABELS: Record<Tab, string> = {
   dashboard: 'Dashboard',
   tutorSessions: 'Tutor Sessions',
   studentSessions: 'My Sessions',
+  messages: 'Messages',
   earnings: 'Earnings',
   settings: 'Settings',
   notifications: 'Notifications',
@@ -126,11 +128,11 @@ const getAllowedTabs = (user: AppUser | null): Tab[] => {
   }
 
   if (user.role === 'student') {
-    return ['home', 'tutors', 'questions', 'courses', 'resources', 'quizzes', 'dashboard', 'studentSessions', 'settings', 'notifications', 'about'];
+    return ['home', 'tutors', 'questions', 'courses', 'resources', 'quizzes', 'dashboard', 'studentSessions', 'messages', 'settings', 'notifications', 'about'];
   }
 
   if (user.role === 'tutor') {
-    return ['home', 'dashboard', 'tutorSessions', 'earnings', 'manageAvailability', 'register', 'courses', 'resources', 'quizzes', 'settings', 'notifications', 'about'];
+    return ['home', 'dashboard', 'tutorSessions', 'messages', 'earnings', 'manageAvailability', 'register', 'courses', 'resources', 'quizzes', 'settings', 'notifications', 'about'];
   }
 
   return ['home', 'about'];
@@ -420,8 +422,10 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('home');
   const [viewingTutorId, setViewingTutorId] = useState<string | null>(null);
   const [bookingTutorId, setBookingTutorId] = useState<string | null>(null);
+  const [pendingMessageParticipantId, setPendingMessageParticipantId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
@@ -589,6 +593,43 @@ export default function App() {
     }, 25000);
 
     return () => {
+      window.clearInterval(pollIntervalId);
+    };
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (!currentUser?.id) {
+      setUnreadMessageCount(0);
+      setPendingMessageParticipantId(null);
+      return;
+    }
+
+    let isCancelled = false;
+
+    const loadUnreadMessageCount = async (silent = false) => {
+      try {
+        const response = await apiService.getMessageUnreadCount(currentUser.id);
+        if (isCancelled) {
+          return;
+        }
+
+        const nextUnreadCount = Math.max(0, Number(response.totalUnreadCount || 0));
+        setUnreadMessageCount(nextUnreadCount);
+      } catch (error) {
+        if (!silent) {
+          console.error('Failed to load unread message count:', error);
+        }
+      }
+    };
+
+    void loadUnreadMessageCount();
+
+    const pollIntervalId = window.setInterval(() => {
+      void loadUnreadMessageCount(true);
+    }, 22000);
+
+    return () => {
+      isCancelled = true;
       window.clearInterval(pollIntervalId);
     };
   }, [currentUser?.id]);
@@ -923,6 +964,9 @@ export default function App() {
     }
     if (link.includes('courses')) {
       return 'courses';
+    }
+    if (link.includes('messages')) {
+      return 'messages';
     }
     if (link.includes('settings')) {
       return 'settings';
@@ -3831,9 +3875,14 @@ export default function App() {
                         setIsUserMenuOpen(!isUserMenuOpen);
                         setIsNotificationPanelOpen(false);
                       }}
-                      className="flex items-center gap-2 text-sm font-bold text-indigo-700 bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100 hover:bg-indigo-100 transition-colors whitespace-nowrap"
+                      className="relative flex items-center gap-2 text-sm font-bold text-indigo-700 bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100 hover:bg-indigo-100 transition-colors whitespace-nowrap"
                     >
                       <User className="w-4 h-4" /> {currentUser.firstName} {currentUser.lastName}
+                      {unreadMessageCount > 0 && (
+                        <span className="absolute -right-1 -top-1 inline-flex min-w-[1.2rem] items-center justify-center rounded-full bg-indigo-600 px-1 py-0.5 text-[10px] font-black leading-none text-white">
+                          {unreadMessageCount > 9 ? '9+' : unreadMessageCount}
+                        </span>
+                      )}
                     </button>
 
                     {isUserMenuOpen && (
@@ -3844,6 +3893,20 @@ export default function App() {
                         >
                           <User className="w-4 h-4" />
                           Dashboard
+                        </button>
+                        <button
+                          onClick={() => { setActiveTab('messages'); setIsUserMenuOpen(false) }}
+                          className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center justify-between gap-2"
+                        >
+                          <span className="inline-flex items-center gap-2">
+                            <MessageCircle className="w-4 h-4" />
+                            Messages
+                          </span>
+                          {unreadMessageCount > 0 && (
+                            <span className="inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-indigo-600 px-1.5 py-0.5 text-[10px] font-black text-white">
+                              {unreadMessageCount > 9 ? '9+' : unreadMessageCount}
+                            </span>
+                          )}
                         </button>
                         {isTutor && currentTutor && (
                           <button
@@ -4590,6 +4653,10 @@ export default function App() {
               onBookSession={(id) => {
                 setBookingTutorId(id);
                 setActiveTab('tutorBooking');
+              }}
+              onMessageTutor={(id) => {
+                setPendingMessageParticipantId(id);
+                setActiveTab('messages');
               }}
               isLoggedIn={!!currentUser}
               isStudent={isStudent}
@@ -5619,6 +5686,17 @@ export default function App() {
               handleHideBookingForCurrentUser={handleHideBookingForCurrentUser}
               handleStudentCancelBooking={handleStudentCancelBooking}
               handleSubmitSessionRating={handleSubmitSessionRating}
+            />
+          )}
+
+          {activeTab === 'messages' && currentUser && (
+            <MessagesPage
+              currentUser={currentUser}
+              initialParticipantId={pendingMessageParticipantId}
+              onInitialParticipantHandled={() => {
+                setPendingMessageParticipantId(null);
+              }}
+              onUnreadCountChange={setUnreadMessageCount}
             />
           )}
 

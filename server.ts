@@ -25,9 +25,12 @@ import { CourseCoupon } from "./src/models/CourseCoupon.js";
 import { CourseCouponUsage } from "./src/models/CourseCouponUsage.js";
 import { Notification } from "./src/models/Notification.js";
 import { WithdrawalRequest } from "./src/models/WithdrawalRequest.js";
+import { MessageConversation } from "./src/models/MessageConversation.js";
+import { DirectMessage } from "./src/models/DirectMessage.js";
 import { quizChatbotRouter } from "./src/server/quiz-chatbot/chatController.js";
 import { faqChatbotRouter } from "./src/server/faq-chatbot/chatController.js";
 import { authRouter } from "./src/server/auth/authRoutes.js";
+import { messagingRouter } from "./src/server/messages/messageRoutes.js";
 import {
   hashPassword,
   shouldUpgradePasswordHash,
@@ -1144,6 +1147,7 @@ async function startServer() {
   app.use('/api/quiz-chatbot', quizChatbotRouter);
   app.use('/api/faq-chatbot', faqChatbotRouter);
   app.use('/api/auth', authRouter);
+  app.use('/api/messages', messagingRouter);
   console.log('[Startup] Core route setup completed.');
 
   app.post('/api/uploads/course-thumbnail', handleCourseThumbnailUpload, async (req, res) => {
@@ -1478,6 +1482,8 @@ async function startServer() {
 
       // Remove tutor profile if one exists (safe no-op for students).
       await Tutor.deleteMany({ id });
+      await MessageConversation.deleteMany({ participantIds: id });
+      await DirectMessage.deleteMany({ $or: [{ senderId: id }, { recipientId: id }] });
       await Notification.deleteMany({ userId: id });
       await User.deleteOne({ id });
 

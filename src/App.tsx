@@ -2790,6 +2790,25 @@ export default function App() {
     return 0;
   };
 
+  const getBookingLatestActivityTimestamp = (booking: Booking): number => {
+    const updatedTimestamp = Date.parse(String(booking.updatedAt || ''));
+    if (!Number.isNaN(updatedTimestamp)) {
+      return updatedTimestamp;
+    }
+
+    const createdTimestamp = Date.parse(String(booking.createdAt || ''));
+    if (!Number.isNaN(createdTimestamp)) {
+      return createdTimestamp;
+    }
+
+    const paidTimestamp = Date.parse(String(booking.paidAt || ''));
+    if (!Number.isNaN(paidTimestamp)) {
+      return paidTimestamp;
+    }
+
+    return getBookingSortTimestamp(booking);
+  };
+
   const isPastSession = (booking: Booking): boolean => {
     if (booking.status === 'completed') {
       return true;
@@ -3273,16 +3292,22 @@ export default function App() {
         const past = isPastSession(booking);
         return timelineFilter === 'past' ? past : !past;
       })
-      .sort((a, b) => getBookingSortTimestamp(b) - getBookingSortTimestamp(a));
+      .sort((a, b) => getBookingLatestActivityTimestamp(b) - getBookingLatestActivityTimestamp(a));
   };
 
   const tutorDashboardBookings = useMemo(
-    () => bookings.filter((booking) => !booking.hiddenForTutor),
+    () =>
+      bookings
+        .filter((booking) => !booking.hiddenForTutor)
+        .sort((a, b) => getBookingLatestActivityTimestamp(b) - getBookingLatestActivityTimestamp(a)),
     [bookings]
   );
 
   const studentDashboardBookings = useMemo(
-    () => bookings.filter((booking) => !booking.hiddenForStudent),
+    () =>
+      bookings
+        .filter((booking) => !booking.hiddenForStudent)
+        .sort((a, b) => getBookingLatestActivityTimestamp(b) - getBookingLatestActivityTimestamp(a)),
     [bookings]
   );
 

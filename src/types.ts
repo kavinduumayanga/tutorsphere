@@ -75,6 +75,8 @@ export interface Booking {
   paidAt?: string;
   hiddenForTutor?: boolean;
   hiddenForStudent?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface Question {

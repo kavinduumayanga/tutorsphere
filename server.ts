@@ -3,8 +3,10 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs/promises";
+import { Readable } from "stream";
 import dotenv from "dotenv";
 import multer from "multer";
+import Busboy from "busboy";
 import cors from "cors";
 import session from "express-session";
 import MongoStore from "connect-mongo";
@@ -39,6 +41,15 @@ import {
 } from "./src/server/auth/passwordUtils.js";
 import { loadSecurityConfig } from "./src/server/config/securityConfig.js";
 import { ALLOWED_TUTOR_SUBJECTS, normalizeTutorSubjects } from "./src/data/tutorSubjects.js";
+import {
+  deleteFile as deleteBlobFile,
+  extractBlobNameFromUrl,
+  getLargeUploadTuning,
+  optimizeImageBuffer,
+  replaceFile,
+  uploadLargeFileStream,
+  uploadSmallFile,
+} from "./src/server/storage/azureBlobService.js";
 
 console.log('[Startup] Loading environment variables...');
 const dotenvResult = dotenv.config({ quiet: true });
@@ -51,20 +62,86 @@ if (dotenvResult.error) {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const APP_ROOT = path.basename(__dirname) === 'dist' ? path.resolve(__dirname, '..') : __dirname;
-const UPLOADS_DIR = path.join(APP_ROOT, 'uploads');
 const REMEMBER_ME_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const WITHDRAWAL_PLATFORM_FEE_RATE = 0.12;
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, UPLOADS_DIR);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+const AZURE_BLOB_CONTAINER_PROFILE_IMAGES = String(process.env.AZURE_BLOB_CONTAINER_PROFILE_IMAGES || '').trim();
+const AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS = String(process.env.AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS || '').trim();
+const AZURE_BLOB_CONTAINER_VIDEOS = String(process.env.AZURE_BLOB_CONTAINER_VIDEOS || '').trim();
+const AZURE_BLOB_CONTAINER_RESOURCES = String(process.env.AZURE_BLOB_CONTAINER_RESOURCES || '').trim();
+const AZURE_BLOB_CONTAINER_RECORDED_LESSONS = String(process.env.AZURE_BLOB_CONTAINER_RECORDED_LESSONS || '').trim();
+const AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES = String(process.env.AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES || '').trim();
+
+const toSafePositiveInteger = (
+  value: unknown,
+  fallbackValue: number,
+  minimumValue: number,
+  maximumValue?: number
+): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < minimumValue) {
+    return fallbackValue;
   }
+
+  const rounded = Math.floor(parsed);
+  if (maximumValue !== undefined) {
+    return Math.min(rounded, maximumValue);
+  }
+
+  return rounded;
+};
+
+const AVATAR_IMAGE_MAX_WIDTH = toSafePositiveInteger(process.env.AZURE_IMAGE_AVATAR_MAX_WIDTH, 512, 64, 4096);
+const AVATAR_IMAGE_MAX_HEIGHT = toSafePositiveInteger(process.env.AZURE_IMAGE_AVATAR_MAX_HEIGHT, 512, 64, 4096);
+const THUMBNAIL_IMAGE_MAX_WIDTH = toSafePositiveInteger(process.env.AZURE_IMAGE_THUMBNAIL_MAX_WIDTH, 1280, 64, 8192);
+const THUMBNAIL_IMAGE_MAX_HEIGHT = toSafePositiveInteger(process.env.AZURE_IMAGE_THUMBNAIL_MAX_HEIGHT, 720, 64, 8192);
+const OPTIMIZED_IMAGE_QUALITY = toSafePositiveInteger(process.env.AZURE_IMAGE_QUALITY, 82, 40, 95);
+
+const getRequiredContainerName = (containerName: string, envKey: string): string => {
+  const normalized = String(containerName || '').trim();
+  if (!normalized) {
+    throw new Error(`${envKey} environment variable is required for Azure Blob Storage uploads.`);
+  }
+
+  return normalized;
+};
+
+const resolveBlobNameFromMetadataOrUrl = (
+  explicitBlobName: unknown,
+  assetUrl: unknown,
+  containerName: string
+): string | undefined => {
+  const normalizedBlobName = String(explicitBlobName || '').trim();
+  if (normalizedBlobName) {
+    return normalizedBlobName;
+  }
+
+  return extractBlobNameFromUrl(String(assetUrl || '').trim(), containerName);
+};
+
+const isHttpUrl = (value: string): boolean => /^https?:\/\//i.test(value.trim());
+
+type UploadResponseFileMeta = {
+  originalname: string;
+  size: number;
+  mimetype: string;
+};
+
+const toUploadedAssetResponse = (
+  uploaded: { blobUrl: string; blobName: string },
+  file: UploadResponseFileMeta
+) => ({
+  path: uploaded.blobUrl,
+  url: uploaded.blobUrl,
+  blobUrl: uploaded.blobUrl,
+  blobName: uploaded.blobName,
+  originalName: file.originalname,
+  size: file.size,
+  mimeType: file.mimetype,
 });
+
+// Configure multer for file uploads
+const storage = multer.memoryStorage();
 
 type UploadMiddlewareConfig = {
   fieldName: string;
@@ -102,6 +179,202 @@ const createSingleFileUploadMiddleware = (config: UploadMiddlewareConfig) => {
 
       return res.status(400).json({ error: error.message || config.genericErrorMessage });
     });
+  };
+};
+
+type FileValidationShape = {
+  originalname: string;
+  mimetype: string;
+};
+
+type StreamUploadConfig = {
+  fieldName: string;
+  maxFileSizeMB: number;
+  missingFileMessage: string;
+  invalidTypeMessage: string;
+  sizeExceededMessage: string;
+  genericErrorMessage: string;
+  containerName: string;
+  containerEnvKey: string;
+  isAllowedFile: (file: FileValidationShape) => boolean;
+};
+
+const createStreamUploadHandler = (config: StreamUploadConfig) => {
+  return async (req: express.Request, res: express.Response) => {
+    try {
+      const containerName = getRequiredContainerName(config.containerName, config.containerEnvKey);
+      const maxFileSizeBytes = config.maxFileSizeMB * 1024 * 1024;
+      const { blockSizeBytes, maxConcurrency } = getLargeUploadTuning();
+
+      let hasTargetFile = false;
+      let receivedBytes = 0;
+      let parseFailure: Error | null = null;
+      let asyncUploadFailure: Error | null = null;
+      let uploadPromise: Promise<{ blobUrl: string; blobName: string }> | null = null;
+      let uploadFileMeta: UploadResponseFileMeta | null = null;
+
+      const uploadResult = await new Promise<{ uploaded: { blobUrl: string; blobName: string }; fileMeta: UploadResponseFileMeta }>((resolve, reject) => {
+        const busboy = Busboy({
+          headers: req.headers,
+          limits: {
+            files: 1,
+            fileSize: maxFileSizeBytes,
+            fields: 32,
+          },
+        });
+
+        busboy.on('file', (fieldName: string, file: Readable, info: any) => {
+          const originalname = String(info?.filename || 'file').trim() || 'file';
+          const mimetype = String(info?.mimeType || info?.mimetype || 'application/octet-stream').trim() || 'application/octet-stream';
+
+          if (fieldName !== config.fieldName) {
+            file.resume();
+            return;
+          }
+
+          hasTargetFile = true;
+          const validationFile: FileValidationShape = { originalname, mimetype };
+          if (!config.isAllowedFile(validationFile)) {
+            parseFailure = new Error(config.invalidTypeMessage);
+            file.resume();
+            return;
+          }
+
+          uploadFileMeta = {
+            originalname,
+            mimetype,
+            size: 0,
+          };
+
+          file.on('data', (chunk: Buffer) => {
+            receivedBytes += chunk.length;
+          });
+
+          file.on('limit', () => {
+            parseFailure = new Error(config.sizeExceededMessage);
+          });
+
+          file.on('error', (error) => {
+            asyncUploadFailure = error instanceof Error ? error : new Error(config.genericErrorMessage);
+          });
+
+          uploadPromise = uploadLargeFileStream(
+            file,
+            originalname,
+            containerName,
+            mimetype,
+            { blockSizeBytes, maxConcurrency }
+          );
+
+          uploadPromise.catch((error) => {
+            asyncUploadFailure = error instanceof Error ? error : new Error(config.genericErrorMessage);
+          });
+        });
+
+        busboy.on('error', (error) => reject(error));
+
+        busboy.on('finish', () => {
+          if (parseFailure && !uploadPromise) {
+            return reject(parseFailure);
+          }
+
+          if (!hasTargetFile) {
+            return reject(new Error(config.missingFileMessage));
+          }
+
+          if (!uploadPromise || !uploadFileMeta) {
+            return reject(new Error(config.genericErrorMessage));
+          }
+
+          uploadFileMeta.size = receivedBytes;
+
+          uploadPromise
+            .then(async (uploaded) => {
+              if (parseFailure || asyncUploadFailure) {
+                try {
+                  await deleteBlobFile(uploaded.blobName, containerName);
+                } catch (cleanupError) {
+                  console.warn('Failed to cleanup partially uploaded blob after stream upload error:', {
+                    blobName: uploaded.blobName,
+                    containerName,
+                    cleanupError,
+                  });
+                }
+
+                return reject(parseFailure || asyncUploadFailure || new Error(config.genericErrorMessage));
+              }
+
+              resolve({
+                uploaded,
+                fileMeta: uploadFileMeta as UploadResponseFileMeta,
+              });
+            })
+            .catch((error) => reject(error));
+        });
+
+        req.pipe(busboy);
+      });
+
+      return res.json(toUploadedAssetResponse(uploadResult.uploaded, uploadResult.fileMeta));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : config.genericErrorMessage;
+      const isClientError = [
+        config.missingFileMessage,
+        config.invalidTypeMessage,
+        config.sizeExceededMessage,
+      ].includes(message);
+
+      if (isClientError) {
+        return res.status(400).json({ error: message });
+      }
+
+      console.error(`${config.fieldName} stream upload error:`, error);
+      return res.status(500).json({ error: config.genericErrorMessage });
+    }
+  };
+};
+
+const optimizeAvatarImageUpload = async (
+  file: Express.Multer.File
+): Promise<UploadResponseFileMeta & { buffer: Buffer; optimizedFileName: string }> => {
+  const optimized = await optimizeImageBuffer(
+    file.buffer,
+    file.originalname || 'avatar',
+    file.mimetype,
+    {
+      maxWidth: AVATAR_IMAGE_MAX_WIDTH,
+      maxHeight: AVATAR_IMAGE_MAX_HEIGHT,
+      quality: OPTIMIZED_IMAGE_QUALITY,
+    }
+  );
+
+  return {
+    originalname: file.originalname,
+    mimetype: optimized.mimeType,
+    size: optimized.size,
+    optimizedFileName: optimized.fileName,
+    buffer: optimized.buffer,
+  };
+};
+
+const optimizeThumbnailImageUpload = async (file: Express.Multer.File): Promise<UploadResponseFileMeta & { buffer: Buffer; optimizedFileName: string }> => {
+  const optimized = await optimizeImageBuffer(
+    file.buffer,
+    file.originalname || 'thumbnail',
+    file.mimetype,
+    {
+      maxWidth: THUMBNAIL_IMAGE_MAX_WIDTH,
+      maxHeight: THUMBNAIL_IMAGE_MAX_HEIGHT,
+      quality: OPTIMIZED_IMAGE_QUALITY,
+    }
+  );
+
+  return {
+    originalname: file.originalname,
+    mimetype: optimized.mimeType,
+    size: optimized.size,
+    optimizedFileName: optimized.fileName,
+    buffer: optimized.buffer,
   };
 };
 
@@ -155,6 +428,22 @@ const isResourceUpload = (file: Express.Multer.File): boolean => {
   ].includes(extension);
 };
 
+const isTutorCertificateUpload = (file: Express.Multer.File): boolean => {
+  const allowedMimeTypes = new Set([
+    'application/pdf',
+    'image/png',
+    'image/jpeg',
+    'image/webp',
+  ]);
+
+  if (allowedMimeTypes.has(file.mimetype)) {
+    return true;
+  }
+
+  const extension = path.extname(file.originalname).toLowerCase();
+  return ['.pdf', '.png', '.jpg', '.jpeg', '.webp'].includes(extension);
+};
+
 const handleAvatarUpload = createSingleFileUploadMiddleware({
   fieldName: 'avatar',
   maxFileSizeMB: 5,
@@ -171,15 +460,6 @@ const handleCourseThumbnailUpload = createSingleFileUploadMiddleware({
   sizeExceededMessage: 'Course thumbnail must be less than 8MB.',
   genericErrorMessage: 'Course thumbnail upload failed.',
   isAllowedFile: isImageUpload,
-});
-
-const handleCourseVideoUpload = createSingleFileUploadMiddleware({
-  fieldName: 'video',
-  maxFileSizeMB: 500,
-  invalidTypeMessage: 'Only video files are allowed for module video uploads.',
-  sizeExceededMessage: 'Module video must be less than 500MB.',
-  genericErrorMessage: 'Course video upload failed.',
-  isAllowedFile: isVideoUpload,
 });
 
 const handleCourseResourceUpload = createSingleFileUploadMiddleware({
@@ -200,37 +480,38 @@ const handleTutorResourceUpload = createSingleFileUploadMiddleware({
   isAllowedFile: isResourceUpload,
 });
 
-const toUploadPublicPath = (filePath: string): string => {
-  return `/uploads/${path.basename(filePath)}`;
-};
+const handleTutorCertificateUpload = createSingleFileUploadMiddleware({
+  fieldName: 'certificate',
+  maxFileSizeMB: 20,
+  invalidTypeMessage: 'Unsupported tutor certificate file type. Upload PDF, PNG, JPG, or WEBP files.',
+  sizeExceededMessage: 'Tutor certificate file must be less than 20MB.',
+  genericErrorMessage: 'Tutor certificate upload failed.',
+  isAllowedFile: isTutorCertificateUpload,
+});
 
-const resolveStoredAvatarPath = (storedAvatar?: string): string | null => {
-  if (!storedAvatar) {
-    return null;
-  }
+const handleCourseVideoUpload = createStreamUploadHandler({
+  fieldName: 'video',
+  maxFileSizeMB: 500,
+  missingFileMessage: 'No video file was uploaded.',
+  invalidTypeMessage: 'Only video files are allowed for module video uploads.',
+  sizeExceededMessage: 'Module video must be less than 500MB.',
+  genericErrorMessage: 'Failed to upload course video.',
+  containerName: AZURE_BLOB_CONTAINER_VIDEOS,
+  containerEnvKey: 'AZURE_BLOB_CONTAINER_VIDEOS',
+  isAllowedFile: isVideoUpload,
+});
 
-  const directPath = path.resolve(storedAvatar);
-  if (directPath.startsWith(UPLOADS_DIR + path.sep)) {
-    return directPath;
-  }
-
-  try {
-    const parsed = new URL(storedAvatar);
-    const fileNameFromUrl = path.basename(parsed.pathname);
-    if (fileNameFromUrl.startsWith('avatar-')) {
-      return path.join(UPLOADS_DIR, fileNameFromUrl);
-    }
-  } catch {
-    // Ignore non-URL values
-  }
-
-  const fileName = path.basename(storedAvatar);
-  if (fileName.startsWith('avatar-')) {
-    return path.join(UPLOADS_DIR, fileName);
-  }
-
-  return null;
-};
+const handleRecordedLessonUpload = createStreamUploadHandler({
+  fieldName: 'lesson',
+  maxFileSizeMB: 1024,
+  missingFileMessage: 'No recorded lesson file was uploaded.',
+  invalidTypeMessage: 'Only video files are allowed for recorded lessons.',
+  sizeExceededMessage: 'Recorded lesson video must be less than 1GB.',
+  genericErrorMessage: 'Failed to upload recorded lesson file.',
+  containerName: AZURE_BLOB_CONTAINER_RECORDED_LESSONS,
+  containerEnvKey: 'AZURE_BLOB_CONTAINER_RECORDED_LESSONS',
+  isAllowedFile: isVideoUpload,
+});
 
 const createEntityId = () => Math.random().toString(36).substr(2, 9);
 
@@ -752,17 +1033,23 @@ const calculateTutorWithdrawalSummary = async (tutorId: string) => {
 type NormalizedCourseModuleResource = {
   name: string;
   url: string;
+  blobName?: string;
+  mimeType?: string;
+  size?: number;
 };
 
 type NormalizedCourseModule = {
   id: string;
   title: string;
   videoUrl: string;
+  videoBlobName?: string;
+  videoMimeType?: string;
+  videoSize?: number;
   resources: NormalizedCourseModuleResource[];
 };
 
 const isLikelyResourceUrl = (value: string): boolean => {
-  return /^https?:\/\//i.test(value) || value.startsWith('/uploads/') || value.startsWith('./') || value.startsWith('../');
+  return isHttpUrl(value) || value.startsWith('./') || value.startsWith('../') || value.startsWith('blob:');
 };
 
 const getResourceNameFromUrl = (value: string, fallback = 'Resource'): string => {
@@ -809,7 +1096,22 @@ const normalizeCourseModuleResource = (
   }
 
   const name = String(resource?.name ?? '').trim() || getResourceNameFromUrl(url, `Resource ${resourceIndex + 1}`);
-  return { name, url };
+  const blobName = String(resource?.blobName ?? '').trim();
+  const mimeType = String(resource?.mimeType ?? '').trim();
+  const parsedSize = Number(resource?.size);
+
+  const normalizedResource: NormalizedCourseModuleResource = { name, url };
+  if (blobName) {
+    normalizedResource.blobName = blobName;
+  }
+  if (mimeType) {
+    normalizedResource.mimeType = mimeType;
+  }
+  if (Number.isFinite(parsedSize) && parsedSize >= 0) {
+    normalizedResource.size = parsedSize;
+  }
+
+  return normalizedResource;
 };
 
 const normalizeCourseModules = (modules: any): NormalizedCourseModule[] => {
@@ -818,14 +1120,32 @@ const normalizeCourseModules = (modules: any): NormalizedCourseModule[] => {
   }
 
   return modules
-    .map((module: any) => ({
-      id: String(module?.id || createEntityId()).trim() || createEntityId(),
-      title: String(module?.title || '').trim(),
-      videoUrl: String(module?.videoUrl || '').trim(),
-      resources: (Array.isArray(module?.resources) ? module.resources : [])
-        .map((resource: any, resourceIndex: number) => normalizeCourseModuleResource(resource, resourceIndex))
-        .filter((resource: NormalizedCourseModuleResource | null): resource is NormalizedCourseModuleResource => Boolean(resource)),
-    }))
+    .map((module: any) => {
+      const normalizedModule: NormalizedCourseModule = {
+        id: String(module?.id || createEntityId()).trim() || createEntityId(),
+        title: String(module?.title || '').trim(),
+        videoUrl: String(module?.videoUrl || '').trim(),
+        resources: (Array.isArray(module?.resources) ? module.resources : [])
+          .map((resource: any, resourceIndex: number) => normalizeCourseModuleResource(resource, resourceIndex))
+          .filter((resource: NormalizedCourseModuleResource | null): resource is NormalizedCourseModuleResource => Boolean(resource)),
+      };
+
+      const videoBlobName = String(module?.videoBlobName ?? '').trim();
+      const videoMimeType = String(module?.videoMimeType ?? '').trim();
+      const parsedVideoSize = Number(module?.videoSize);
+
+      if (videoBlobName) {
+        normalizedModule.videoBlobName = videoBlobName;
+      }
+      if (videoMimeType) {
+        normalizedModule.videoMimeType = videoMimeType;
+      }
+      if (Number.isFinite(parsedVideoSize) && parsedVideoSize >= 0) {
+        normalizedModule.videoSize = parsedVideoSize;
+      }
+
+      return normalizedModule;
+    })
     .filter((module: NormalizedCourseModule) => module.title && module.videoUrl);
 };
 
@@ -837,7 +1157,64 @@ const normalizeCourseForResponse = (course: any) => {
   };
 };
 
-const isStoredAvatarFilePath = (avatar?: string): avatar is string => {
+const collectCourseVideoBlobNames = (modules: unknown, containerName: string): Set<string> => {
+  const blobNames = new Set<string>();
+  if (!Array.isArray(modules)) {
+    return blobNames;
+  }
+
+  for (const module of modules) {
+    const blobName = resolveBlobNameFromMetadataOrUrl(
+      (module as any)?.videoBlobName,
+      (module as any)?.videoUrl,
+      containerName
+    );
+
+    if (blobName) {
+      blobNames.add(blobName);
+    }
+  }
+
+  return blobNames;
+};
+
+const collectCourseResourceBlobNames = (modules: unknown, containerName: string): Set<string> => {
+  const blobNames = new Set<string>();
+  if (!Array.isArray(modules)) {
+    return blobNames;
+  }
+
+  for (const module of modules) {
+    const resources = Array.isArray((module as any)?.resources) ? (module as any).resources : [];
+    for (const resource of resources) {
+      const blobName = resolveBlobNameFromMetadataOrUrl(
+        (resource as any)?.blobName,
+        (resource as any)?.url ?? (resource as any)?.path,
+        containerName
+      );
+
+      if (blobName) {
+        blobNames.add(blobName);
+      }
+    }
+  }
+
+  return blobNames;
+};
+
+const deleteBlobNames = async (blobNames: Set<string>, containerName: string, context: string): Promise<void> => {
+  await Promise.all(
+    Array.from(blobNames).map(async (blobName) => {
+      try {
+        await deleteBlobFile(blobName, containerName);
+      } catch (error) {
+        console.warn(`Failed to delete blob for ${context}:`, { blobName, containerName, error });
+      }
+    })
+  );
+};
+
+const isStoredAvatarValue = (avatar?: string): avatar is string => {
   return typeof avatar === 'string' && !avatar.includes('\x00');
 };
 
@@ -849,27 +1226,14 @@ const buildAvatarResponseUrl = async (
     return undefined;
   }
 
-  if (!isStoredAvatarFilePath(user.avatar)) {
-    return `${req.protocol}://${req.get('host')}/api/auth/user/${user.id}/avatar`;
-  }
-
-  const avatarPath = resolveStoredAvatarPath(user.avatar);
-  if (!avatarPath) {
-    return `${req.protocol}://${req.get('host')}/api/auth/user/${user.id}/avatar`;
-  }
-
-  try {
-    await fs.access(avatarPath);
-    return `${req.protocol}://${req.get('host')}/api/auth/user/${user.id}/avatar`;
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') {
-      // Clean stale DB references when the file no longer exists on disk.
-      await User.updateOne({ id: user.id, avatar: user.avatar }, { $unset: { avatar: '' } });
-      return undefined;
+  if (isStoredAvatarValue(user.avatar)) {
+    const normalizedAvatar = user.avatar.trim();
+    if (normalizedAvatar) {
+      return normalizedAvatar;
     }
-    throw error;
   }
+
+  return `${req.protocol}://${req.get('host')}/api/auth/user/${user.id}/avatar`;
 };
 
 async function migrateUsers() {
@@ -1101,9 +1465,27 @@ async function startServer() {
 
   console.log('[Startup] Startup data checks completed.');
 
-  // Ensure uploads directory exists before handling multipart avatar uploads
-  await fs.mkdir(UPLOADS_DIR, { recursive: true });
-  console.log(`[Startup] Upload directory ready: ${UPLOADS_DIR}`);
+  const requiredAzureStorageEnvKeys = [
+    'AZURE_STORAGE_CONNECTION_STRING',
+    'AZURE_BLOB_CONTAINER_PROFILE_IMAGES',
+    'AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS',
+    'AZURE_BLOB_CONTAINER_VIDEOS',
+    'AZURE_BLOB_CONTAINER_RESOURCES',
+    'AZURE_BLOB_CONTAINER_RECORDED_LESSONS',
+    'AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES',
+  ];
+
+  const missingAzureStorageKeys = requiredAzureStorageEnvKeys.filter(
+    (key) => !String(process.env[key] || '').trim()
+  );
+
+  if (missingAzureStorageKeys.length > 0) {
+    throw new Error(
+      `Missing required Azure Blob Storage environment variables: ${missingAzureStorageKeys.join(', ')}`
+    );
+  }
+
+  console.log('[Startup] Azure Blob Storage configuration validated.');
 
   const app = express();
   const port = process.env.PORT || 3000;
@@ -1143,7 +1525,6 @@ async function startServer() {
 
   console.log(`[Startup] Cookie mode: secure=${isProduction}, sameSite=${sameSiteMode}, httpOnly=true`);
   console.log(`[Startup] Session store mode: ${isProduction ? 'connect-mongo' : 'memory (development)'}`);
-  app.use('/uploads', express.static(UPLOADS_DIR));
   app.use('/api/quiz-chatbot', quizChatbotRouter);
   app.use('/api/faq-chatbot', faqChatbotRouter);
   app.use('/api/auth', authRouter);
@@ -1156,35 +1537,27 @@ async function startServer() {
         return res.status(400).json({ error: 'No thumbnail file was uploaded.' });
       }
 
-      res.json({
-        path: toUploadPublicPath(req.file.path),
-        originalName: req.file.originalname,
-        size: req.file.size,
-        mimeType: req.file.mimetype,
-      });
+      const optimizedThumbnail = await optimizeThumbnailImageUpload(req.file);
+
+      const containerName = getRequiredContainerName(
+        AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS,
+        'AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS'
+      );
+      const uploaded = await uploadSmallFile(
+        optimizedThumbnail.buffer,
+        optimizedThumbnail.optimizedFileName,
+        containerName,
+        optimizedThumbnail.mimetype
+      );
+
+      res.json(toUploadedAssetResponse(uploaded, optimizedThumbnail));
     } catch (error) {
       console.error('Course thumbnail upload error:', error);
       res.status(500).json({ error: 'Failed to upload course thumbnail.' });
     }
   });
 
-  app.post('/api/uploads/course-video', handleCourseVideoUpload, async (req, res) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ error: 'No video file was uploaded.' });
-      }
-
-      res.json({
-        path: toUploadPublicPath(req.file.path),
-        originalName: req.file.originalname,
-        size: req.file.size,
-        mimeType: req.file.mimetype,
-      });
-    } catch (error) {
-      console.error('Course video upload error:', error);
-      res.status(500).json({ error: 'Failed to upload course video.' });
-    }
-  });
+  app.post('/api/uploads/course-video', handleCourseVideoUpload);
 
   app.post('/api/uploads/course-resource', handleCourseResourceUpload, async (req, res) => {
     try {
@@ -1192,12 +1565,18 @@ async function startServer() {
         return res.status(400).json({ error: 'No resource file was uploaded.' });
       }
 
-      res.json({
-        path: toUploadPublicPath(req.file.path),
-        originalName: req.file.originalname,
-        size: req.file.size,
-        mimeType: req.file.mimetype,
-      });
+      const containerName = getRequiredContainerName(
+        AZURE_BLOB_CONTAINER_RESOURCES,
+        'AZURE_BLOB_CONTAINER_RESOURCES'
+      );
+      const uploaded = await uploadSmallFile(
+        req.file.buffer,
+        req.file.originalname || 'resource',
+        containerName,
+        req.file.mimetype
+      );
+
+      res.json(toUploadedAssetResponse(uploaded, req.file));
     } catch (error) {
       console.error('Course resource upload error:', error);
       res.status(500).json({ error: 'Failed to upload course resource file.' });
@@ -1210,17 +1589,49 @@ async function startServer() {
         return res.status(400).json({ error: 'No resource file was uploaded.' });
       }
 
-      res.json({
-        path: toUploadPublicPath(req.file.path),
-        originalName: req.file.originalname,
-        size: req.file.size,
-        mimeType: req.file.mimetype,
-      });
+      const containerName = getRequiredContainerName(
+        AZURE_BLOB_CONTAINER_RESOURCES,
+        'AZURE_BLOB_CONTAINER_RESOURCES'
+      );
+      const uploaded = await uploadSmallFile(
+        req.file.buffer,
+        req.file.originalname || 'resource',
+        containerName,
+        req.file.mimetype
+      );
+
+      res.json(toUploadedAssetResponse(uploaded, req.file));
     } catch (error) {
       console.error('Tutor resource upload error:', error);
       res.status(500).json({ error: 'Failed to upload tutor resource file.' });
     }
   });
+
+  app.post('/api/uploads/tutor-certificate', handleTutorCertificateUpload, async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No certificate file was uploaded.' });
+      }
+
+      const containerName = getRequiredContainerName(
+        AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES,
+        'AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES'
+      );
+      const uploaded = await uploadSmallFile(
+        req.file.buffer,
+        req.file.originalname || 'certificate',
+        containerName,
+        req.file.mimetype
+      );
+
+      res.json(toUploadedAssetResponse(uploaded, req.file));
+    } catch (error) {
+      console.error('Tutor certificate upload error:', error);
+      res.status(500).json({ error: 'Failed to upload tutor certificate file.' });
+    }
+  });
+
+  app.post('/api/uploads/recorded-lesson', handleRecordedLessonUpload);
 
   // Auth APIs
   app.post("/api/auth/signup", async (req, res) => {
@@ -1398,23 +1809,35 @@ async function startServer() {
       if (lastName) user.lastName = lastName;
       if (phone !== undefined) user.phone = phone;
       if (req.file) {
-        const oldAvatarPath = resolveStoredAvatarPath(user.avatar);
+        const optimizedAvatar = await optimizeAvatarImageUpload(req.file);
+        const containerName = getRequiredContainerName(
+          AZURE_BLOB_CONTAINER_PROFILE_IMAGES,
+          'AZURE_BLOB_CONTAINER_PROFILE_IMAGES'
+        );
+        const previousAvatarBlobName = resolveBlobNameFromMetadataOrUrl(
+          (user as any).avatarBlobName,
+          user.avatar,
+          containerName
+        );
 
-        // Delete the old avatar file if it exists
-        if (oldAvatarPath && oldAvatarPath !== req.file.path) {
-          try {
-            await fs.unlink(oldAvatarPath);
-            console.log('Old avatar file deleted:', oldAvatarPath);
-          } catch (deleteError) {
-            const err = deleteError as NodeJS.ErrnoException;
-            if (err.code !== 'ENOENT') {
-              console.warn('Failed to delete old avatar file:', oldAvatarPath, deleteError);
-            }
-          }
-        }
+        const uploadedAvatar = await replaceFile(
+          previousAvatarBlobName,
+          optimizedAvatar.buffer,
+          optimizedAvatar.optimizedFileName,
+          containerName,
+          optimizedAvatar.mimetype
+        );
 
-        user.avatar = req.file.path;
-        console.log('Avatar uploaded:', { size: req.file.size, mimetype: req.file.mimetype, path: req.file.path });
+        user.avatar = uploadedAvatar.blobUrl;
+        (user as any).avatarBlobName = uploadedAvatar.blobName;
+        (user as any).avatarMimeType = optimizedAvatar.mimetype;
+        (user as any).avatarSize = optimizedAvatar.size;
+        console.log('Avatar uploaded to Azure Blob:', {
+          size: optimizedAvatar.size,
+          mimetype: optimizedAvatar.mimetype,
+          blobName: uploadedAvatar.blobName,
+          blobUrl: uploadedAvatar.blobUrl,
+        });
       }
 
       await user.save();
@@ -1452,12 +1875,72 @@ async function startServer() {
         return res.status(404).json({ error: "User not found" });
       }
 
-      const avatarPath = resolveStoredAvatarPath(user.avatar);
+      let avatarBlobName: string | undefined;
+      try {
+        const containerName = getRequiredContainerName(
+          AZURE_BLOB_CONTAINER_PROFILE_IMAGES,
+          'AZURE_BLOB_CONTAINER_PROFILE_IMAGES'
+        );
+        avatarBlobName = resolveBlobNameFromMetadataOrUrl(
+          (user as any).avatarBlobName,
+          user.avatar,
+          containerName
+        );
+      } catch (configError) {
+        console.warn('Profile image container configuration missing while deleting user:', configError);
+      }
 
       // Remove role-specific data first to keep dangling references out of the app.
       if (user.role === 'tutor') {
-        const tutorCourses = await Course.find({ tutorId: id }, { id: 1 });
+        const tutorCourses = await Course.find({ tutorId: id });
         const tutorCourseIds = tutorCourses.map((course) => course.id);
+
+        const thumbnailContainerName = getRequiredContainerName(
+          AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS,
+          'AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS'
+        );
+        const videoContainerName = getRequiredContainerName(
+          AZURE_BLOB_CONTAINER_VIDEOS,
+          'AZURE_BLOB_CONTAINER_VIDEOS'
+        );
+        const resourceContainerName = getRequiredContainerName(
+          AZURE_BLOB_CONTAINER_RESOURCES,
+          'AZURE_BLOB_CONTAINER_RESOURCES'
+        );
+
+        const courseThumbnailBlobNames = new Set<string>();
+        const courseVideoBlobNames = new Set<string>();
+        const courseResourceBlobNames = new Set<string>();
+
+        for (const course of tutorCourses) {
+          const thumbnailBlobName = resolveBlobNameFromMetadataOrUrl(
+            (course as any).thumbnailBlobName,
+            (course as any).thumbnail,
+            thumbnailContainerName
+          );
+          if (thumbnailBlobName) {
+            courseThumbnailBlobNames.add(thumbnailBlobName);
+          }
+
+          const courseVideoNames = collectCourseVideoBlobNames((course as any).modules, videoContainerName);
+          courseVideoNames.forEach((blobName) => courseVideoBlobNames.add(blobName));
+
+          const courseResourceNames = collectCourseResourceBlobNames((course as any).modules, resourceContainerName);
+          courseResourceNames.forEach((blobName) => courseResourceBlobNames.add(blobName));
+        }
+
+        const tutorResources = await Resource.find({ tutorId: id });
+        const tutorResourceBlobNames = new Set<string>();
+        for (const resource of tutorResources) {
+          const blobName = resolveBlobNameFromMetadataOrUrl(
+            (resource as any).blobName,
+            (resource as any).url,
+            resourceContainerName
+          );
+          if (blobName) {
+            tutorResourceBlobNames.add(blobName);
+          }
+        }
 
         if (tutorCourseIds.length > 0) {
           await CourseEnrollment.deleteMany({ courseId: { $in: tutorCourseIds } });
@@ -1467,6 +1950,27 @@ async function startServer() {
         await Resource.deleteMany({ tutorId: id });
         await Booking.deleteMany({ tutorId: id });
         await Review.deleteMany({ tutorId: id });
+
+        if (courseThumbnailBlobNames.size > 0) {
+          await deleteBlobNames(
+            courseThumbnailBlobNames,
+            thumbnailContainerName,
+            `tutor course thumbnail cleanup (${id})`
+          );
+        }
+        if (courseVideoBlobNames.size > 0) {
+          await deleteBlobNames(courseVideoBlobNames, videoContainerName, `tutor course video cleanup (${id})`);
+        }
+        if (courseResourceBlobNames.size > 0) {
+          await deleteBlobNames(
+            courseResourceBlobNames,
+            resourceContainerName,
+            `tutor course resource cleanup (${id})`
+          );
+        }
+        if (tutorResourceBlobNames.size > 0) {
+          await deleteBlobNames(tutorResourceBlobNames, resourceContainerName, `tutor resource cleanup (${id})`);
+        }
       } else {
         await Booking.deleteMany({ studentId: id });
         await Review.deleteMany({ studentId: id });
@@ -1487,14 +1991,18 @@ async function startServer() {
       await Notification.deleteMany({ userId: id });
       await User.deleteOne({ id });
 
-      if (avatarPath) {
+      if (avatarBlobName) {
         try {
-          await fs.unlink(avatarPath);
+          const containerName = getRequiredContainerName(
+            AZURE_BLOB_CONTAINER_PROFILE_IMAGES,
+            'AZURE_BLOB_CONTAINER_PROFILE_IMAGES'
+          );
+          await deleteBlobFile(avatarBlobName, containerName);
         } catch (deleteError) {
-          const err = deleteError as NodeJS.ErrnoException;
-          if (err.code !== 'ENOENT') {
-            console.warn('Failed to remove avatar during account deletion:', avatarPath, deleteError);
-          }
+          console.warn('Failed to remove avatar blob during account deletion:', {
+            avatarBlobName,
+            deleteError,
+          });
         }
       }
 
@@ -1516,41 +2024,27 @@ async function startServer() {
         return res.status(404).json({ error: "Avatar not found" });
       }
 
-      // Check if avatar is a file path (new format) or binary data (old format)
-      if (isStoredAvatarFilePath(user.avatar)) {
-        // New format: file path
-        try {
-          const avatarPath = resolveStoredAvatarPath(user.avatar);
-          if (!avatarPath) {
-            return res.status(404).json({ error: 'Avatar file not found' });
-          }
-          console.log('Reading avatar from path:', avatarPath);
-          const avatarData = await fs.readFile(avatarPath);
-
-          // Determine content type from file extension
-          const ext = path.extname(avatarPath).toLowerCase();
-          const contentType = ext === '.png' ? 'image/png' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'application/octet-stream';
-
-          res.set('Content-Type', contentType);
-          res.send(avatarData);
-        } catch (fileError) {
-          const err = fileError as NodeJS.ErrnoException;
-          if (err.code === 'ENOENT') {
-            console.warn('Avatar file missing on disk, clearing stale avatar value for user:', id);
-            await User.updateOne({ id, avatar: user.avatar }, { $unset: { avatar: '' } });
-            return res.status(404).json({ error: 'Avatar file not found' });
-          }
-
-          console.error('Error reading avatar file:', fileError);
-          return res.status(500).json({ error: 'Failed to load avatar' });
+      if (typeof user.avatar === 'string') {
+        const normalizedAvatar = user.avatar.trim();
+        if (!normalizedAvatar) {
+          return res.status(404).json({ error: 'Avatar not found' });
         }
-      } else {
-        // Old format: binary data stored in database
-        console.log('Serving legacy binary avatar data');
-        // For backward compatibility, try to serve as JPEG (most common)
-        res.set('Content-Type', 'image/jpeg');
-        res.send(user.avatar);
+
+        if (isHttpUrl(normalizedAvatar)) {
+          return res.redirect(normalizedAvatar);
+        }
+
+        if (isStoredAvatarValue(normalizedAvatar)) {
+          return res.status(404).json({
+            error: 'Legacy local avatar path is no longer available. Please upload a new profile image.',
+          });
+        }
       }
+
+      // Legacy binary avatar fallback.
+      console.log('Serving legacy binary avatar data');
+      res.set('Content-Type', 'image/jpeg');
+      res.send(user.avatar);
     } catch (error) {
       console.error("Get avatar error:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -2059,12 +2553,89 @@ async function startServer() {
         updatePayload.modules = normalizedModules;
       }
 
+      const thumbnailContainerName = getRequiredContainerName(
+        AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS,
+        'AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS'
+      );
+      const videoContainerName = getRequiredContainerName(
+        AZURE_BLOB_CONTAINER_VIDEOS,
+        'AZURE_BLOB_CONTAINER_VIDEOS'
+      );
+      const resourceContainerName = getRequiredContainerName(
+        AZURE_BLOB_CONTAINER_RESOURCES,
+        'AZURE_BLOB_CONTAINER_RESOURCES'
+      );
+
+      let staleThumbnailBlobName: string | undefined;
+      let staleVideoBlobNames = new Set<string>();
+      let staleResourceBlobNames = new Set<string>();
+
+      if (updatePayload.thumbnail !== undefined || updatePayload.thumbnailBlobName !== undefined) {
+        const existingThumbnailBlobName = resolveBlobNameFromMetadataOrUrl(
+          (existingCourse as any).thumbnailBlobName,
+          existingCourse.thumbnail,
+          thumbnailContainerName
+        );
+        const nextThumbnailValue =
+          typeof updatePayload.thumbnail === 'string' ? updatePayload.thumbnail : existingCourse.thumbnail;
+        const nextThumbnailBlobName = resolveBlobNameFromMetadataOrUrl(
+          updatePayload.thumbnailBlobName,
+          nextThumbnailValue,
+          thumbnailContainerName
+        );
+
+        if (existingThumbnailBlobName && existingThumbnailBlobName !== nextThumbnailBlobName) {
+          staleThumbnailBlobName = existingThumbnailBlobName;
+        }
+      }
+
+      if (Array.isArray(updatePayload.modules)) {
+        const existingVideoBlobNames = collectCourseVideoBlobNames((existingCourse as any).modules, videoContainerName);
+        const nextVideoBlobNames = collectCourseVideoBlobNames(updatePayload.modules, videoContainerName);
+        staleVideoBlobNames = new Set(
+          Array.from(existingVideoBlobNames).filter((blobName) => !nextVideoBlobNames.has(blobName))
+        );
+
+        const existingResourceBlobNames = collectCourseResourceBlobNames(
+          (existingCourse as any).modules,
+          resourceContainerName
+        );
+        const nextResourceBlobNames = collectCourseResourceBlobNames(updatePayload.modules, resourceContainerName);
+        staleResourceBlobNames = new Set(
+          Array.from(existingResourceBlobNames).filter((blobName) => !nextResourceBlobNames.has(blobName))
+        );
+      }
+
       const course = await Course.findOneAndUpdate(
         { id: req.params.id },
         updatePayload,
         { new: true }
       );
       if (course) {
+        if (staleThumbnailBlobName) {
+          await deleteBlobNames(
+            new Set([staleThumbnailBlobName]),
+            thumbnailContainerName,
+            `course thumbnail replacement (${course.id})`
+          );
+        }
+
+        if (staleVideoBlobNames.size > 0) {
+          await deleteBlobNames(
+            staleVideoBlobNames,
+            videoContainerName,
+            `course video replacement (${course.id})`
+          );
+        }
+
+        if (staleResourceBlobNames.size > 0) {
+          await deleteBlobNames(
+            staleResourceBlobNames,
+            resourceContainerName,
+            `course resource replacement (${course.id})`
+          );
+        }
+
         res.json(normalizeCourseForResponse(course));
       } else {
         res.status(404).json({ error: "Course not found" });
@@ -2100,11 +2671,47 @@ async function startServer() {
         return res.status(403).json({ error: "You can only delete your own courses." });
       }
 
+      const thumbnailContainerName = getRequiredContainerName(
+        AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS,
+        'AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS'
+      );
+      const videoContainerName = getRequiredContainerName(
+        AZURE_BLOB_CONTAINER_VIDEOS,
+        'AZURE_BLOB_CONTAINER_VIDEOS'
+      );
+      const resourceContainerName = getRequiredContainerName(
+        AZURE_BLOB_CONTAINER_RESOURCES,
+        'AZURE_BLOB_CONTAINER_RESOURCES'
+      );
+
+      const thumbnailBlobName = resolveBlobNameFromMetadataOrUrl(
+        (existingCourse as any).thumbnailBlobName,
+        existingCourse.thumbnail,
+        thumbnailContainerName
+      );
+      const videoBlobNames = collectCourseVideoBlobNames((existingCourse as any).modules, videoContainerName);
+      const resourceBlobNames = collectCourseResourceBlobNames((existingCourse as any).modules, resourceContainerName);
+
       const course = await Course.findOneAndDelete({ id: req.params.id });
       if (course) {
         await CourseEnrollment.deleteMany({ courseId: req.params.id });
         await CourseCoupon.deleteMany({ courseId: req.params.id });
         await CourseCouponUsage.deleteMany({ courseId: req.params.id });
+
+        if (thumbnailBlobName) {
+          await deleteBlobNames(
+            new Set([thumbnailBlobName]),
+            thumbnailContainerName,
+            `course thumbnail delete (${req.params.id})`
+          );
+        }
+        if (videoBlobNames.size > 0) {
+          await deleteBlobNames(videoBlobNames, videoContainerName, `course video delete (${req.params.id})`);
+        }
+        if (resourceBlobNames.size > 0) {
+          await deleteBlobNames(resourceBlobNames, resourceContainerName, `course resource delete (${req.params.id})`);
+        }
+
         res.json({ message: "Course deleted successfully" });
       } else {
         res.status(404).json({ error: "Course not found" });
@@ -3091,6 +3698,9 @@ async function startServer() {
       const normalizedResourceUrl = typeof resourceData?.url === 'string' ? resourceData.url.trim() : '';
       const normalizedDescription =
         typeof resourceData?.description === 'string' ? resourceData.description.trim() : '';
+      const normalizedBlobName = typeof resourceData?.blobName === 'string' ? resourceData.blobName.trim() : '';
+      const normalizedMimeType = typeof resourceData?.mimeType === 'string' ? resourceData.mimeType.trim() : '';
+      const parsedResourceSize = Number(resourceData?.size);
 
       if (!resourceData?.tutorId) {
         return res.status(400).json({ error: "tutorId is required to create a resource" });
@@ -3109,7 +3719,7 @@ async function startServer() {
       }
 
       if (!normalizedResourceUrl || !isLikelyResourceUrl(normalizedResourceUrl)) {
-        return res.status(400).json({ error: "Resource URL must be a valid URL or uploaded file path." });
+        return res.status(400).json({ error: "Resource URL must be a valid URL." });
       }
 
       const tutorUser = await User.findOne({ id: resourceData.tutorId, role: 'tutor' });
@@ -3125,6 +3735,9 @@ async function startServer() {
         subject: normalizedSubject,
         type: normalizedType,
         url: normalizedResourceUrl,
+        blobName: normalizedBlobName || undefined,
+        mimeType: normalizedMimeType || undefined,
+        size: Number.isFinite(parsedResourceSize) && parsedResourceSize >= 0 ? parsedResourceSize : undefined,
         description: normalizedDescription,
         isFree: true,
         downloadCount: 0,
@@ -3173,8 +3786,30 @@ async function startServer() {
 
         updatePayload.url = updatePayload.url.trim();
         if (!updatePayload.url || !isLikelyResourceUrl(updatePayload.url)) {
-          return res.status(400).json({ error: "Resource URL must be a valid URL or uploaded file path." });
+          return res.status(400).json({ error: "Resource URL must be a valid URL." });
         }
+      }
+
+      if (updatePayload.blobName !== undefined) {
+        if (typeof updatePayload.blobName !== 'string') {
+          return res.status(400).json({ error: "blobName must be a string when provided." });
+        }
+        updatePayload.blobName = updatePayload.blobName.trim();
+      }
+
+      if (updatePayload.mimeType !== undefined) {
+        if (typeof updatePayload.mimeType !== 'string') {
+          return res.status(400).json({ error: "mimeType must be a string when provided." });
+        }
+        updatePayload.mimeType = updatePayload.mimeType.trim();
+      }
+
+      if (updatePayload.size !== undefined) {
+        const parsedSize = Number(updatePayload.size);
+        if (!Number.isFinite(parsedSize) || parsedSize < 0) {
+          return res.status(400).json({ error: "size must be a non-negative number when provided." });
+        }
+        updatePayload.size = parsedSize;
       }
 
       if (updatePayload.title !== undefined) {
@@ -3213,12 +3848,39 @@ async function startServer() {
         return res.status(400).json({ error: "Resource owner cannot be changed." });
       }
 
+      const resourceContainerName = getRequiredContainerName(
+        AZURE_BLOB_CONTAINER_RESOURCES,
+        'AZURE_BLOB_CONTAINER_RESOURCES'
+      );
+      const existingBlobName = resolveBlobNameFromMetadataOrUrl(
+        (existingResource as any).blobName,
+        existingResource.url,
+        resourceContainerName
+      );
+      const nextResourceUrl =
+        typeof updatePayload.url === 'string' && updatePayload.url.trim()
+          ? updatePayload.url.trim()
+          : existingResource.url;
+      const nextBlobName = resolveBlobNameFromMetadataOrUrl(
+        updatePayload.blobName,
+        nextResourceUrl,
+        resourceContainerName
+      );
+      const shouldDeleteExistingBlob = Boolean(existingBlobName && existingBlobName !== nextBlobName);
+
       const resource = await Resource.findOneAndUpdate(
         { id: req.params.id },
         updatePayload,
         { new: true }
       );
       if (resource) {
+        if (shouldDeleteExistingBlob && existingBlobName) {
+          await deleteBlobNames(
+            new Set([existingBlobName]),
+            resourceContainerName,
+            `resource replacement (${resource.id})`
+          );
+        }
         res.json(resource);
       } else {
         res.status(404).json({ error: "Resource not found" });
@@ -3288,8 +3950,25 @@ async function startServer() {
         return res.status(403).json({ error: "You can only delete your own resources." });
       }
 
+      const resourceContainerName = getRequiredContainerName(
+        AZURE_BLOB_CONTAINER_RESOURCES,
+        'AZURE_BLOB_CONTAINER_RESOURCES'
+      );
+      const existingBlobName = resolveBlobNameFromMetadataOrUrl(
+        (existingResource as any).blobName,
+        existingResource.url,
+        resourceContainerName
+      );
+
       const resource = await Resource.findOneAndDelete({ id: req.params.id });
       if (resource) {
+        if (existingBlobName) {
+          await deleteBlobNames(
+            new Set([existingBlobName]),
+            resourceContainerName,
+            `resource delete (${req.params.id})`
+          );
+        }
         res.json({ message: "Resource deleted successfully" });
       } else {
         res.status(404).json({ error: "Resource not found" });
@@ -4133,8 +4812,8 @@ async function startServer() {
     }
     app.use(express.static(distDir, { index: false }));
 
-    // Let API and uploads routes return their own responses; serve SPA for all other GET routes.
-    app.get(/^\/(?!api(?:\/|$)|uploads(?:\/|$)).*/, (req, res) => {
+    // Let API routes return their own responses; serve SPA for all other GET routes.
+    app.get(/^\/(?!api(?:\/|$)).*/, (req, res) => {
       res.sendFile(path.join(distDir, 'index.html'));
     });
   }

@@ -368,6 +368,9 @@ type EditableCourseModuleResource = {
   id: string;
   name: string;
   url: string;
+  blobName?: string;
+  mimeType?: string;
+  size?: number;
 };
 
 const getResourceNameFromUrl = (value: string, fallback = 'Resource'): string => {
@@ -421,15 +424,21 @@ const normalizeEditableModuleResources = (resources: unknown): EditableCourseMod
         id: createDraftId(),
         name: String(resource?.name ?? '').trim() || getResourceNameFromUrl(url, `Resource ${index + 1}`),
         url,
+        blobName: String(resource?.blobName ?? '').trim() || undefined,
+        mimeType: String(resource?.mimeType ?? '').trim() || undefined,
+        size: Number.isFinite(Number(resource?.size)) && Number(resource?.size) >= 0 ? Number(resource?.size) : undefined,
       };
     })
-    .filter((resource): resource is EditableCourseModuleResource => Boolean(resource));
+    .filter((resource): resource is NonNullable<typeof resource> => Boolean(resource));
 };
 
 type EditableCourseModule = {
   id?: string;
   title: string;
   videoUrl: string;
+  videoBlobName?: string;
+  videoMimeType?: string;
+  videoSize?: number;
   resources: EditableCourseModuleResource[];
   resourceNameInput: string;
   resourceUrlInput: string;
@@ -450,6 +459,9 @@ const createInitialCourseForm = () => ({
   isFree: false,
   price: 0,
   thumbnail: '',
+  thumbnailBlobName: undefined as string | undefined,
+  thumbnailMimeType: undefined as string | undefined,
+  thumbnailSize: undefined as number | undefined,
   modules: [createEmptyEditableModule()],
 });
 
@@ -458,6 +470,9 @@ const createInitialResourceForm = () => ({
   subject: 'Maths',
   type: 'Paper' as Resource['type'],
   url: '',
+  blobName: undefined as string | undefined,
+  mimeType: undefined as string | undefined,
+  size: undefined as number | undefined,
   description: '',
 });
 
@@ -497,7 +512,7 @@ type CourseCheckoutSubmission = {
   couponCode?: string;
 };
 
-const isUploadedResourcePath = (value: string): boolean => value.trim().startsWith('/uploads/');
+const hasStoredBlobName = (blobName: unknown): boolean => String(blobName || '').trim().length > 0;
 const SESSION_STORAGE_KEY = 'session';
 const REMEMBER_ME_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
 const PLATFORM_FEE_RATE = 0.12;
@@ -1177,8 +1192,7 @@ export default function App() {
       return null;
     }
 
-    const separator = currentUser.avatar.includes('?') ? '&' : '?';
-    return `${currentUser.avatar}${separator}t=${Date.now()}`;
+    return currentUser.avatar;
   }, [currentUser]);
   const currentTutor = currentUser?.role === 'tutor'
     ? tutorsWithLiveStats.find((t) => t.id === currentUser.id || t.email === currentUser.email)
@@ -2122,7 +2136,13 @@ export default function App() {
 
     try {
       const uploadedAsset = await apiService.uploadCourseThumbnail(file);
-      setCourseForm((prev) => ({ ...prev, thumbnail: uploadedAsset.path }));
+      setCourseForm((prev) => ({
+        ...prev,
+        thumbnail: uploadedAsset.path,
+        thumbnailBlobName: uploadedAsset.blobName,
+        thumbnailMimeType: uploadedAsset.mimeType,
+        thumbnailSize: uploadedAsset.size,
+      }));
     } catch (error) {
       console.error('Failed to upload course thumbnail:', error);
       const message = error instanceof Error ? error.message : 'Failed to upload course thumbnail.';
@@ -2146,7 +2166,15 @@ export default function App() {
       setCourseForm((prev) => ({
         ...prev,
         modules: prev.modules.map((item, index) =>
-          index === moduleIndex ? { ...item, videoUrl: uploadedAsset.path } : item
+          index === moduleIndex
+            ? {
+                ...item,
+                videoUrl: uploadedAsset.path,
+                videoBlobName: uploadedAsset.blobName,
+                videoMimeType: uploadedAsset.mimeType,
+                videoSize: uploadedAsset.size,
+              }
+            : item
         ),
       }));
     } catch (error) {
@@ -2176,6 +2204,9 @@ export default function App() {
           id: createDraftId(),
           name: getBaseFileName(uploadedAsset.originalName),
           url: uploadedAsset.path,
+          blobName: uploadedAsset.blobName,
+          mimeType: uploadedAsset.mimeType,
+          size: uploadedAsset.size,
         });
       }
 
@@ -2204,7 +2235,17 @@ export default function App() {
     setCourseForm((prev) => ({
       ...prev,
       modules: prev.modules.map((module, index) =>
-        index === moduleIndex ? { ...module, [field]: value } : module
+        index === moduleIndex
+          ? field === 'videoUrl'
+            ? {
+                ...module,
+                [field]: value,
+                videoBlobName: undefined,
+                videoMimeType: undefined,
+                videoSize: undefined,
+              }
+            : { ...module, [field]: value }
+          : module
       ),
     }));
   };
@@ -2225,7 +2266,17 @@ export default function App() {
         return {
           ...module,
           resources: module.resources.map((resource, currentResourceIndex) =>
-            currentResourceIndex === resourceIndex ? { ...resource, [field]: value } : resource
+            currentResourceIndex === resourceIndex
+              ? field === 'url'
+                ? {
+                    ...resource,
+                    [field]: value,
+                    blobName: undefined,
+                    mimeType: undefined,
+                    size: undefined,
+                  }
+                : { ...resource, [field]: value }
+              : resource
           ),
         };
       }),
@@ -2271,7 +2322,17 @@ export default function App() {
 
         return {
           ...item,
-          resources: [...item.resources, { id: createDraftId(), name: resourceName, url: resourceUrl }],
+          resources: [
+            ...item.resources,
+            {
+              id: createDraftId(),
+              name: resourceName,
+              url: resourceUrl,
+              blobName: undefined,
+              mimeType: undefined,
+              size: undefined,
+            },
+          ],
           resourceNameInput: '',
           resourceUrlInput: '',
         };
@@ -2301,10 +2362,16 @@ export default function App() {
       isFree: course.isFree || course.price <= 0,
       price: course.price,
       thumbnail: course.thumbnail,
+      thumbnailBlobName: course.thumbnailBlobName,
+      thumbnailMimeType: course.thumbnailMimeType,
+      thumbnailSize: course.thumbnailSize,
       modules: course.modules.map((module) => ({
         id: module.id,
         title: module.title,
         videoUrl: module.videoUrl,
+        videoBlobName: module.videoBlobName,
+        videoMimeType: module.videoMimeType,
+        videoSize: module.videoSize,
         resources: normalizeEditableModuleResources(module.resources),
         resourceNameInput: '',
         resourceUrlInput: '',
@@ -2331,6 +2398,9 @@ export default function App() {
         id: module.id || createDraftId(),
         title: module.title.trim(),
         videoUrl: module.videoUrl.trim(),
+        videoBlobName: module.videoBlobName,
+        videoMimeType: module.videoMimeType,
+        videoSize: module.videoSize,
         resources: module.resources
           .map((resource, resourceIndex) => {
             const resourceUrl = resource.url.trim();
@@ -2341,11 +2411,13 @@ export default function App() {
             return {
               name: resource.name.trim() || getResourceNameFromUrl(resourceUrl, `Resource ${resourceIndex + 1}`),
               url: resourceUrl,
+              blobName: resource.blobName,
+              mimeType: resource.mimeType,
+              size: resource.size,
             };
           })
           .filter(
-            (resource): resource is { name: string; url: string } =>
-              Boolean(resource)
+            (resource): resource is NonNullable<typeof resource> => Boolean(resource)
           ),
       }))
       .filter((module) => module.title && module.videoUrl);
@@ -2378,6 +2450,9 @@ export default function App() {
       thumbnail:
         courseForm.thumbnail.trim() ||
         `https://picsum.photos/seed/${encodeURIComponent(courseForm.title.trim())}/900/560`,
+      thumbnailBlobName: courseForm.thumbnailBlobName,
+      thumbnailMimeType: courseForm.thumbnailMimeType,
+      thumbnailSize: courseForm.thumbnailSize,
       modules: normalizedModules,
       enrolledStudents: editingCourseId
         ? courses.find((course) => course.id === editingCourseId)?.enrolledStudents || []
@@ -2552,7 +2627,7 @@ export default function App() {
 
   const handleEditResource = (resource: Resource) => {
     setEditingResourceId(resource.id);
-    setResourceInputMode(isUploadedResourcePath(resource.url) ? 'file' : 'url');
+    setResourceInputMode(hasStoredBlobName(resource.blobName) ? 'file' : 'url');
     setResourceUploadFile(null);
     clearResourceUploadFeedback();
     setResourceForm({
@@ -2560,6 +2635,9 @@ export default function App() {
       subject: resource.subject,
       type: resource.type,
       url: resource.url,
+      blobName: resource.blobName,
+      mimeType: resource.mimeType,
+      size: resource.size,
       description: resource.description || '',
     });
   };
@@ -2592,10 +2670,13 @@ export default function App() {
 
     try {
       let resourceUrl = resourceForm.url.trim();
+      let resourceBlobName = resourceForm.blobName;
+      let resourceMimeType = resourceForm.mimeType;
+      let resourceSize = resourceForm.size;
 
       if (resourceInputMode === 'file') {
-        const canReuseExistingUploadedPath =
-          Boolean(editingResourceId) && isUploadedResourcePath(resourceUrl);
+        const canReuseExistingUploadedFile =
+          Boolean(editingResourceId) && hasStoredBlobName(resourceBlobName) && Boolean(resourceUrl);
 
         if (resourceUploadFile) {
           setIsUploadingResourceFile(true);
@@ -2605,9 +2686,12 @@ export default function App() {
             setResourceUploadProgress(progress);
           });
           resourceUrl = uploadedResource.path;
+          resourceBlobName = uploadedResource.blobName;
+          resourceMimeType = uploadedResource.mimeType;
+          resourceSize = uploadedResource.size;
           setResourceUploadProgress(100);
           setResourceUploadStatusMessage(`Uploaded ${uploadedResource.originalName}. Saving resource details...`);
-        } else if (!canReuseExistingUploadedPath) {
+        } else if (!canReuseExistingUploadedFile) {
           const validationMessage = 'Please choose a file to upload.';
           alert(validationMessage);
           setResourceUploadStatus('error');
@@ -2615,7 +2699,7 @@ export default function App() {
           return false;
         } else {
           setResourceUploadProgress(100);
-          setResourceUploadStatusMessage('Using previously uploaded file path.');
+          setResourceUploadStatusMessage('Using previously uploaded file.');
         }
       } else if (!resourceUrl) {
         const validationMessage = 'Resource URL is required when using URL mode.';
@@ -2623,6 +2707,10 @@ export default function App() {
         setResourceUploadStatus('error');
         setResourceUploadStatusMessage(validationMessage);
         return false;
+      } else {
+        resourceBlobName = undefined;
+        resourceMimeType = undefined;
+        resourceSize = undefined;
       }
 
       const payload: Omit<Resource, 'id' | 'downloadCount'> = {
@@ -2631,6 +2719,9 @@ export default function App() {
         type: resourceForm.type,
         subject: resourceForm.subject,
         url: resourceUrl,
+        blobName: resourceBlobName,
+        mimeType: resourceMimeType,
+        size: resourceSize,
         description: resourceForm.description.trim(),
         isFree: true,
       };
@@ -2648,7 +2739,13 @@ export default function App() {
       }
 
       setResourceUploadFile(null);
-      setResourceForm((prev) => ({ ...prev, url: resourceUrl }));
+      setResourceForm((prev) => ({
+        ...prev,
+        url: resourceUrl,
+        blobName: resourceBlobName,
+        mimeType: resourceMimeType,
+        size: resourceSize,
+      }));
       setResourceUploadStatus('uploaded');
       setResourceUploadStatusMessage(
         resourceInputMode === 'file'
@@ -4091,17 +4188,6 @@ export default function App() {
       return '';
     }
 
-    if (/^https?:\/\//i.test(trimmed)) {
-      return trimmed;
-    }
-
-    if (trimmed.startsWith('/uploads/')) {
-      if (window.location.port === '3000') {
-        return `${window.location.origin}${trimmed}`;
-      }
-      return `http://localhost:3000${trimmed}`;
-    }
-
     return trimmed;
   };
 
@@ -4670,7 +4756,7 @@ export default function App() {
                                         <div className="flex-1 min-w-0">
                                           <p className="text-xs font-bold text-slate-900 truncate">{resource.name || `Resource ${idx + 1}`}</p>
                                           <p className="text-[10px] text-slate-500 truncate">
-                                            {resource.url.startsWith('/uploads/') ? 'Local file' : 'External resource'} - click to view in Resources
+                                            {resource.name ? 'Uploaded file' : 'External resource'} - click to view in Resources
                                           </p>
                                         </div>
                                       </div>
@@ -4782,7 +4868,7 @@ export default function App() {
                                     href={resolvedResourceUrl || '#'}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    download={resource.url.startsWith('/uploads/') ? resource.name : undefined}
+                                    download={resource.name || undefined}
                                     onClick={(event) => {
                                       if (!resolvedResourceUrl) {
                                         event.preventDefault();
@@ -4797,7 +4883,7 @@ export default function App() {
                                       <div>
                                         <p className="font-bold text-slate-900">{resource.name || `Resource ${idx + 1}`}</p>
                                         <p className="text-xs text-slate-500">
-                                          {resource.url.startsWith('/uploads/') ? 'Uploaded local file' : 'External resource URL'}
+                                          {resource.name ? 'Uploaded file URL' : 'External resource URL'}
                                         </p>
                                       </div>
                                     </div>

@@ -8,6 +8,9 @@ export interface IUser extends Document {
   password: string;
   role: 'student' | 'tutor' | 'admin';
   avatar?: string;
+  avatarBlobName?: string;
+  avatarMimeType?: string;
+  avatarSize?: number;
   phone?: string;
   lastActiveAt?: Date;
 }
@@ -20,6 +23,9 @@ const UserSchema: Schema = new Schema({
   password: { type: String, required: true },
   role: { type: String, required: true, enum: ['student', 'tutor', 'admin'], default: 'student' },
   avatar: { type: String },
+  avatarBlobName: { type: String },
+  avatarMimeType: { type: String },
+  avatarSize: { type: Number },
   phone: { type: String },
   lastActiveAt: { type: Date }
 }, {

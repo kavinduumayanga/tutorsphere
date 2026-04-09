@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactCrop, { Crop, PixelCrop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
@@ -139,6 +139,215 @@ const getAllowedTabs = (user: AppUser | null): Tab[] => {
 };
 
 const canAccessTab = (tab: Tab, user: AppUser | null) => getAllowedTabs(user).includes(tab);
+
+type RouteTarget = {
+  tab: Tab;
+  tutorId?: string;
+  bookingTutorId?: string;
+  courseId?: string;
+};
+
+type HistoryMode = 'push' | 'replace';
+type TabNavigationOptions = {
+  replace?: boolean;
+};
+
+const normalizePathname = (pathname: string): string => {
+  const trimmed = pathname.trim();
+  if (!trimmed || trimmed === '/') {
+    return '/';
+  }
+
+  const normalized = trimmed.replace(/\/+$/, '');
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
+};
+
+const decodePathParam = (value: string): string => {
+  try {
+    return decodeURIComponent(value).trim();
+  } catch {
+    return value.trim();
+  }
+};
+
+const encodePathParam = (value: string): string => encodeURIComponent(value.trim());
+
+const resolveProfileTabForUser = (user: AppUser | null): Tab => {
+  if (!user) {
+    return 'home';
+  }
+
+  return user.role === 'tutor' ? 'register' : 'settings';
+};
+
+const parseRouteFromLocation = (
+  pathname: string,
+  search: string,
+  user: AppUser | null
+): RouteTarget => {
+  const normalizedPath = normalizePathname(pathname);
+  const staticPath = normalizedPath.toLowerCase();
+
+  const tutorBookingMatch = normalizedPath.match(/^\/tutors\/([^/]+)\/book$/i);
+  if (tutorBookingMatch) {
+    const tutorId = decodePathParam(tutorBookingMatch[1]);
+    return { tab: 'tutorBooking', bookingTutorId: tutorId, tutorId };
+  }
+
+  const tutorProfileMatch = normalizedPath.match(/^\/tutors\/([^/]+)$/i);
+  if (tutorProfileMatch) {
+    return { tab: 'tutorProfile', tutorId: decodePathParam(tutorProfileMatch[1]) };
+  }
+
+  const courseLearningMatch = normalizedPath.match(/^\/courses\/learn\/([^/]+)$/i);
+  if (courseLearningMatch) {
+    return { tab: 'courseLearning', courseId: decodePathParam(courseLearningMatch[1]) };
+  }
+
+  if (staticPath === '/profile') {
+    return { tab: resolveProfileTabForUser(user) };
+  }
+
+  const staticRouteMap: Record<string, Tab> = {
+    '/': 'home',
+    '/home': 'home',
+    '/tutors': 'tutors',
+    '/questions': 'questions',
+    '/qa': 'questions',
+    '/availability': 'manageAvailability',
+    '/manage-availability': 'manageAvailability',
+    '/courses': 'courses',
+    '/resources': 'resources',
+    '/aiassistant': 'quizzes',
+    '/assistant': 'quizzes',
+    '/quizzes': 'quizzes',
+    '/register': 'registerSelect',
+    '/register/student': 'registerStudent',
+    '/register/tutor': 'registerTutor',
+    '/forgot-password': 'forgotPassword',
+    '/dashboard': 'dashboard',
+    '/sessions/tutor': 'tutorSessions',
+    '/sessions/student': 'studentSessions',
+    '/tutorsessions': 'tutorSessions',
+    '/studentsessions': 'studentSessions',
+    '/messages': 'messages',
+    '/earnings': 'earnings',
+    '/settings': 'settings',
+    '/notifications': 'notifications',
+    '/about': 'about',
+  };
+
+  const mappedTab = staticRouteMap[staticPath];
+  if (mappedTab) {
+    return { tab: mappedTab };
+  }
+
+  if (search) {
+    // Keep this parse to tolerate legacy links with query-only navigation hints.
+    const params = new URLSearchParams(search);
+    const routeHint = params.get('tab');
+    if (routeHint) {
+      const candidate = routeHint.trim() as Tab;
+      if (candidate in NAV_LABELS) {
+        return { tab: candidate };
+      }
+    }
+  }
+
+  return { tab: 'home' };
+};
+
+const normalizeRouteTarget = (route: RouteTarget, user: AppUser | null): RouteTarget => {
+  let nextTab = route.tab;
+
+  if (nextTab === 'register') {
+    if (!user) {
+      nextTab = 'home';
+    } else if (user.role !== 'tutor') {
+      nextTab = 'settings';
+    }
+  }
+
+  if (nextTab === 'courseLearning') {
+    if (!route.courseId) {
+      nextTab = 'courses';
+    } else if (!user || user.role !== 'student') {
+      nextTab = user ? 'dashboard' : 'home';
+    }
+  }
+
+  if (nextTab === 'tutorProfile' && !route.tutorId) {
+    nextTab = 'tutors';
+  }
+
+  if (nextTab === 'tutorBooking' && !route.bookingTutorId) {
+    nextTab = 'tutors';
+  }
+
+  if (!isInternalTab(nextTab) && !canAccessTab(nextTab, user)) {
+    nextTab = user ? 'dashboard' : 'home';
+  }
+
+  return {
+    tab: nextTab,
+    tutorId: nextTab === 'tutorProfile' ? route.tutorId : undefined,
+    bookingTutorId: nextTab === 'tutorBooking' ? route.bookingTutorId : undefined,
+    courseId: nextTab === 'courseLearning' ? route.courseId : undefined,
+  };
+};
+
+const routeTargetToPath = (route: RouteTarget): string => {
+  switch (route.tab) {
+    case 'home':
+      return '/home';
+    case 'tutors':
+      return '/tutors';
+    case 'questions':
+      return '/questions';
+    case 'manageAvailability':
+      return '/availability';
+    case 'courses':
+      return '/courses';
+    case 'courseLearning':
+      return route.courseId ? `/courses/learn/${encodePathParam(route.courseId)}` : '/courses';
+    case 'resources':
+      return '/resources';
+    case 'quizzes':
+      return '/aiassistant';
+    case 'registerSelect':
+      return '/register';
+    case 'registerStudent':
+      return '/register/student';
+    case 'registerTutor':
+      return '/register/tutor';
+    case 'forgotPassword':
+      return '/forgot-password';
+    case 'register':
+      return '/profile';
+    case 'dashboard':
+      return '/dashboard';
+    case 'tutorSessions':
+      return '/sessions/tutor';
+    case 'studentSessions':
+      return '/sessions/student';
+    case 'messages':
+      return '/messages';
+    case 'earnings':
+      return '/earnings';
+    case 'settings':
+      return '/settings';
+    case 'notifications':
+      return '/notifications';
+    case 'tutorProfile':
+      return route.tutorId ? `/tutors/${encodePathParam(route.tutorId)}` : '/tutors';
+    case 'tutorBooking':
+      return route.bookingTutorId ? `/tutors/${encodePathParam(route.bookingTutorId)}/book` : '/tutors';
+    case 'about':
+      return '/about';
+    default:
+      return '/home';
+  }
+};
 
 const getTutorDisplayName = (tutor: Tutor & { name?: string }) => {
   const firstName = tutor.firstName?.trim();
@@ -419,10 +628,12 @@ const normalizeSriLankanPhone = (value: string): string | null => {
 
 export default function App() {
   const [selectedTutor, setSelectedTutor] = useState<Tutor | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>('home');
+  const [activeTab, setActiveTabState] = useState<Tab>('home');
   const [viewingTutorId, setViewingTutorId] = useState<string | null>(null);
   const [bookingTutorId, setBookingTutorId] = useState<string | null>(null);
   const [pendingMessageParticipantId, setPendingMessageParticipantId] = useState<string | null>(null);
+  const [activeLearningCourseId, setActiveLearningCourseId] = useState<string | null>(null);
+  const [activeVideoModuleId, setActiveVideoModuleId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [unreadMessageCount, setUnreadMessageCount] = useState(0);
@@ -501,21 +712,129 @@ export default function App() {
   const [completedCrop, setCompletedCrop] = useState<PixelCrop | null>(null);
   const cropImageRef = useRef<HTMLImageElement | null>(null);
   const activeNotificationUserIdRef = useRef<string | null>(null);
+  const hasInitializedRoutingRef = useRef(false);
+  const pendingHistoryModeRef = useRef<HistoryMode>('replace');
+
+  const setActiveTab = useCallback((tab: Tab, options?: TabNavigationOptions) => {
+    pendingHistoryModeRef.current = options?.replace ? 'replace' : 'push';
+    setActiveTabState(tab);
+  }, []);
 
   const [certificateModalData, setCertificateModalData] = useState<{ enrollment: CourseEnrollment, courseTitle: string } | null>(null);
 
-  // Load user and activeTab from persisted storage on app start
+  // Load user and initial route state from URL/session.
   useEffect(() => {
     const storedSession = loadStoredSession();
+    const restoredUser = storedSession?.session.user || null;
+
+    if (restoredUser) {
+      setCurrentUser(restoredUser);
+    }
+
+    const pathname = normalizePathname(window.location.pathname);
+    const shouldRestoreSessionTab = pathname === '/' && Boolean(storedSession);
+
+    const sessionFallbackRoute: RouteTarget = {
+      tab: storedSession
+        ? isInternalTab(storedSession.session.activeTab)
+          ? restoredUser
+            ? 'dashboard'
+            : 'home'
+          : storedSession.session.activeTab
+        : 'home',
+    };
+
+    const initialRoute = normalizeRouteTarget(
+      shouldRestoreSessionTab
+        ? sessionFallbackRoute
+        : parseRouteFromLocation(pathname, window.location.search, restoredUser),
+      restoredUser
+    );
+
+    setViewingTutorId(initialRoute.tutorId || null);
+    setBookingTutorId(initialRoute.bookingTutorId || null);
+    setActiveLearningCourseId(initialRoute.courseId || null);
+    setActiveVideoModuleId(null);
+    setActiveTabState(initialRoute.tab);
+
     if (storedSession) {
-      setCurrentUser(storedSession.session.user);
-      const restoredTab: Tab = storedSession.session.activeTab || 'home';
-      setActiveTab(isInternalTab(restoredTab) ? 'home' : restoredTab);
       setSessionPersistence(storedSession.persistence);
     }
 
+    hasInitializedRoutingRef.current = true;
+    pendingHistoryModeRef.current = 'replace';
     setHasLoadedSession(true);
   }, []);
+
+  useEffect(() => {
+    if (!hasInitializedRoutingRef.current) {
+      return;
+    }
+
+    const handlePopState = () => {
+      const routeFromUrl = normalizeRouteTarget(
+        parseRouteFromLocation(window.location.pathname, window.location.search, currentUser),
+        currentUser
+      );
+
+      pendingHistoryModeRef.current = 'replace';
+      setViewingTutorId(routeFromUrl.tutorId || null);
+      setBookingTutorId(routeFromUrl.bookingTutorId || null);
+      setActiveLearningCourseId(routeFromUrl.courseId || null);
+      setActiveVideoModuleId(null);
+      setActiveTabState(routeFromUrl.tab);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!hasInitializedRoutingRef.current) {
+      return;
+    }
+
+    const normalizedRoute = normalizeRouteTarget(
+      {
+        tab: activeTab,
+        tutorId: viewingTutorId || undefined,
+        bookingTutorId: bookingTutorId || undefined,
+        courseId: activeLearningCourseId || undefined,
+      },
+      currentUser
+    );
+
+    const needsStateCorrection =
+      normalizedRoute.tab !== activeTab ||
+      (normalizedRoute.tutorId || null) !== viewingTutorId ||
+      (normalizedRoute.bookingTutorId || null) !== bookingTutorId ||
+      (normalizedRoute.courseId || null) !== activeLearningCourseId;
+
+    if (needsStateCorrection) {
+      pendingHistoryModeRef.current = 'replace';
+      setViewingTutorId(normalizedRoute.tutorId || null);
+      setBookingTutorId(normalizedRoute.bookingTutorId || null);
+      setActiveLearningCourseId(normalizedRoute.courseId || null);
+      setActiveVideoModuleId(null);
+      setActiveTabState(normalizedRoute.tab);
+      return;
+    }
+
+    const nextPath = routeTargetToPath(normalizedRoute);
+    const currentPath = `${normalizePathname(window.location.pathname)}${window.location.search}`;
+
+    if (currentPath !== nextPath) {
+      if (pendingHistoryModeRef.current === 'replace') {
+        window.history.replaceState(null, '', nextPath);
+      } else {
+        window.history.pushState(null, '', nextPath);
+      }
+    }
+
+    pendingHistoryModeRef.current = 'push';
+  }, [activeTab, viewingTutorId, bookingTutorId, activeLearningCourseId, currentUser]);
 
   // Persist session when user, tab, or persistence mode changes
   useEffect(() => {
@@ -540,12 +859,12 @@ export default function App() {
 
   useEffect(() => {
     if (activeTab === 'tutorProfile' && !viewingTutorId) {
-      setActiveTab('tutors');
+      setActiveTab('tutors', { replace: true });
       return;
     }
 
     if (activeTab === 'tutorBooking' && !bookingTutorId) {
-      setActiveTab('tutors');
+      setActiveTab('tutors', { replace: true });
       return;
     }
 
@@ -558,7 +877,7 @@ export default function App() {
     if (canAccessTab(activeTab, currentUser)) {
       return;
     }
-    setActiveTab(currentUser ? 'dashboard' : 'home');
+    setActiveTab(currentUser ? 'dashboard' : 'home', { replace: true });
   }, [activeTab, currentUser, viewingTutorId, bookingTutorId]);
 
   useEffect(() => {
@@ -716,8 +1035,6 @@ export default function App() {
   const [resourceUploadStatus, setResourceUploadStatus] = useState<ResourceUploadStatus>('idle');
   const [resourceUploadProgress, setResourceUploadProgress] = useState(0);
   const [resourceUploadStatusMessage, setResourceUploadStatusMessage] = useState('');
-  const [activeLearningCourseId, setActiveLearningCourseId] = useState<string | null>(null);
-  const [activeVideoModuleId, setActiveVideoModuleId] = useState<string | null>(null);
   const [learningContentTab, setLearningContentTab] = useState<'overview' | 'notes' | 'resources' | 'qa'>('overview');
   const [bookmarkedModules, setBookmarkedModules] = useState<Set<string>>(new Set());
   const [playbackSpeed, setPlaybackSpeed] = useState<'0.75' | '1' | '1.25' | '1.5'>('1');
@@ -765,12 +1082,12 @@ export default function App() {
     }
 
     if (!activeLearningCourseId) {
-      setActiveTab('courses');
+      setActiveTab('courses', { replace: true });
       return;
     }
 
     if (!currentUser || currentUser.role !== 'student') {
-      setActiveTab(currentUser ? 'dashboard' : 'home');
+      setActiveTab(currentUser ? 'dashboard' : 'home', { replace: true });
       return;
     }
 
@@ -784,7 +1101,7 @@ export default function App() {
       MOCK_COURSES.some((course) => course.id === activeLearningCourseId);
 
     if (!hasSelectedCourse) {
-      setActiveTab('courses');
+      setActiveTab('courses', { replace: true });
       return;
     }
 
@@ -802,7 +1119,7 @@ export default function App() {
       );
 
     if (!hasEnrollment && !hasEnrollmentFallback) {
-      setActiveTab('courses');
+      setActiveTab('courses', { replace: true });
     }
   }, [
     activeTab,
@@ -951,22 +1268,28 @@ export default function App() {
 
   const resolveNotificationTargetTab = (notification: AppNotification): Tab => {
     const candidate = String(notification.targetTab || '').trim() as Tab;
-    if (candidate && canAccessTab(candidate, currentUser)) {
+    if (candidate && (canAccessTab(candidate, currentUser) || isInternalTab(candidate))) {
       return candidate;
     }
 
     const link = String(notification.link || '').toLowerCase();
-    if (link.includes('studentsessions')) {
+    if (link.includes('/sessions/student') || link.includes('studentsessions')) {
       return 'studentSessions';
     }
-    if (link.includes('tutorsessions')) {
+    if (link.includes('/sessions/tutor') || link.includes('tutorsessions')) {
       return 'tutorSessions';
+    }
+    if (link.includes('aiassistant') || link.includes('/quizzes')) {
+      return 'quizzes';
     }
     if (link.includes('courses')) {
       return 'courses';
     }
     if (link.includes('messages')) {
       return 'messages';
+    }
+    if (link.includes('profile')) {
+      return resolveProfileTabForUser(currentUser);
     }
     if (link.includes('settings')) {
       return 'settings';
@@ -2413,7 +2736,7 @@ export default function App() {
     setRememberMe(false);
     setAuthMode('login');
     setShowAuthModal(true);
-    setActiveTab('home');
+    setActiveTab('home', { replace: true });
   };
 
   const handleDeleteAccount = async () => {
@@ -2477,7 +2800,7 @@ export default function App() {
       setAuthMode('login');
       setSessionPersistence('session');
       setRememberMe(false);
-      setActiveTab('home');
+      setActiveTab('home', { replace: true });
 
       alert('Your account was deleted successfully.');
     } catch (error) {
@@ -6653,9 +6976,9 @@ export default function App() {
               <h4 className="text-white font-semibold mb-6">Company</h4>
               <ul className="space-y-4 text-sm">
                 <li><button onClick={() => setActiveTab('about')} className="hover:text-indigo-400 transition-colors">About Us</button></li>
-                <li><a href="#" className="hover:text-indigo-400 transition-colors">Careers</a></li>
-                <li><a href="#" className="hover:text-indigo-400 transition-colors">Privacy Policy</a></li>
-                <li><a href="#" className="hover:text-indigo-400 transition-colors">Terms of Service</a></li>
+                <li><span className="text-slate-500">Careers (Coming Soon)</span></li>
+                <li><span className="text-slate-500">Privacy Policy (Coming Soon)</span></li>
+                <li><span className="text-slate-500">Terms of Service (Coming Soon)</span></li>
               </ul>
             </div>
 

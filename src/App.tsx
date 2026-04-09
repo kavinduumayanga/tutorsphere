@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactCrop, { Crop, PixelCrop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
@@ -52,7 +52,7 @@ import { localService } from './services/localService';
 import { apiService } from './services/apiService';
 import { formatLkr } from './utils/currency';
 
-import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz, TimeSlot, CourseEnrollment, CourseCoupon, WithdrawalRequest, WithdrawalSummary } from './types';
+import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz, TimeSlot, CourseEnrollment, CourseCoupon, WithdrawalRequest, WithdrawalSummary, AppNotification } from './types';
 import { TutorProfilePage } from './components/pages/TutorProfilePage';
 import { GetStartedSection } from "./components/pages/GetStartedSection";
 import { TutorBookingPage } from './components/pages/TutorBookingPage';
@@ -75,10 +75,13 @@ import { StudentDashboardPage } from './components/pages/StudentDashboardPage';
 import { TutorEarningsPage } from './components/pages/TutorEarningsPage';
 import { TutorSessionsPage } from './components/pages/TutorSessionsPage';
 import { StudentSessionsPage } from './components/pages/StudentSessionsPage';
+import { NotificationBell } from './components/common/NotificationBell';
+import { NotificationsPage } from './components/pages/NotificationsPage';
+import { MessagesPage } from './components/pages/MessagesPage';
 
 const STEM_SUBJECTS: string[] = [...ALLOWED_TUTOR_SUBJECTS];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'tutorSessions' | 'studentSessions' | 'earnings' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'about';
+type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'tutorSessions' | 'studentSessions' | 'messages' | 'earnings' | 'settings' | 'notifications' | 'tutorProfile' | 'tutorBooking' | 'about';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
@@ -97,8 +100,10 @@ const NAV_LABELS: Record<Tab, string> = {
   dashboard: 'Dashboard',
   tutorSessions: 'Tutor Sessions',
   studentSessions: 'My Sessions',
+  messages: 'Messages',
   earnings: 'Earnings',
   settings: 'Settings',
+  notifications: 'Notifications',
   tutorProfile: 'Tutor Profile',
   tutorBooking: 'Book Session',
   about: 'About Us'
@@ -123,17 +128,226 @@ const getAllowedTabs = (user: AppUser | null): Tab[] => {
   }
 
   if (user.role === 'student') {
-    return ['home', 'tutors', 'questions', 'courses', 'resources', 'quizzes', 'dashboard', 'studentSessions', 'settings', 'about'];
+    return ['home', 'tutors', 'questions', 'courses', 'resources', 'quizzes', 'dashboard', 'studentSessions', 'messages', 'settings', 'notifications', 'about'];
   }
 
   if (user.role === 'tutor') {
-    return ['home', 'dashboard', 'tutorSessions', 'earnings', 'manageAvailability', 'register', 'courses', 'resources', 'quizzes', 'settings', 'about'];
+    return ['home', 'dashboard', 'tutorSessions', 'messages', 'earnings', 'manageAvailability', 'register', 'courses', 'resources', 'quizzes', 'settings', 'notifications', 'about'];
   }
 
   return ['home', 'about'];
 };
 
 const canAccessTab = (tab: Tab, user: AppUser | null) => getAllowedTabs(user).includes(tab);
+
+type RouteTarget = {
+  tab: Tab;
+  tutorId?: string;
+  bookingTutorId?: string;
+  courseId?: string;
+};
+
+type HistoryMode = 'push' | 'replace';
+type TabNavigationOptions = {
+  replace?: boolean;
+};
+
+const normalizePathname = (pathname: string): string => {
+  const trimmed = pathname.trim();
+  if (!trimmed || trimmed === '/') {
+    return '/';
+  }
+
+  const normalized = trimmed.replace(/\/+$/, '');
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
+};
+
+const decodePathParam = (value: string): string => {
+  try {
+    return decodeURIComponent(value).trim();
+  } catch {
+    return value.trim();
+  }
+};
+
+const encodePathParam = (value: string): string => encodeURIComponent(value.trim());
+
+const resolveProfileTabForUser = (user: AppUser | null): Tab => {
+  if (!user) {
+    return 'home';
+  }
+
+  return user.role === 'tutor' ? 'register' : 'settings';
+};
+
+const parseRouteFromLocation = (
+  pathname: string,
+  search: string,
+  user: AppUser | null
+): RouteTarget => {
+  const normalizedPath = normalizePathname(pathname);
+  const staticPath = normalizedPath.toLowerCase();
+
+  const tutorBookingMatch = normalizedPath.match(/^\/tutors\/([^/]+)\/book$/i);
+  if (tutorBookingMatch) {
+    const tutorId = decodePathParam(tutorBookingMatch[1]);
+    return { tab: 'tutorBooking', bookingTutorId: tutorId, tutorId };
+  }
+
+  const tutorProfileMatch = normalizedPath.match(/^\/tutors\/([^/]+)$/i);
+  if (tutorProfileMatch) {
+    return { tab: 'tutorProfile', tutorId: decodePathParam(tutorProfileMatch[1]) };
+  }
+
+  const courseLearningMatch = normalizedPath.match(/^\/courses\/learn\/([^/]+)$/i);
+  if (courseLearningMatch) {
+    return { tab: 'courseLearning', courseId: decodePathParam(courseLearningMatch[1]) };
+  }
+
+  if (staticPath === '/profile') {
+    return { tab: resolveProfileTabForUser(user) };
+  }
+
+  const staticRouteMap: Record<string, Tab> = {
+    '/': 'home',
+    '/home': 'home',
+    '/tutors': 'tutors',
+    '/questions': 'questions',
+    '/qa': 'questions',
+    '/availability': 'manageAvailability',
+    '/manage-availability': 'manageAvailability',
+    '/courses': 'courses',
+    '/resources': 'resources',
+    '/aiassistant': 'quizzes',
+    '/assistant': 'quizzes',
+    '/quizzes': 'quizzes',
+    '/register': 'registerSelect',
+    '/register/student': 'registerStudent',
+    '/register/tutor': 'registerTutor',
+    '/forgot-password': 'forgotPassword',
+    '/dashboard': 'dashboard',
+    '/sessions/tutor': 'tutorSessions',
+    '/sessions/student': 'studentSessions',
+    '/tutorsessions': 'tutorSessions',
+    '/studentsessions': 'studentSessions',
+    '/messages': 'messages',
+    '/earnings': 'earnings',
+    '/settings': 'settings',
+    '/notifications': 'notifications',
+    '/about': 'about',
+  };
+
+  const mappedTab = staticRouteMap[staticPath];
+  if (mappedTab) {
+    return { tab: mappedTab };
+  }
+
+  if (search) {
+    // Keep this parse to tolerate legacy links with query-only navigation hints.
+    const params = new URLSearchParams(search);
+    const routeHint = params.get('tab');
+    if (routeHint) {
+      const candidate = routeHint.trim() as Tab;
+      if (candidate in NAV_LABELS) {
+        return { tab: candidate };
+      }
+    }
+  }
+
+  return { tab: 'home' };
+};
+
+const normalizeRouteTarget = (route: RouteTarget, user: AppUser | null): RouteTarget => {
+  let nextTab = route.tab;
+
+  if (nextTab === 'register') {
+    if (!user) {
+      nextTab = 'home';
+    } else if (user.role !== 'tutor') {
+      nextTab = 'settings';
+    }
+  }
+
+  if (nextTab === 'courseLearning') {
+    if (!route.courseId) {
+      nextTab = 'courses';
+    } else if (!user || user.role !== 'student') {
+      nextTab = user ? 'dashboard' : 'home';
+    }
+  }
+
+  if (nextTab === 'tutorProfile' && !route.tutorId) {
+    nextTab = 'tutors';
+  }
+
+  if (nextTab === 'tutorBooking' && !route.bookingTutorId) {
+    nextTab = 'tutors';
+  }
+
+  if (!isInternalTab(nextTab) && !canAccessTab(nextTab, user)) {
+    nextTab = user ? 'dashboard' : 'home';
+  }
+
+  return {
+    tab: nextTab,
+    tutorId: nextTab === 'tutorProfile' ? route.tutorId : undefined,
+    bookingTutorId: nextTab === 'tutorBooking' ? route.bookingTutorId : undefined,
+    courseId: nextTab === 'courseLearning' ? route.courseId : undefined,
+  };
+};
+
+const routeTargetToPath = (route: RouteTarget): string => {
+  switch (route.tab) {
+    case 'home':
+      return '/home';
+    case 'tutors':
+      return '/tutors';
+    case 'questions':
+      return '/questions';
+    case 'manageAvailability':
+      return '/availability';
+    case 'courses':
+      return '/courses';
+    case 'courseLearning':
+      return route.courseId ? `/courses/learn/${encodePathParam(route.courseId)}` : '/courses';
+    case 'resources':
+      return '/resources';
+    case 'quizzes':
+      return '/aiassistant';
+    case 'registerSelect':
+      return '/register';
+    case 'registerStudent':
+      return '/register/student';
+    case 'registerTutor':
+      return '/register/tutor';
+    case 'forgotPassword':
+      return '/forgot-password';
+    case 'register':
+      return '/profile';
+    case 'dashboard':
+      return '/dashboard';
+    case 'tutorSessions':
+      return '/sessions/tutor';
+    case 'studentSessions':
+      return '/sessions/student';
+    case 'messages':
+      return '/messages';
+    case 'earnings':
+      return '/earnings';
+    case 'settings':
+      return '/settings';
+    case 'notifications':
+      return '/notifications';
+    case 'tutorProfile':
+      return route.tutorId ? `/tutors/${encodePathParam(route.tutorId)}` : '/tutors';
+    case 'tutorBooking':
+      return route.bookingTutorId ? `/tutors/${encodePathParam(route.bookingTutorId)}/book` : '/tutors';
+    case 'about':
+      return '/about';
+    default:
+      return '/home';
+  }
+};
 
 const getTutorDisplayName = (tutor: Tutor & { name?: string }) => {
   const firstName = tutor.firstName?.trim();
@@ -252,6 +466,7 @@ type ResourceUploadStatus = 'idle' | 'uploading' | 'uploaded' | 'error';
 type SessionPersistenceMode = 'session' | 'remember';
 type BookingStatusFilter = 'all' | 'pending' | 'confirmed' | 'completed' | 'cancelled';
 type SessionTimelineFilter = 'all' | 'upcoming' | 'past';
+type NotificationFilter = 'all' | 'unread' | 'read';
 
 type SessionRatingDraft = {
   rating: number;
@@ -413,11 +628,21 @@ const normalizeSriLankanPhone = (value: string): string | null => {
 
 export default function App() {
   const [selectedTutor, setSelectedTutor] = useState<Tutor | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>('home');
+  const [activeTab, setActiveTabState] = useState<Tab>('home');
   const [viewingTutorId, setViewingTutorId] = useState<string | null>(null);
   const [bookingTutorId, setBookingTutorId] = useState<string | null>(null);
+  const [pendingMessageParticipantId, setPendingMessageParticipantId] = useState<string | null>(null);
+  const [activeLearningCourseId, setActiveLearningCourseId] = useState<string | null>(null);
+  const [activeVideoModuleId, setActiveVideoModuleId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
+  const [isLoadingNotifications, setIsLoadingNotifications] = useState(false);
+  const [notificationsError, setNotificationsError] = useState<string | null>(null);
+  const [notificationFilter, setNotificationFilter] = useState<NotificationFilter>('all');
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [authData, setAuthData] = useState({ email: '', password: '', firstName: '', lastName: '', confirmPassword: '', role: 'student' as 'student' | 'tutor' });
@@ -486,21 +711,130 @@ export default function App() {
   const [crop, setCrop] = useState<Crop>({ unit: '%', width: 50, height: 50, x: 25, y: 25 });
   const [completedCrop, setCompletedCrop] = useState<PixelCrop | null>(null);
   const cropImageRef = useRef<HTMLImageElement | null>(null);
+  const activeNotificationUserIdRef = useRef<string | null>(null);
+  const hasInitializedRoutingRef = useRef(false);
+  const pendingHistoryModeRef = useRef<HistoryMode>('replace');
+
+  const setActiveTab = useCallback((tab: Tab, options?: TabNavigationOptions) => {
+    pendingHistoryModeRef.current = options?.replace ? 'replace' : 'push';
+    setActiveTabState(tab);
+  }, []);
 
   const [certificateModalData, setCertificateModalData] = useState<{ enrollment: CourseEnrollment, courseTitle: string } | null>(null);
 
-  // Load user and activeTab from persisted storage on app start
+  // Load user and initial route state from URL/session.
   useEffect(() => {
     const storedSession = loadStoredSession();
+    const restoredUser = storedSession?.session.user || null;
+
+    if (restoredUser) {
+      setCurrentUser(restoredUser);
+    }
+
+    const pathname = normalizePathname(window.location.pathname);
+    const shouldRestoreSessionTab = pathname === '/' && Boolean(storedSession);
+
+    const sessionFallbackRoute: RouteTarget = {
+      tab: storedSession
+        ? isInternalTab(storedSession.session.activeTab)
+          ? restoredUser
+            ? 'dashboard'
+            : 'home'
+          : storedSession.session.activeTab
+        : 'home',
+    };
+
+    const initialRoute = normalizeRouteTarget(
+      shouldRestoreSessionTab
+        ? sessionFallbackRoute
+        : parseRouteFromLocation(pathname, window.location.search, restoredUser),
+      restoredUser
+    );
+
+    setViewingTutorId(initialRoute.tutorId || null);
+    setBookingTutorId(initialRoute.bookingTutorId || null);
+    setActiveLearningCourseId(initialRoute.courseId || null);
+    setActiveVideoModuleId(null);
+    setActiveTabState(initialRoute.tab);
+
     if (storedSession) {
-      setCurrentUser(storedSession.session.user);
-      const restoredTab: Tab = storedSession.session.activeTab || 'home';
-      setActiveTab(isInternalTab(restoredTab) ? 'home' : restoredTab);
       setSessionPersistence(storedSession.persistence);
     }
 
+    hasInitializedRoutingRef.current = true;
+    pendingHistoryModeRef.current = 'replace';
     setHasLoadedSession(true);
   }, []);
+
+  useEffect(() => {
+    if (!hasInitializedRoutingRef.current) {
+      return;
+    }
+
+    const handlePopState = () => {
+      const routeFromUrl = normalizeRouteTarget(
+        parseRouteFromLocation(window.location.pathname, window.location.search, currentUser),
+        currentUser
+      );
+
+      pendingHistoryModeRef.current = 'replace';
+      setViewingTutorId(routeFromUrl.tutorId || null);
+      setBookingTutorId(routeFromUrl.bookingTutorId || null);
+      setActiveLearningCourseId(routeFromUrl.courseId || null);
+      setActiveVideoModuleId(null);
+      setActiveTabState(routeFromUrl.tab);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!hasInitializedRoutingRef.current) {
+      return;
+    }
+
+    const normalizedRoute = normalizeRouteTarget(
+      {
+        tab: activeTab,
+        tutorId: viewingTutorId || undefined,
+        bookingTutorId: bookingTutorId || undefined,
+        courseId: activeLearningCourseId || undefined,
+      },
+      currentUser
+    );
+
+    const needsStateCorrection =
+      normalizedRoute.tab !== activeTab ||
+      (normalizedRoute.tutorId || null) !== viewingTutorId ||
+      (normalizedRoute.bookingTutorId || null) !== bookingTutorId ||
+      (normalizedRoute.courseId || null) !== activeLearningCourseId;
+
+    if (needsStateCorrection) {
+      pendingHistoryModeRef.current = 'replace';
+      setViewingTutorId(normalizedRoute.tutorId || null);
+      setBookingTutorId(normalizedRoute.bookingTutorId || null);
+      setActiveLearningCourseId(normalizedRoute.courseId || null);
+      setActiveVideoModuleId(null);
+      setActiveTabState(normalizedRoute.tab);
+      return;
+    }
+
+    const nextPath = routeTargetToPath(normalizedRoute);
+    const currentPath = `${normalizePathname(window.location.pathname)}${window.location.search}`;
+
+    if (currentPath !== nextPath) {
+      if (pendingHistoryModeRef.current === 'replace') {
+        window.history.replaceState(null, '', nextPath);
+      } else {
+        window.history.pushState(null, '', nextPath);
+      }
+    }
+
+    pendingHistoryModeRef.current = 'push';
+  }, [activeTab, viewingTutorId, bookingTutorId, activeLearningCourseId, currentUser]);
 
   // Persist session when user, tab, or persistence mode changes
   useEffect(() => {
@@ -525,12 +859,12 @@ export default function App() {
 
   useEffect(() => {
     if (activeTab === 'tutorProfile' && !viewingTutorId) {
-      setActiveTab('tutors');
+      setActiveTab('tutors', { replace: true });
       return;
     }
 
     if (activeTab === 'tutorBooking' && !bookingTutorId) {
-      setActiveTab('tutors');
+      setActiveTab('tutors', { replace: true });
       return;
     }
 
@@ -543,7 +877,7 @@ export default function App() {
     if (canAccessTab(activeTab, currentUser)) {
       return;
     }
-    setActiveTab(currentUser ? 'dashboard' : 'home');
+    setActiveTab(currentUser ? 'dashboard' : 'home', { replace: true });
   }, [activeTab, currentUser, viewingTutorId, bookingTutorId]);
 
   useEffect(() => {
@@ -551,6 +885,76 @@ export default function App() {
       setShowAuthModal(false);
       setAuthMode('login');
     }
+  }, [activeTab]);
+
+  useEffect(() => {
+    activeNotificationUserIdRef.current = currentUser?.id || null;
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (!currentUser?.id) {
+      setNotifications([]);
+      setUnreadNotificationCount(0);
+      setNotificationsError(null);
+      setIsLoadingNotifications(false);
+      setNotificationFilter('all');
+      setIsNotificationPanelOpen(false);
+      return;
+    }
+
+    const userId = currentUser.id;
+    activeNotificationUserIdRef.current = userId;
+
+    void loadNotifications(userId);
+
+    const pollIntervalId = window.setInterval(() => {
+      void loadNotifications(userId, true);
+    }, 25000);
+
+    return () => {
+      window.clearInterval(pollIntervalId);
+    };
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (!currentUser?.id) {
+      setUnreadMessageCount(0);
+      setPendingMessageParticipantId(null);
+      return;
+    }
+
+    let isCancelled = false;
+
+    const loadUnreadMessageCount = async (silent = false) => {
+      try {
+        const response = await apiService.getMessageUnreadCount(currentUser.id);
+        if (isCancelled) {
+          return;
+        }
+
+        const nextUnreadCount = Math.max(0, Number(response.totalUnreadCount || 0));
+        setUnreadMessageCount(nextUnreadCount);
+      } catch (error) {
+        if (!silent) {
+          console.error('Failed to load unread message count:', error);
+        }
+      }
+    };
+
+    void loadUnreadMessageCount();
+
+    const pollIntervalId = window.setInterval(() => {
+      void loadUnreadMessageCount(true);
+    }, 22000);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(pollIntervalId);
+    };
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    setIsNotificationPanelOpen(false);
   }, [activeTab]);
 
   useEffect(() => {
@@ -631,8 +1035,6 @@ export default function App() {
   const [resourceUploadStatus, setResourceUploadStatus] = useState<ResourceUploadStatus>('idle');
   const [resourceUploadProgress, setResourceUploadProgress] = useState(0);
   const [resourceUploadStatusMessage, setResourceUploadStatusMessage] = useState('');
-  const [activeLearningCourseId, setActiveLearningCourseId] = useState<string | null>(null);
-  const [activeVideoModuleId, setActiveVideoModuleId] = useState<string | null>(null);
   const [learningContentTab, setLearningContentTab] = useState<'overview' | 'notes' | 'resources' | 'qa'>('overview');
   const [bookmarkedModules, setBookmarkedModules] = useState<Set<string>>(new Set());
   const [playbackSpeed, setPlaybackSpeed] = useState<'0.75' | '1' | '1.25' | '1.5'>('1');
@@ -680,12 +1082,12 @@ export default function App() {
     }
 
     if (!activeLearningCourseId) {
-      setActiveTab('courses');
+      setActiveTab('courses', { replace: true });
       return;
     }
 
     if (!currentUser || currentUser.role !== 'student') {
-      setActiveTab(currentUser ? 'dashboard' : 'home');
+      setActiveTab(currentUser ? 'dashboard' : 'home', { replace: true });
       return;
     }
 
@@ -699,7 +1101,7 @@ export default function App() {
       MOCK_COURSES.some((course) => course.id === activeLearningCourseId);
 
     if (!hasSelectedCourse) {
-      setActiveTab('courses');
+      setActiveTab('courses', { replace: true });
       return;
     }
 
@@ -717,7 +1119,7 @@ export default function App() {
       );
 
     if (!hasEnrollment && !hasEnrollmentFallback) {
-      setActiveTab('courses');
+      setActiveTab('courses', { replace: true });
     }
   }, [
     activeTab,
@@ -863,6 +1265,141 @@ export default function App() {
   const primaryNavTabs: Tab[] = ['home', 'tutors', 'courses', 'resources', 'quizzes'];
   const navTabs = currentUser ? availableTabs.filter(tab => primaryNavTabs.includes(tab)) : primaryNavTabs;
   const canUseChatbot = (!currentUser || isStudent) && activeTab === 'home';
+
+  const resolveNotificationTargetTab = (notification: AppNotification): Tab => {
+    const candidate = String(notification.targetTab || '').trim() as Tab;
+    if (candidate && (canAccessTab(candidate, currentUser) || isInternalTab(candidate))) {
+      return candidate;
+    }
+
+    const link = String(notification.link || '').toLowerCase();
+    if (link.includes('/sessions/student') || link.includes('studentsessions')) {
+      return 'studentSessions';
+    }
+    if (link.includes('/sessions/tutor') || link.includes('tutorsessions')) {
+      return 'tutorSessions';
+    }
+    if (link.includes('aiassistant') || link.includes('/quizzes')) {
+      return 'quizzes';
+    }
+    if (link.includes('courses')) {
+      return 'courses';
+    }
+    if (link.includes('messages')) {
+      return 'messages';
+    }
+    if (link.includes('profile')) {
+      return resolveProfileTabForUser(currentUser);
+    }
+    if (link.includes('settings')) {
+      return 'settings';
+    }
+    if (link.includes('dashboard')) {
+      return 'dashboard';
+    }
+
+    if (currentUser?.role === 'student') {
+      return 'studentSessions';
+    }
+
+    if (currentUser?.role === 'tutor') {
+      return 'tutorSessions';
+    }
+
+    return 'notifications';
+  };
+
+  const loadNotifications = async (userId: string, silent = false): Promise<void> => {
+    if (!userId) {
+      return;
+    }
+
+    if (!silent) {
+      setIsLoadingNotifications(true);
+      setNotificationsError(null);
+    }
+
+    try {
+      const response = await apiService.getNotifications(userId, { limit: 60 });
+
+      if (activeNotificationUserIdRef.current !== userId) {
+        return;
+      }
+
+      setNotifications(response.notifications || []);
+      setUnreadNotificationCount(Math.max(0, Number(response.unreadCount || 0)));
+      setNotificationsError(null);
+    } catch (error) {
+      if (activeNotificationUserIdRef.current !== userId || silent) {
+        return;
+      }
+
+      const message = error instanceof Error ? error.message : 'Failed to load notifications.';
+      setNotificationsError(message);
+    } finally {
+      if (!silent && activeNotificationUserIdRef.current === userId) {
+        setIsLoadingNotifications(false);
+      }
+    }
+  };
+
+  const handleRefreshNotifications = async () => {
+    if (!currentUser) {
+      return;
+    }
+
+    await loadNotifications(currentUser.id);
+  };
+
+  const handleMarkNotificationAsRead = async (notification: AppNotification) => {
+    if (!currentUser || notification.isRead) {
+      return;
+    }
+
+    try {
+      const response = await apiService.markNotificationAsRead(notification.id, currentUser.id);
+      setNotifications((prev) =>
+        prev.map((entry) =>
+          entry.id === notification.id
+            ? { ...entry, ...(response.notification || {}), isRead: true }
+            : entry
+        )
+      );
+      setUnreadNotificationCount(Math.max(0, Number(response.unreadCount || 0)));
+    } catch (error) {
+      console.error('Failed to mark notification as read:', error);
+      const message = error instanceof Error ? error.message : 'Failed to update notification.';
+      setNotificationsError(message);
+    }
+  };
+
+  const handleMarkAllNotificationsAsRead = async () => {
+    if (!currentUser || unreadNotificationCount <= 0) {
+      return;
+    }
+
+    try {
+      await apiService.markAllNotificationsAsRead(currentUser.id);
+      setNotifications((prev) => prev.map((notification) => ({ ...notification, isRead: true })));
+      setUnreadNotificationCount(0);
+      setNotificationsError(null);
+    } catch (error) {
+      console.error('Failed to mark all notifications as read:', error);
+      const message = error instanceof Error ? error.message : 'Failed to mark all notifications as read.';
+      setNotificationsError(message);
+    }
+  };
+
+  const handleNotificationClick = (notification: AppNotification) => {
+    const nextTab = resolveNotificationTargetTab(notification);
+    setIsNotificationPanelOpen(false);
+
+    if (!notification.isRead) {
+      void handleMarkNotificationAsRead(notification);
+    }
+
+    setActiveTab(nextTab);
+  };
 
   const resetWithdrawalSummaryState = () => {
     setWithdrawalSummary({
@@ -2189,13 +2726,17 @@ export default function App() {
   const handleSignOut = () => {
     clearStoredSessions();
     setCurrentUser(null);
+    setNotifications([]);
+    setUnreadNotificationCount(0);
+    setNotificationsError(null);
+    setIsNotificationPanelOpen(false);
     setActiveLearningCourseId(null);
     setIsUserMenuOpen(false);
     setSessionPersistence('session');
     setRememberMe(false);
     setAuthMode('login');
     setShowAuthModal(true);
-    setActiveTab('home');
+    setActiveTab('home', { replace: true });
   };
 
   const handleDeleteAccount = async () => {
@@ -2249,13 +2790,17 @@ export default function App() {
 
       clearStoredSessions();
       setCurrentUser(null);
+      setNotifications([]);
+      setUnreadNotificationCount(0);
+      setNotificationsError(null);
+      setIsNotificationPanelOpen(false);
       setActiveLearningCourseId(null);
       setIsUserMenuOpen(false);
       setShowAuthModal(false);
       setAuthMode('login');
       setSessionPersistence('session');
       setRememberMe(false);
-      setActiveTab('home');
+      setActiveTab('home', { replace: true });
 
       alert('Your account was deleted successfully.');
     } catch (error) {
@@ -2610,6 +3155,25 @@ export default function App() {
     }
 
     return 0;
+  };
+
+  const getBookingLatestActivityTimestamp = (booking: Booking): number => {
+    const updatedTimestamp = Date.parse(String(booking.updatedAt || ''));
+    if (!Number.isNaN(updatedTimestamp)) {
+      return updatedTimestamp;
+    }
+
+    const createdTimestamp = Date.parse(String(booking.createdAt || ''));
+    if (!Number.isNaN(createdTimestamp)) {
+      return createdTimestamp;
+    }
+
+    const paidTimestamp = Date.parse(String(booking.paidAt || ''));
+    if (!Number.isNaN(paidTimestamp)) {
+      return paidTimestamp;
+    }
+
+    return getBookingSortTimestamp(booking);
   };
 
   const isPastSession = (booking: Booking): boolean => {
@@ -3095,16 +3659,22 @@ export default function App() {
         const past = isPastSession(booking);
         return timelineFilter === 'past' ? past : !past;
       })
-      .sort((a, b) => getBookingSortTimestamp(b) - getBookingSortTimestamp(a));
+      .sort((a, b) => getBookingLatestActivityTimestamp(b) - getBookingLatestActivityTimestamp(a));
   };
 
   const tutorDashboardBookings = useMemo(
-    () => bookings.filter((booking) => !booking.hiddenForTutor),
+    () =>
+      bookings
+        .filter((booking) => !booking.hiddenForTutor)
+        .sort((a, b) => getBookingLatestActivityTimestamp(b) - getBookingLatestActivityTimestamp(a)),
     [bookings]
   );
 
   const studentDashboardBookings = useMemo(
-    () => bookings.filter((booking) => !booking.hiddenForStudent),
+    () =>
+      bookings
+        .filter((booking) => !booking.hiddenForStudent)
+        .sort((a, b) => getBookingLatestActivityTimestamp(b) - getBookingLatestActivityTimestamp(a)),
     [bookings]
   );
 
@@ -3588,59 +4158,116 @@ export default function App() {
                   </button>
                 </>
               ) : (
-                <div className="relative user-menu">
-                  <button
-                    onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-                    className="flex items-center gap-2 text-sm font-bold text-indigo-700 bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100 hover:bg-indigo-100 transition-colors whitespace-nowrap"
-                  >
-                    <User className="w-4 h-4" /> {currentUser.firstName} {currentUser.lastName}
-                  </button>
+                <div className="flex items-center gap-2">
+                  <NotificationBell
+                    notifications={notifications}
+                    unreadCount={unreadNotificationCount}
+                    isOpen={isNotificationPanelOpen}
+                    isLoading={isLoadingNotifications}
+                    error={notificationsError}
+                    onToggle={() => {
+                      setIsNotificationPanelOpen((prev) => {
+                        const next = !prev;
+                        if (next && currentUser) {
+                          void loadNotifications(currentUser.id, true);
+                        }
+                        return next;
+                      });
+                      setIsUserMenuOpen(false);
+                    }}
+                    onClose={() => setIsNotificationPanelOpen(false)}
+                    onRefresh={() => {
+                      void handleRefreshNotifications();
+                    }}
+                    onNotificationClick={handleNotificationClick}
+                    onMarkAsRead={(notification) => {
+                      void handleMarkNotificationAsRead(notification);
+                    }}
+                    onMarkAllAsRead={() => {
+                      void handleMarkAllNotificationsAsRead();
+                    }}
+                    onViewAll={() => {
+                      setIsNotificationPanelOpen(false);
+                      setActiveTab('notifications');
+                    }}
+                  />
 
-                  {isUserMenuOpen && (
-                    <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-lg border border-slate-200 py-2 z-50">
-                      <button
-                        onClick={() => { setActiveTab('dashboard'); setIsUserMenuOpen(false) }}
-                        className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                      >
-                        <User className="w-4 h-4" />
-                        Dashboard
-                      </button>
-                      {isTutor && currentTutor && (
+                  <div className="relative user-menu">
+                    <button
+                      onClick={() => {
+                        setIsUserMenuOpen(!isUserMenuOpen);
+                        setIsNotificationPanelOpen(false);
+                      }}
+                      className="relative flex items-center gap-2 text-sm font-bold text-indigo-700 bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100 hover:bg-indigo-100 transition-colors whitespace-nowrap"
+                    >
+                      <User className="w-4 h-4" /> {currentUser.firstName} {currentUser.lastName}
+                      {unreadMessageCount > 0 && (
+                        <span className="absolute -right-1 -top-1 inline-flex min-w-[1.2rem] items-center justify-center rounded-full bg-indigo-600 px-1 py-0.5 text-[10px] font-black leading-none text-white">
+                          {unreadMessageCount > 9 ? '9+' : unreadMessageCount}
+                        </span>
+                      )}
+                    </button>
+
+                    {isUserMenuOpen && (
+                      <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-lg border border-slate-200 py-2 z-50">
                         <button
-                          onClick={() => {
-                            setViewingTutorId(currentTutor.id);
-                            setActiveTab('tutorProfile');
-                            setIsUserMenuOpen(false);
-                          }}
+                          onClick={() => { setActiveTab('dashboard'); setIsUserMenuOpen(false) }}
+                          className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                        >
+                          <User className="w-4 h-4" />
+                          Dashboard
+                        </button>
+                        <button
+                          onClick={() => { setActiveTab('messages'); setIsUserMenuOpen(false) }}
+                          className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center justify-between gap-2"
+                        >
+                          <span className="inline-flex items-center gap-2">
+                            <MessageCircle className="w-4 h-4" />
+                            Messages
+                          </span>
+                          {unreadMessageCount > 0 && (
+                            <span className="inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-indigo-600 px-1.5 py-0.5 text-[10px] font-black text-white">
+                              {unreadMessageCount > 9 ? '9+' : unreadMessageCount}
+                            </span>
+                          )}
+                        </button>
+                        {isTutor && currentTutor && (
+                          <button
+                            onClick={() => {
+                              setViewingTutorId(currentTutor.id);
+                              setActiveTab('tutorProfile');
+                              setIsUserMenuOpen(false);
+                            }}
+                            className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                            My Profile
+                          </button>
+                        )}
+                        <button
+                          onClick={() => { setActiveTab('settings'); setIsUserMenuOpen(false) }}
                           className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
                         >
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                           </svg>
-                          My Profile
+                          Settings
                         </button>
-                      )}
-                      <button
-                        onClick={() => { setActiveTab('settings'); setIsUserMenuOpen(false) }}
-                        className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                        </svg>
-                        Settings
-                      </button>
-                      <button
-                        onClick={handleSignOut}
-                        className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-red-50 hover:text-red-600 flex items-center gap-2"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                        </svg>
-                        Sign Out
-                      </button>
-                    </div>
-                  )}
+                        <button
+                          onClick={handleSignOut}
+                          className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-red-50 hover:text-red-600 flex items-center gap-2"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                          </svg>
+                          Sign Out
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -4349,6 +4976,10 @@ export default function App() {
               onBookSession={(id) => {
                 setBookingTutorId(id);
                 setActiveTab('tutorBooking');
+              }}
+              onMessageTutor={(id) => {
+                setPendingMessageParticipantId(id);
+                setActiveTab('messages');
               }}
               isLoggedIn={!!currentUser}
               isStudent={isStudent}
@@ -5381,6 +6012,38 @@ export default function App() {
             />
           )}
 
+          {activeTab === 'messages' && currentUser && (
+            <MessagesPage
+              currentUser={currentUser}
+              initialParticipantId={pendingMessageParticipantId}
+              onInitialParticipantHandled={() => {
+                setPendingMessageParticipantId(null);
+              }}
+              onUnreadCountChange={setUnreadMessageCount}
+            />
+          )}
+
+          {activeTab === 'notifications' && currentUser && (
+            <NotificationsPage
+              notifications={notifications}
+              unreadCount={unreadNotificationCount}
+              isLoading={isLoadingNotifications}
+              error={notificationsError}
+              filter={notificationFilter}
+              onFilterChange={setNotificationFilter}
+              onRefresh={() => {
+                void handleRefreshNotifications();
+              }}
+              onNotificationClick={handleNotificationClick}
+              onMarkAsRead={(notification) => {
+                void handleMarkNotificationAsRead(notification);
+              }}
+              onMarkAllAsRead={() => {
+                void handleMarkAllNotificationsAsRead();
+              }}
+            />
+          )}
+
           {activeTab === 'earnings' && currentUser && isTutor && (
             <TutorEarningsPage
               setActiveTab={(tab: string) => setActiveTab(tab as Tab)}
@@ -6313,9 +6976,9 @@ export default function App() {
               <h4 className="text-white font-semibold mb-6">Company</h4>
               <ul className="space-y-4 text-sm">
                 <li><button onClick={() => setActiveTab('about')} className="hover:text-indigo-400 transition-colors">About Us</button></li>
-                <li><a href="#" className="hover:text-indigo-400 transition-colors">Careers</a></li>
-                <li><a href="#" className="hover:text-indigo-400 transition-colors">Privacy Policy</a></li>
-                <li><a href="#" className="hover:text-indigo-400 transition-colors">Terms of Service</a></li>
+                <li><span className="text-slate-500">Careers (Coming Soon)</span></li>
+                <li><span className="text-slate-500">Privacy Policy (Coming Soon)</span></li>
+                <li><span className="text-slate-500">Terms of Service (Coming Soon)</span></li>
               </ul>
             </div>
 

@@ -23,10 +23,14 @@ import { SkillLevel } from "./src/models/SkillLevel.js";
 import { CourseEnrollment } from "./src/models/CourseEnrollment.js";
 import { CourseCoupon } from "./src/models/CourseCoupon.js";
 import { CourseCouponUsage } from "./src/models/CourseCouponUsage.js";
+import { Notification } from "./src/models/Notification.js";
 import { WithdrawalRequest } from "./src/models/WithdrawalRequest.js";
+import { MessageConversation } from "./src/models/MessageConversation.js";
+import { DirectMessage } from "./src/models/DirectMessage.js";
 import { quizChatbotRouter } from "./src/server/quiz-chatbot/chatController.js";
 import { faqChatbotRouter } from "./src/server/faq-chatbot/chatController.js";
 import { authRouter } from "./src/server/auth/authRoutes.js";
+import { messagingRouter } from "./src/server/messages/messageRoutes.js";
 import {
   hashPassword,
   shouldUpgradePasswordHash,
@@ -229,6 +233,129 @@ const resolveStoredAvatarPath = (storedAvatar?: string): string | null => {
 };
 
 const createEntityId = () => Math.random().toString(36).substr(2, 9);
+
+type NotificationDraft = {
+  userId: string;
+  type: string;
+  title: string;
+  message: string;
+  link?: string;
+  targetTab?: string;
+  relatedEntityId?: string;
+  isRead?: boolean;
+};
+
+const toNotificationText = (value: unknown, fallback = ''): string => {
+  const normalized = String(value || '').trim();
+  return normalized || fallback;
+};
+
+const getDisplayNameFromParts = (firstName: unknown, lastName: unknown, fallback = 'User'): string => {
+  const normalizedFirstName = String(firstName || '').trim();
+  const normalizedLastName = String(lastName || '').trim();
+  const fullName = `${normalizedFirstName} ${normalizedLastName}`.trim();
+  return fullName || fallback;
+};
+
+const formatSessionLabel = (booking: { subject?: unknown; date?: unknown; timeSlot?: unknown }): string => {
+  const subject = toNotificationText(booking.subject, 'Tutoring');
+  const date = toNotificationText(booking.date, 'a scheduled date');
+  const timeSlot = toNotificationText(booking.timeSlot);
+  return `${subject} session on ${date}${timeSlot ? ` at ${timeSlot}` : ''}`;
+};
+
+const normalizeNotificationForResponse = (notification: any) => {
+  const createdAtValue = notification?.createdAt ? new Date(notification.createdAt) : null;
+  const normalizedId = toNotificationText(notification?.id || notification?._id);
+
+  return {
+    ...notification,
+    id: normalizedId,
+    isRead: Boolean(notification?.isRead),
+    createdAt:
+      createdAtValue && !Number.isNaN(createdAtValue.getTime())
+        ? createdAtValue.toISOString()
+        : new Date().toISOString(),
+  };
+};
+
+const buildNotificationDocument = (input: NotificationDraft): Record<string, unknown> | null => {
+  const userId = toNotificationText(input.userId);
+  const type = toNotificationText(input.type, 'system');
+  const title = toNotificationText(input.title);
+  const message = toNotificationText(input.message);
+
+  if (!userId || !title || !message) {
+    return null;
+  }
+
+  const link = toNotificationText(input.link);
+  const targetTab = toNotificationText(input.targetTab);
+  const relatedEntityId = toNotificationText(input.relatedEntityId);
+
+  const payload: Record<string, unknown> = {
+    id: createEntityId(),
+    userId,
+    type,
+    title,
+    message,
+    isRead: Boolean(input.isRead),
+  };
+
+  if (link) payload.link = link;
+  if (targetTab) payload.targetTab = targetTab;
+  if (relatedEntityId) payload.relatedEntityId = relatedEntityId;
+
+  return payload;
+};
+
+const createUserNotification = async (input: NotificationDraft) => {
+  const payload = buildNotificationDocument(input);
+  if (!payload) {
+    return null;
+  }
+
+  try {
+    return await Notification.create(payload);
+  } catch (error) {
+    console.warn('Failed to create notification:', error);
+    return null;
+  }
+};
+
+const createUserNotifications = async (inputs: NotificationDraft[]) => {
+  const payloads = inputs
+    .map((input) => buildNotificationDocument(input))
+    .filter((payload): payload is Record<string, unknown> => Boolean(payload));
+
+  if (payloads.length === 0) {
+    return;
+  }
+
+  try {
+    await Notification.insertMany(payloads, { ordered: false });
+  } catch (error) {
+    console.warn('Failed to create bulk notifications:', error);
+  }
+};
+
+const resolveNotificationLookup = (notificationId: string, userId: string) => {
+  const normalizedNotificationId = toNotificationText(notificationId);
+  const normalizedUserId = toNotificationText(userId);
+  const canMatchObjectId = /^[a-fA-F0-9]{24}$/.test(normalizedNotificationId);
+
+  if (canMatchObjectId) {
+    return {
+      userId: normalizedUserId,
+      $or: [{ id: normalizedNotificationId }, { _id: normalizedNotificationId }],
+    };
+  }
+
+  return {
+    userId: normalizedUserId,
+    id: normalizedNotificationId,
+  };
+};
 
 const sanitizeFileSegment = (value: string): string =>
   value
@@ -1020,6 +1147,7 @@ async function startServer() {
   app.use('/api/quiz-chatbot', quizChatbotRouter);
   app.use('/api/faq-chatbot', faqChatbotRouter);
   app.use('/api/auth', authRouter);
+  app.use('/api/messages', messagingRouter);
   console.log('[Startup] Core route setup completed.');
 
   app.post('/api/uploads/course-thumbnail', handleCourseThumbnailUpload, async (req, res) => {
@@ -1291,6 +1419,15 @@ async function startServer() {
 
       await user.save();
 
+      await createUserNotification({
+        userId: user.id,
+        type: 'profile_update',
+        title: 'Profile updated',
+        message: 'Your account profile details were updated successfully.',
+        targetTab: 'settings',
+        link: '/settings',
+      });
+
       let avatarUrl: string | undefined;
       try {
         avatarUrl = await buildAvatarResponseUrl(req, user as { id: string; avatar?: string });
@@ -1345,6 +1482,9 @@ async function startServer() {
 
       // Remove tutor profile if one exists (safe no-op for students).
       await Tutor.deleteMany({ id });
+      await MessageConversation.deleteMany({ participantIds: id });
+      await DirectMessage.deleteMany({ $or: [{ senderId: id }, { recipientId: id }] });
+      await Notification.deleteMany({ userId: id });
       await User.deleteOne({ id });
 
       if (avatarPath) {
@@ -1414,6 +1554,149 @@ async function startServer() {
     } catch (error) {
       console.error("Get avatar error:", error);
       res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get('/api/notifications', async (req, res) => {
+    try {
+      const userId = typeof req.query.userId === 'string' ? req.query.userId.trim() : '';
+      if (!userId) {
+        return res.status(400).json({ error: 'userId is required.' });
+      }
+
+      const requestedLimit = Number(req.query.limit);
+      const limit = Number.isFinite(requestedLimit)
+        ? Math.min(100, Math.max(1, Math.floor(requestedLimit)))
+        : 25;
+
+      const isReadQuery = typeof req.query.isRead === 'string' ? req.query.isRead.trim().toLowerCase() : '';
+      const query: Record<string, unknown> = { userId };
+      if (isReadQuery === 'true' || isReadQuery === 'false') {
+        query.isRead = isReadQuery === 'true';
+      }
+
+      const [notifications, unreadCount] = await Promise.all([
+        Notification.find(query).sort({ createdAt: -1 }).limit(limit),
+        Notification.countDocuments({ userId, isRead: false }),
+      ]);
+
+      return res.json({
+        notifications: notifications.map((notification) =>
+          normalizeNotificationForResponse(
+            typeof (notification as any).toObject === 'function'
+              ? (notification as any).toObject()
+              : notification
+          )
+        ),
+        unreadCount,
+      });
+    } catch (error) {
+      console.error('Get notifications error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.post('/api/notifications', async (req, res) => {
+    try {
+      const userId = toNotificationText(req.body?.userId);
+      const title = toNotificationText(req.body?.title);
+      const message = toNotificationText(req.body?.message);
+      const type = toNotificationText(req.body?.type, 'system');
+
+      if (!userId || !title || !message) {
+        return res.status(400).json({ error: 'userId, title, and message are required.' });
+      }
+
+      const user = await User.findOne({ id: userId });
+      if (!user) {
+        return res.status(404).json({ error: 'User not found.' });
+      }
+
+      const notification = await createUserNotification({
+        userId,
+        type,
+        title,
+        message,
+        link: toNotificationText(req.body?.link) || undefined,
+        targetTab: toNotificationText(req.body?.targetTab) || undefined,
+        relatedEntityId: toNotificationText(req.body?.relatedEntityId) || undefined,
+        isRead: Boolean(req.body?.isRead),
+      });
+
+      if (!notification) {
+        return res.status(500).json({ error: 'Failed to create notification.' });
+      }
+
+      const unreadCount = await Notification.countDocuments({ userId, isRead: false });
+
+      return res.status(201).json({
+        notification: normalizeNotificationForResponse(
+          typeof (notification as any).toObject === 'function'
+            ? (notification as any).toObject()
+            : notification
+        ),
+        unreadCount,
+      });
+    } catch (error) {
+      console.error('Create notification error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.put('/api/notifications/read-all', async (req, res) => {
+    try {
+      const userId = toNotificationText(req.body?.userId);
+      if (!userId) {
+        return res.status(400).json({ error: 'userId is required.' });
+      }
+
+      const result = await Notification.updateMany(
+        { userId, isRead: false },
+        { $set: { isRead: true } }
+      );
+
+      return res.json({
+        modifiedCount: Number(result.modifiedCount || 0),
+        unreadCount: 0,
+      });
+    } catch (error) {
+      console.error('Mark all notifications as read error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.put('/api/notifications/:id/read', async (req, res) => {
+    try {
+      const userId = toNotificationText(req.body?.userId || req.query.userId);
+      const notificationId = toNotificationText(req.params.id);
+
+      if (!userId || !notificationId) {
+        return res.status(400).json({ error: 'userId and notification id are required.' });
+      }
+
+      const notification = await Notification.findOneAndUpdate(
+        resolveNotificationLookup(notificationId, userId),
+        { $set: { isRead: true } },
+        { new: true }
+      );
+
+      if (!notification) {
+        return res.status(404).json({ error: 'Notification not found.' });
+      }
+
+      const unreadCount = await Notification.countDocuments({ userId, isRead: false });
+
+      return res.json({
+        notification: normalizeNotificationForResponse(
+          typeof (notification as any).toObject === 'function'
+            ? (notification as any).toObject()
+            : notification
+        ),
+        unreadCount,
+      });
+    } catch (error) {
+      console.error('Mark notification as read error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -2261,6 +2544,7 @@ async function startServer() {
       const nextCouponCode = isFreeCourse ? undefined : couponApplication?.couponCode;
       const nextPaidAt = nextPaymentStatus === 'paid' ? new Date() : undefined;
       const normalizedPaymentReference = String(paymentReference || '').trim();
+      let createdNewEnrollment = false;
 
       if (!existingEnrollment) {
         const createdEnrollment = await CourseEnrollment.create({
@@ -2279,6 +2563,7 @@ async function startServer() {
           discountAmount: nextDiscountAmount,
           finalPaidAmount: nextFinalPaidAmount,
         });
+        createdNewEnrollment = true;
 
         if (couponApplication) {
           try {
@@ -2356,6 +2641,46 @@ async function startServer() {
             }
           );
         }
+      }
+
+      if (createdNewEnrollment) {
+        const courseTitle = toNotificationText(existingCourse.title, 'Course');
+        const studentDisplayName = getDisplayNameFromParts(student.firstName, student.lastName, 'Student');
+
+        const enrollmentNotifications: NotificationDraft[] = [
+          {
+            userId: studentId,
+            type: 'course_enrolled',
+            title: 'Course enrollment successful',
+            message: `You are now enrolled in ${courseTitle}.`,
+            targetTab: 'courses',
+            link: '/courses',
+            relatedEntityId: existingCourse.id,
+          },
+          {
+            userId: existingCourse.tutorId,
+            type: 'course_enrolled',
+            title: 'New course enrollment',
+            message: `${studentDisplayName} enrolled in ${courseTitle}.`,
+            targetTab: 'dashboard',
+            link: '/dashboard',
+            relatedEntityId: existingCourse.id,
+          },
+        ];
+
+        if (nextFinalPaidAmount > 0) {
+          enrollmentNotifications.push({
+            userId: studentId,
+            type: 'payment_success',
+            title: 'Course payment successful',
+            message: `Payment for ${courseTitle} was completed successfully.`,
+            targetTab: 'courses',
+            link: '/courses',
+            relatedEntityId: existingCourse.id,
+          });
+        }
+
+        await createUserNotifications(enrollmentNotifications);
       }
 
       if (course) {
@@ -2514,6 +2839,7 @@ async function startServer() {
         )
         : [];
 
+      const previousProgress = Number(enrollment.progress || 0);
       const nextProgress = calculateProgress(normalizedCompletedModuleIds.length, course.modules.length);
       const updatePayload: any = {
         $set: {
@@ -2537,6 +2863,34 @@ async function startServer() {
         updatePayload,
         { new: true }
       );
+
+      const completedNow = previousProgress < 100 && nextProgress >= 100;
+      if (completedNow && updatedEnrollment) {
+        const courseTitle = toNotificationText(course.title, 'Course');
+        const student = await User.findOne({ id: studentId }, { firstName: 1, lastName: 1 });
+        const studentDisplayName = getDisplayNameFromParts(student?.firstName, student?.lastName, 'Student');
+
+        await createUserNotifications([
+          {
+            userId: studentId,
+            type: 'course_completed',
+            title: 'Course completed',
+            message: `Congratulations! You completed ${courseTitle}. Your certificate is now available.`,
+            targetTab: 'courses',
+            link: '/courses',
+            relatedEntityId: updatedEnrollment.id,
+          },
+          {
+            userId: course.tutorId,
+            type: 'course_completed',
+            title: 'Student completed your course',
+            message: `${studentDisplayName} completed ${courseTitle}.`,
+            targetTab: 'dashboard',
+            link: '/dashboard',
+            relatedEntityId: updatedEnrollment.id,
+          },
+        ]);
+      }
 
       res.json(updatedEnrollment);
     } catch (error) {
@@ -3081,6 +3435,69 @@ async function startServer() {
         }
       }
 
+      const tutorUser = await User.findOne({ id: tutorId }, { firstName: 1, lastName: 1 });
+      const tutorDisplayName = getDisplayNameFromParts(tutorUser?.firstName, tutorUser?.lastName, 'Tutor');
+      const studentDisplayName = resolvedStudentName || 'Student';
+      const sessionLabel = formatSessionLabel({ subject, date, timeSlot });
+
+      const bookingNotifications: NotificationDraft[] = [];
+
+      if (booking.paymentStatus === 'paid' && booking.status === 'confirmed') {
+        bookingNotifications.push(
+          {
+            userId: booking.studentId,
+            type: 'session_confirmed',
+            title: 'Session confirmed',
+            message: `Your ${sessionLabel} with ${tutorDisplayName} is confirmed.`,
+            targetTab: 'studentSessions',
+            link: '/studentSessions',
+            relatedEntityId: booking.id,
+          },
+          {
+            userId: booking.tutorId,
+            type: 'payment_success',
+            title: 'New paid session booking',
+            message: `${studentDisplayName} booked a paid ${sessionLabel}.`,
+            targetTab: 'tutorSessions',
+            link: '/tutorSessions',
+            relatedEntityId: booking.id,
+          }
+        );
+      } else if (booking.paymentStatus === 'failed') {
+        bookingNotifications.push({
+          userId: booking.studentId,
+          type: 'booking_update',
+          title: 'Booking payment failed',
+          message: `Payment failed for your ${sessionLabel}. Please retry payment to confirm this booking.`,
+          targetTab: 'studentSessions',
+          link: '/studentSessions',
+          relatedEntityId: booking.id,
+        });
+      } else {
+        bookingNotifications.push(
+          {
+            userId: booking.studentId,
+            type: 'booking_update',
+            title: 'Booking request submitted',
+            message: `Your ${sessionLabel} request with ${tutorDisplayName} was submitted successfully.`,
+            targetTab: 'studentSessions',
+            link: '/studentSessions',
+            relatedEntityId: booking.id,
+          },
+          {
+            userId: booking.tutorId,
+            type: 'booking_update',
+            title: 'New booking request',
+            message: `${studentDisplayName} requested a ${sessionLabel}.`,
+            targetTab: 'tutorSessions',
+            link: '/tutorSessions',
+            relatedEntityId: booking.id,
+          }
+        );
+      }
+
+      await createUserNotifications(bookingNotifications);
+
       res.json(booking);
     } catch (error) {
       console.error("Create booking error:", error);
@@ -3262,6 +3679,167 @@ async function startServer() {
         } catch (availabilitySyncError) {
           console.warn('Booking slot sync warning (update):', availabilitySyncError);
         }
+
+        const previousStatus = normalizeBookingStatus(existingBooking.status);
+        const nextStatus = normalizeBookingStatus(booking.status);
+        const previousPaymentStatus = normalizeBookingPaymentStatus(existingBooking.paymentStatus);
+        const nextPaymentStatus = normalizeBookingPaymentStatus(booking.paymentStatus);
+
+        const previousMeetingLink = toNotificationText(existingBooking.meetingLink);
+        const nextMeetingLink = toNotificationText(booking.meetingLink);
+        const hadMeetingLink = Boolean(previousMeetingLink) && isValidHttpMeetingLink(previousMeetingLink);
+        const hasMeetingLink = Boolean(nextMeetingLink) && isValidHttpMeetingLink(nextMeetingLink);
+        const meetingLinkAdded = !hadMeetingLink && hasMeetingLink;
+        const meetingLinkChanged = hadMeetingLink && hasMeetingLink && previousMeetingLink !== nextMeetingLink;
+
+        const scheduleChanged =
+          toNotificationText(existingBooking.date) !== toNotificationText(booking.date) ||
+          toNotificationText(existingBooking.timeSlot) !== toNotificationText(booking.timeSlot);
+
+        const [studentUser, tutorUser] = await Promise.all([
+          User.findOne({ id: booking.studentId }, { firstName: 1, lastName: 1 }),
+          User.findOne({ id: booking.tutorId }, { firstName: 1, lastName: 1 }),
+        ]);
+
+        const studentDisplayName =
+          toNotificationText(existingBooking.studentName) ||
+          getDisplayNameFromParts(studentUser?.firstName, studentUser?.lastName, 'Student');
+        const tutorDisplayName = getDisplayNameFromParts(tutorUser?.firstName, tutorUser?.lastName, 'Tutor');
+        const previousSessionLabel = formatSessionLabel(existingBooking);
+        const nextSessionLabel = formatSessionLabel(booking);
+
+        const notifications: NotificationDraft[] = [];
+
+        if (scheduleChanged && nextStatus !== 'cancelled') {
+          notifications.push(
+            {
+              userId: booking.studentId,
+              type: 'session_rescheduled',
+              title: 'Session rescheduled',
+              message: `Your session was rescheduled to ${nextSessionLabel}.`,
+              targetTab: 'studentSessions',
+              link: '/studentSessions',
+              relatedEntityId: booking.id,
+            },
+            {
+              userId: booking.tutorId,
+              type: 'session_rescheduled',
+              title: 'Session rescheduled',
+              message: `Session with ${studentDisplayName} was moved to ${nextSessionLabel}.`,
+              targetTab: 'tutorSessions',
+              link: '/tutorSessions',
+              relatedEntityId: booking.id,
+            }
+          );
+        }
+
+        if (nextPaymentStatus === 'paid' && previousPaymentStatus !== 'paid') {
+          notifications.push(
+            {
+              userId: booking.studentId,
+              type: 'payment_success',
+              title: 'Payment successful',
+              message: `Payment was received for your ${nextSessionLabel}.`,
+              targetTab: 'studentSessions',
+              link: '/studentSessions',
+              relatedEntityId: booking.id,
+            },
+            {
+              userId: booking.tutorId,
+              type: 'payment_success',
+              title: 'Session payment received',
+              message: `Payment was received for ${studentDisplayName}'s ${nextSessionLabel}.`,
+              targetTab: 'tutorSessions',
+              link: '/tutorSessions',
+              relatedEntityId: booking.id,
+            }
+          );
+        }
+
+        if (nextStatus !== previousStatus) {
+          if (nextStatus === 'confirmed') {
+            if (!meetingLinkAdded) {
+              notifications.push({
+                userId: booking.studentId,
+                type: 'session_confirmed',
+                title: 'Session confirmed',
+                message: `Your ${nextSessionLabel} with ${tutorDisplayName} is confirmed.`,
+                targetTab: 'studentSessions',
+                link: '/studentSessions',
+                relatedEntityId: booking.id,
+              });
+            }
+
+            notifications.push({
+              userId: booking.tutorId,
+              type: 'session_confirmed',
+              title: 'Session confirmed',
+              message: `${studentDisplayName}'s ${nextSessionLabel} is confirmed.`,
+              targetTab: 'tutorSessions',
+              link: '/tutorSessions',
+              relatedEntityId: booking.id,
+            });
+          }
+
+          if (nextStatus === 'cancelled') {
+            notifications.push(
+              {
+                userId: booking.studentId,
+                type: 'session_cancelled',
+                title: 'Session cancelled',
+                message: `Your ${previousSessionLabel} was cancelled.`,
+                targetTab: 'studentSessions',
+                link: '/studentSessions',
+                relatedEntityId: booking.id,
+              },
+              {
+                userId: booking.tutorId,
+                type: 'session_cancelled',
+                title: 'Session cancelled',
+                message: `${studentDisplayName}'s ${previousSessionLabel} was cancelled.`,
+                targetTab: 'tutorSessions',
+                link: '/tutorSessions',
+                relatedEntityId: booking.id,
+              }
+            );
+          }
+
+          if (nextStatus === 'completed') {
+            notifications.push({
+              userId: booking.studentId,
+              type: 'session_completed',
+              title: 'Session completed',
+              message: `Your ${nextSessionLabel} has been marked as completed.`,
+              targetTab: 'studentSessions',
+              link: '/studentSessions',
+              relatedEntityId: booking.id,
+            });
+          }
+        }
+
+        if (meetingLinkAdded) {
+          notifications.push({
+            userId: booking.studentId,
+            type: 'meeting_link_available',
+            title: 'Meeting link available',
+            message: `Your tutor shared the meeting link for ${nextSessionLabel}. You can join from My Sessions.`,
+            targetTab: 'studentSessions',
+            link: '/studentSessions',
+            relatedEntityId: booking.id,
+          });
+        } else if (meetingLinkChanged) {
+          notifications.push({
+            userId: booking.studentId,
+            type: 'meeting_link_updated',
+            title: 'Meeting link updated',
+            message: `The meeting link for ${nextSessionLabel} was updated. Open My Sessions to use the latest link.`,
+            targetTab: 'studentSessions',
+            link: '/studentSessions',
+            relatedEntityId: booking.id,
+          });
+        }
+
+        await createUserNotifications(notifications);
 
         res.json(booking);
       } else {

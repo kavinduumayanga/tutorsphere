@@ -9,6 +9,7 @@ export interface IUser extends Document {
   role: 'student' | 'tutor' | 'admin';
   avatar?: string;
   phone?: string;
+  lastActiveAt?: Date;
 }
 
 const UserSchema: Schema = new Schema({
@@ -19,7 +20,8 @@ const UserSchema: Schema = new Schema({
   password: { type: String, required: true },
   role: { type: String, required: true, enum: ['student', 'tutor', 'admin'], default: 'student' },
   avatar: { type: String },
-  phone: { type: String }
+  phone: { type: String },
+  lastActiveAt: { type: Date }
 }, {
   timestamps: true
 });

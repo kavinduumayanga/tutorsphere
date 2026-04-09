@@ -125,13 +125,14 @@ export const TutorDashboardPage: React.FC<TutorDashboardPageProps> = (props) => 
 
   /* ─── Navigation Action Cards ─── */
   const navItems = [
-    { key: 'settings', label: 'Settings', icon: Settings, onClick: () => setActiveTab('settings'), desc: 'Preferences' },
+    { key: 'sessions', label: 'Session Hub', icon: Calendar, badge: upcomingSessions, onClick: () => setActiveTab('tutorSessions'), desc: 'Manage live and upcoming sessions' },
     ...(profileData.teachingLevel === 'School' || profileData.teachingLevel === 'School and University'
-      ? [{ key: 'availability', label: 'Availability', icon: Calendar, onClick: () => setActiveTab('manageAvailability'), desc: 'Set schedule' }]
+      ? [{ key: 'availability', label: 'Availability', icon: Clock, onClick: () => setActiveTab('manageAvailability'), desc: 'Set weekly teaching slots' }]
       : []),
-    { key: 'courses', label: 'Courses', icon: BookOpen, badge: activeCourses, onClick: () => setActiveTab('courses'), desc: 'Tutor content' },
-    { key: 'resources', label: 'Resources', icon: Layers, badge: resourcesCount, onClick: () => setActiveTab('resources'), desc: 'Study materials' },
-    { key: 'revenue', label: 'Revenue', icon: CircleDollarSign, onClick: () => setActiveTab('earnings'), desc: 'Payouts & history' },
+    { key: 'courses', label: 'Courses', icon: BookOpen, badge: activeCourses, onClick: () => setActiveTab('courses'), desc: 'Create and edit tutor courses' },
+    { key: 'resources', label: 'Resources', icon: Layers, badge: resourcesCount, onClick: () => setActiveTab('resources'), desc: 'Upload and share resources' },
+    { key: 'revenue', label: 'Revenue', icon: CircleDollarSign, onClick: () => setActiveTab('earnings'), desc: 'View payouts and earnings' },
+    { key: 'settings', label: 'Settings', icon: Settings, onClick: () => setActiveTab('settings'), desc: 'Update profile and preferences' },
   ];
 
   /* ─── Summary cards config ─── */
@@ -194,7 +195,7 @@ export const TutorDashboardPage: React.FC<TutorDashboardPageProps> = (props) => 
       </motion.div>
 
       {/* ──── Navigation Cards (Top Section) ──── */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 md:gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
          {navItems.map((item, idx) => {
            const Icon = item.icon;
            return (
@@ -205,20 +206,25 @@ export const TutorDashboardPage: React.FC<TutorDashboardPageProps> = (props) => 
                animate="show"
                key={item.key}
                onClick={item.onClick}
-               className="flex items-center gap-3 text-left p-3.5 rounded-xl bg-white border border-slate-200/70 hover:border-indigo-200 hover:bg-slate-50 transition-all group relative overflow-hidden shadow-sm"
+               className="flex flex-col items-start text-left gap-4 p-5 md:p-6 min-h-[138px] rounded-2xl bg-white border border-slate-200/80 hover:border-indigo-300 hover:bg-slate-50 hover:shadow-md transition-all group relative overflow-hidden shadow-sm"
              >
                {item.badge !== undefined && item.badge > 0 && (
-                 <span className="absolute top-2.5 right-2.5 bg-indigo-100 text-indigo-700 text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm">
+                 <span className="absolute top-3 right-3 bg-indigo-100 text-indigo-700 text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm z-10">
                    {item.badge}
                  </span>
                )}
-               <div className="w-10 h-10 shrink-0 rounded-lg bg-indigo-50/50 border border-indigo-100/30 flex items-center justify-center group-hover:bg-indigo-100/50 transition-colors">
-                 <Icon className="w-5 h-5 text-indigo-600 transition-colors" />
+               <div className="w-12 h-12 shrink-0 rounded-xl bg-indigo-50/80 border border-indigo-100/50 flex items-center justify-center group-hover:bg-indigo-100 transition-colors relative z-10">
+                 <Icon className="w-6 h-6 text-indigo-600 group-hover:scale-110 transition-transform duration-300" />
                </div>
-               <div className="flex flex-col">
-                 <span className="text-sm font-bold text-slate-800 group-hover:text-indigo-700 transition-colors">{item.label}</span>
-                 <span className="text-[11px] text-slate-500 font-medium hidden sm:block truncate pr-3">{item.desc}</span>
+               <div className="flex flex-col flex-1 relative z-10 w-full">
+                 <span className="text-base font-extrabold text-slate-800 group-hover:text-indigo-700 transition-colors">{item.label}</span>
+                 <span className="text-xs md:text-sm text-slate-500 font-medium mt-1 line-clamp-2">{item.desc}</span>
                </div>
+               <div className="inline-flex items-center gap-1 text-xs font-bold text-indigo-600 relative z-10">
+                 Open
+                 <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+               </div>
+               <div className="absolute inset-x-0 bottom-0 h-1 bg-indigo-600 scale-x-0 group-hover:scale-x-100 transition-transform origin-left duration-300" />
              </motion.button>
            );
          })}

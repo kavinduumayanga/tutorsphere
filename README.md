@@ -81,7 +81,6 @@ tutorsphere/
 |  |  |- common/                 # Shared UI elements
 |  |  |- pages/                  # Page-level UI modules
 |  |- data/
-|  |  |- mockData.ts             # Seed-like mock data used by startup migration
 |  |  |- tutorSubjects.ts        # Canonical tutor subject helpers
 |  |- models/                    # Mongoose schemas and persistence models
 |  |- services/
@@ -298,7 +297,7 @@ npx tsx scripts/migrateUploadsToAzure.ts --keep-local
 
 ## Runtime Notes
 
-- On startup, the server runs migration and normalization helpers for legacy users, mock data, course access flags, resource download counts, and booking state fields.
+- On startup, the server runs migration and normalization helpers for legacy users, tutor profile/account sync, course access flags, resource download counts, and booking state fields.
 - In development, sessions are stored in memory. In production, sessions are stored in MongoDB through `connect-mongo`.
 - Uploaded files are sent directly to Azure Blob Storage: memory-buffer uploads for small files and stream-based chunked uploads for large videos. MongoDB stores only file URLs plus blob metadata.
 - Production mode expects a built frontend in `dist/index.html`; `npm start` will fail if the frontend has not been built yet.

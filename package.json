@@ -24,6 +24,7 @@
     "@types/node": "^22.14.0",
     "@types/nodemailer": "^8.0.0",
     "@vitejs/plugin-react": "^5.0.4",
+    "busboy": "^1.6.0",
     "connect-mongo": "^5.1.0",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
@@ -42,6 +43,7 @@
     "react-image-crop": "^11.0.10",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.13.2",
+    "sharp": "^0.34.5",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"

@@ -3,8 +3,10 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs/promises";
+import { Readable } from "stream";
 import dotenv from "dotenv";
 import multer from "multer";
+import Busboy from "busboy";
 import cors from "cors";
 import session from "express-session";
 import MongoStore from "connect-mongo";
@@ -42,8 +44,11 @@ import { ALLOWED_TUTOR_SUBJECTS, normalizeTutorSubjects } from "./src/data/tutor
 import {
   deleteFile as deleteBlobFile,
   extractBlobNameFromUrl,
+  getLargeUploadTuning,
+  optimizeImageBuffer,
   replaceFile,
-  uploadFile,
+  uploadLargeFileStream,
+  uploadSmallFile,
 } from "./src/server/storage/azureBlobService.js";
 
 console.log('[Startup] Loading environment variables...');
@@ -66,6 +71,31 @@ const AZURE_BLOB_CONTAINER_VIDEOS = String(process.env.AZURE_BLOB_CONTAINER_VIDE
 const AZURE_BLOB_CONTAINER_RESOURCES = String(process.env.AZURE_BLOB_CONTAINER_RESOURCES || '').trim();
 const AZURE_BLOB_CONTAINER_RECORDED_LESSONS = String(process.env.AZURE_BLOB_CONTAINER_RECORDED_LESSONS || '').trim();
 const AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES = String(process.env.AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES || '').trim();
+
+const toSafePositiveInteger = (
+  value: unknown,
+  fallbackValue: number,
+  minimumValue: number,
+  maximumValue?: number
+): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < minimumValue) {
+    return fallbackValue;
+  }
+
+  const rounded = Math.floor(parsed);
+  if (maximumValue !== undefined) {
+    return Math.min(rounded, maximumValue);
+  }
+
+  return rounded;
+};
+
+const AVATAR_IMAGE_MAX_WIDTH = toSafePositiveInteger(process.env.AZURE_IMAGE_AVATAR_MAX_WIDTH, 512, 64, 4096);
+const AVATAR_IMAGE_MAX_HEIGHT = toSafePositiveInteger(process.env.AZURE_IMAGE_AVATAR_MAX_HEIGHT, 512, 64, 4096);
+const THUMBNAIL_IMAGE_MAX_WIDTH = toSafePositiveInteger(process.env.AZURE_IMAGE_THUMBNAIL_MAX_WIDTH, 1280, 64, 8192);
+const THUMBNAIL_IMAGE_MAX_HEIGHT = toSafePositiveInteger(process.env.AZURE_IMAGE_THUMBNAIL_MAX_HEIGHT, 720, 64, 8192);
+const OPTIMIZED_IMAGE_QUALITY = toSafePositiveInteger(process.env.AZURE_IMAGE_QUALITY, 82, 40, 95);
 
 const getRequiredContainerName = (containerName: string, envKey: string): string => {
   const normalized = String(containerName || '').trim();
@@ -91,9 +121,15 @@ const resolveBlobNameFromMetadataOrUrl = (
 
 const isHttpUrl = (value: string): boolean => /^https?:\/\//i.test(value.trim());
 
+type UploadResponseFileMeta = {
+  originalname: string;
+  size: number;
+  mimetype: string;
+};
+
 const toUploadedAssetResponse = (
   uploaded: { blobUrl: string; blobName: string },
-  file: Express.Multer.File
+  file: UploadResponseFileMeta
 ) => ({
   path: uploaded.blobUrl,
   url: uploaded.blobUrl,
@@ -143,6 +179,202 @@ const createSingleFileUploadMiddleware = (config: UploadMiddlewareConfig) => {
 
       return res.status(400).json({ error: error.message || config.genericErrorMessage });
     });
+  };
+};
+
+type FileValidationShape = {
+  originalname: string;
+  mimetype: string;
+};
+
+type StreamUploadConfig = {
+  fieldName: string;
+  maxFileSizeMB: number;
+  missingFileMessage: string;
+  invalidTypeMessage: string;
+  sizeExceededMessage: string;
+  genericErrorMessage: string;
+  containerName: string;
+  containerEnvKey: string;
+  isAllowedFile: (file: FileValidationShape) => boolean;
+};
+
+const createStreamUploadHandler = (config: StreamUploadConfig) => {
+  return async (req: express.Request, res: express.Response) => {
+    try {
+      const containerName = getRequiredContainerName(config.containerName, config.containerEnvKey);
+      const maxFileSizeBytes = config.maxFileSizeMB * 1024 * 1024;
+      const { blockSizeBytes, maxConcurrency } = getLargeUploadTuning();
+
+      let hasTargetFile = false;
+      let receivedBytes = 0;
+      let parseFailure: Error | null = null;
+      let asyncUploadFailure: Error | null = null;
+      let uploadPromise: Promise<{ blobUrl: string; blobName: string }> | null = null;
+      let uploadFileMeta: UploadResponseFileMeta | null = null;
+
+      const uploadResult = await new Promise<{ uploaded: { blobUrl: string; blobName: string }; fileMeta: UploadResponseFileMeta }>((resolve, reject) => {
+        const busboy = Busboy({
+          headers: req.headers,
+          limits: {
+            files: 1,
+            fileSize: maxFileSizeBytes,
+            fields: 32,
+          },
+        });
+
+        busboy.on('file', (fieldName: string, file: Readable, info: any) => {
+          const originalname = String(info?.filename || 'file').trim() || 'file';
+          const mimetype = String(info?.mimeType || info?.mimetype || 'application/octet-stream').trim() || 'application/octet-stream';
+
+          if (fieldName !== config.fieldName) {
+            file.resume();
+            return;
+          }
+
+          hasTargetFile = true;
+          const validationFile: FileValidationShape = { originalname, mimetype };
+          if (!config.isAllowedFile(validationFile)) {
+            parseFailure = new Error(config.invalidTypeMessage);
+            file.resume();
+            return;
+          }
+
+          uploadFileMeta = {
+            originalname,
+            mimetype,
+            size: 0,
+          };
+
+          file.on('data', (chunk: Buffer) => {
+            receivedBytes += chunk.length;
+          });
+
+          file.on('limit', () => {
+            parseFailure = new Error(config.sizeExceededMessage);
+          });
+
+          file.on('error', (error) => {
+            asyncUploadFailure = error instanceof Error ? error : new Error(config.genericErrorMessage);
+          });
+
+          uploadPromise = uploadLargeFileStream(
+            file,
+            originalname,
+            containerName,
+            mimetype,
+            { blockSizeBytes, maxConcurrency }
+          );
+
+          uploadPromise.catch((error) => {
+            asyncUploadFailure = error instanceof Error ? error : new Error(config.genericErrorMessage);
+          });
+        });
+
+        busboy.on('error', (error) => reject(error));
+
+        busboy.on('finish', () => {
+          if (parseFailure && !uploadPromise) {
+            return reject(parseFailure);
+          }
+
+          if (!hasTargetFile) {
+            return reject(new Error(config.missingFileMessage));
+          }
+
+          if (!uploadPromise || !uploadFileMeta) {
+            return reject(new Error(config.genericErrorMessage));
+          }
+
+          uploadFileMeta.size = receivedBytes;
+
+          uploadPromise
+            .then(async (uploaded) => {
+              if (parseFailure || asyncUploadFailure) {
+                try {
+                  await deleteBlobFile(uploaded.blobName, containerName);
+                } catch (cleanupError) {
+                  console.warn('Failed to cleanup partially uploaded blob after stream upload error:', {
+                    blobName: uploaded.blobName,
+                    containerName,
+                    cleanupError,
+                  });
+                }
+
+                return reject(parseFailure || asyncUploadFailure || new Error(config.genericErrorMessage));
+              }
+
+              resolve({
+                uploaded,
+                fileMeta: uploadFileMeta as UploadResponseFileMeta,
+              });
+            })
+            .catch((error) => reject(error));
+        });
+
+        req.pipe(busboy);
+      });
+
+      return res.json(toUploadedAssetResponse(uploadResult.uploaded, uploadResult.fileMeta));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : config.genericErrorMessage;
+      const isClientError = [
+        config.missingFileMessage,
+        config.invalidTypeMessage,
+        config.sizeExceededMessage,
+      ].includes(message);
+
+      if (isClientError) {
+        return res.status(400).json({ error: message });
+      }
+
+      console.error(`${config.fieldName} stream upload error:`, error);
+      return res.status(500).json({ error: config.genericErrorMessage });
+    }
+  };
+};
+
+const optimizeAvatarImageUpload = async (
+  file: Express.Multer.File
+): Promise<UploadResponseFileMeta & { buffer: Buffer; optimizedFileName: string }> => {
+  const optimized = await optimizeImageBuffer(
+    file.buffer,
+    file.originalname || 'avatar',
+    file.mimetype,
+    {
+      maxWidth: AVATAR_IMAGE_MAX_WIDTH,
+      maxHeight: AVATAR_IMAGE_MAX_HEIGHT,
+      quality: OPTIMIZED_IMAGE_QUALITY,
+    }
+  );
+
+  return {
+    originalname: file.originalname,
+    mimetype: optimized.mimeType,
+    size: optimized.size,
+    optimizedFileName: optimized.fileName,
+    buffer: optimized.buffer,
+  };
+};
+
+const optimizeThumbnailImageUpload = async (file: Express.Multer.File): Promise<UploadResponseFileMeta & { buffer: Buffer; optimizedFileName: string }> => {
+  const optimized = await optimizeImageBuffer(
+    file.buffer,
+    file.originalname || 'thumbnail',
+    file.mimetype,
+    {
+      maxWidth: THUMBNAIL_IMAGE_MAX_WIDTH,
+      maxHeight: THUMBNAIL_IMAGE_MAX_HEIGHT,
+      quality: OPTIMIZED_IMAGE_QUALITY,
+    }
+  );
+
+  return {
+    originalname: file.originalname,
+    mimetype: optimized.mimeType,
+    size: optimized.size,
+    optimizedFileName: optimized.fileName,
+    buffer: optimized.buffer,
   };
 };
 
@@ -230,15 +462,6 @@ const handleCourseThumbnailUpload = createSingleFileUploadMiddleware({
   isAllowedFile: isImageUpload,
 });
 
-const handleCourseVideoUpload = createSingleFileUploadMiddleware({
-  fieldName: 'video',
-  maxFileSizeMB: 500,
-  invalidTypeMessage: 'Only video files are allowed for module video uploads.',
-  sizeExceededMessage: 'Module video must be less than 500MB.',
-  genericErrorMessage: 'Course video upload failed.',
-  isAllowedFile: isVideoUpload,
-});
-
 const handleCourseResourceUpload = createSingleFileUploadMiddleware({
   fieldName: 'resource',
   maxFileSizeMB: 50,
@@ -266,12 +489,27 @@ const handleTutorCertificateUpload = createSingleFileUploadMiddleware({
   isAllowedFile: isTutorCertificateUpload,
 });
 
-const handleRecordedLessonUpload = createSingleFileUploadMiddleware({
+const handleCourseVideoUpload = createStreamUploadHandler({
+  fieldName: 'video',
+  maxFileSizeMB: 500,
+  missingFileMessage: 'No video file was uploaded.',
+  invalidTypeMessage: 'Only video files are allowed for module video uploads.',
+  sizeExceededMessage: 'Module video must be less than 500MB.',
+  genericErrorMessage: 'Failed to upload course video.',
+  containerName: AZURE_BLOB_CONTAINER_VIDEOS,
+  containerEnvKey: 'AZURE_BLOB_CONTAINER_VIDEOS',
+  isAllowedFile: isVideoUpload,
+});
+
+const handleRecordedLessonUpload = createStreamUploadHandler({
   fieldName: 'lesson',
   maxFileSizeMB: 1024,
+  missingFileMessage: 'No recorded lesson file was uploaded.',
   invalidTypeMessage: 'Only video files are allowed for recorded lessons.',
   sizeExceededMessage: 'Recorded lesson video must be less than 1GB.',
-  genericErrorMessage: 'Recorded lesson upload failed.',
+  genericErrorMessage: 'Failed to upload recorded lesson file.',
+  containerName: AZURE_BLOB_CONTAINER_RECORDED_LESSONS,
+  containerEnvKey: 'AZURE_BLOB_CONTAINER_RECORDED_LESSONS',
   isAllowedFile: isVideoUpload,
 });
 
@@ -1299,47 +1537,27 @@ async function startServer() {
         return res.status(400).json({ error: 'No thumbnail file was uploaded.' });
       }
 
+      const optimizedThumbnail = await optimizeThumbnailImageUpload(req.file);
+
       const containerName = getRequiredContainerName(
         AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS,
         'AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS'
       );
-      const uploaded = await uploadFile(
-        req.file.buffer,
-        req.file.originalname || 'thumbnail',
+      const uploaded = await uploadSmallFile(
+        optimizedThumbnail.buffer,
+        optimizedThumbnail.optimizedFileName,
         containerName,
-        req.file.mimetype
+        optimizedThumbnail.mimetype
       );
 
-      res.json(toUploadedAssetResponse(uploaded, req.file));
+      res.json(toUploadedAssetResponse(uploaded, optimizedThumbnail));
     } catch (error) {
       console.error('Course thumbnail upload error:', error);
       res.status(500).json({ error: 'Failed to upload course thumbnail.' });
     }
   });
 
-  app.post('/api/uploads/course-video', handleCourseVideoUpload, async (req, res) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ error: 'No video file was uploaded.' });
-      }
-
-      const containerName = getRequiredContainerName(
-        AZURE_BLOB_CONTAINER_VIDEOS,
-        'AZURE_BLOB_CONTAINER_VIDEOS'
-      );
-      const uploaded = await uploadFile(
-        req.file.buffer,
-        req.file.originalname || 'video',
-        containerName,
-        req.file.mimetype
-      );
-
-      res.json(toUploadedAssetResponse(uploaded, req.file));
-    } catch (error) {
-      console.error('Course video upload error:', error);
-      res.status(500).json({ error: 'Failed to upload course video.' });
-    }
-  });
+  app.post('/api/uploads/course-video', handleCourseVideoUpload);
 
   app.post('/api/uploads/course-resource', handleCourseResourceUpload, async (req, res) => {
     try {
@@ -1351,7 +1569,7 @@ async function startServer() {
         AZURE_BLOB_CONTAINER_RESOURCES,
         'AZURE_BLOB_CONTAINER_RESOURCES'
       );
-      const uploaded = await uploadFile(
+      const uploaded = await uploadSmallFile(
         req.file.buffer,
         req.file.originalname || 'resource',
         containerName,
@@ -1375,7 +1593,7 @@ async function startServer() {
         AZURE_BLOB_CONTAINER_RESOURCES,
         'AZURE_BLOB_CONTAINER_RESOURCES'
       );
-      const uploaded = await uploadFile(
+      const uploaded = await uploadSmallFile(
         req.file.buffer,
         req.file.originalname || 'resource',
         containerName,
@@ -1399,7 +1617,7 @@ async function startServer() {
         AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES,
         'AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES'
       );
-      const uploaded = await uploadFile(
+      const uploaded = await uploadSmallFile(
         req.file.buffer,
         req.file.originalname || 'certificate',
         containerName,
@@ -1413,29 +1631,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/uploads/recorded-lesson', handleRecordedLessonUpload, async (req, res) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ error: 'No recorded lesson file was uploaded.' });
-      }
-
-      const containerName = getRequiredContainerName(
-        AZURE_BLOB_CONTAINER_RECORDED_LESSONS,
-        'AZURE_BLOB_CONTAINER_RECORDED_LESSONS'
-      );
-      const uploaded = await uploadFile(
-        req.file.buffer,
-        req.file.originalname || 'recorded-lesson',
-        containerName,
-        req.file.mimetype
-      );
-
-      res.json(toUploadedAssetResponse(uploaded, req.file));
-    } catch (error) {
-      console.error('Recorded lesson upload error:', error);
-      res.status(500).json({ error: 'Failed to upload recorded lesson file.' });
-    }
-  });
+  app.post('/api/uploads/recorded-lesson', handleRecordedLessonUpload);
 
   // Auth APIs
   app.post("/api/auth/signup", async (req, res) => {
@@ -1613,6 +1809,7 @@ async function startServer() {
       if (lastName) user.lastName = lastName;
       if (phone !== undefined) user.phone = phone;
       if (req.file) {
+        const optimizedAvatar = await optimizeAvatarImageUpload(req.file);
         const containerName = getRequiredContainerName(
           AZURE_BLOB_CONTAINER_PROFILE_IMAGES,
           'AZURE_BLOB_CONTAINER_PROFILE_IMAGES'
@@ -1625,19 +1822,19 @@ async function startServer() {
 
         const uploadedAvatar = await replaceFile(
           previousAvatarBlobName,
-          req.file.buffer,
-          req.file.originalname || 'avatar',
+          optimizedAvatar.buffer,
+          optimizedAvatar.optimizedFileName,
           containerName,
-          req.file.mimetype
+          optimizedAvatar.mimetype
         );
 
         user.avatar = uploadedAvatar.blobUrl;
         (user as any).avatarBlobName = uploadedAvatar.blobName;
-        (user as any).avatarMimeType = req.file.mimetype;
-        (user as any).avatarSize = req.file.size;
+        (user as any).avatarMimeType = optimizedAvatar.mimetype;
+        (user as any).avatarSize = optimizedAvatar.size;
         console.log('Avatar uploaded to Azure Blob:', {
-          size: req.file.size,
-          mimetype: req.file.mimetype,
+          size: optimizedAvatar.size,
+          mimetype: optimizedAvatar.mimetype,
           blobName: uploadedAvatar.blobName,
           blobUrl: uploadedAvatar.blobUrl,
         });

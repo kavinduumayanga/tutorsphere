@@ -191,6 +191,16 @@ At minimum, configure:
 - `AZURE_BLOB_CONTAINER_RECORDED_LESSONS`
 - `AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES`
 
+Optional upload-performance tuning variables:
+
+- `AZURE_BLOB_LARGE_UPLOAD_BLOCK_SIZE_MB`
+- `AZURE_BLOB_LARGE_UPLOAD_CONCURRENCY`
+- `AZURE_IMAGE_AVATAR_MAX_WIDTH`
+- `AZURE_IMAGE_AVATAR_MAX_HEIGHT`
+- `AZURE_IMAGE_THUMBNAIL_MAX_WIDTH`
+- `AZURE_IMAGE_THUMBNAIL_MAX_HEIGHT`
+- `AZURE_IMAGE_QUALITY`
+
 ### 4. Start the development server
 
 ```bash
@@ -233,6 +243,13 @@ Use `.env.example` as the starting point.
 | `AZURE_BLOB_CONTAINER_RESOURCES` | Required for file uploads | Container for course and tutor resource files. |
 | `AZURE_BLOB_CONTAINER_RECORDED_LESSONS` | Required for file uploads | Container for recorded lesson uploads. |
 | `AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES` | Required for file uploads | Container for tutor certificate uploads. |
+| `AZURE_BLOB_LARGE_UPLOAD_BLOCK_SIZE_MB` | Optional | Block size (MB) for stream-based Azure video uploads. Default `8`. |
+| `AZURE_BLOB_LARGE_UPLOAD_CONCURRENCY` | Optional | Parallel block upload workers for stream uploads. Default `5`. |
+| `AZURE_IMAGE_AVATAR_MAX_WIDTH` | Optional | Maximum avatar image width before upload optimization. Default `512`. |
+| `AZURE_IMAGE_AVATAR_MAX_HEIGHT` | Optional | Maximum avatar image height before upload optimization. Default `512`. |
+| `AZURE_IMAGE_THUMBNAIL_MAX_WIDTH` | Optional | Maximum course thumbnail width before upload optimization. Default `1280`. |
+| `AZURE_IMAGE_THUMBNAIL_MAX_HEIGHT` | Optional | Maximum course thumbnail height before upload optimization. Default `720`. |
+| `AZURE_IMAGE_QUALITY` | Optional | Compression quality (40-95) for optimized JPEG/WEBP uploads. Default `82`. |
 | `VITE_API_BASE_URL` | Optional | Frontend API override used by `src/services/apiService.ts`. |
 
 ## Available Scripts
@@ -252,7 +269,7 @@ Use `.env.example` as the starting point.
 
 - On startup, the server runs migration and normalization helpers for legacy users, mock data, course access flags, resource download counts, and booking state fields.
 - In development, sessions are stored in memory. In production, sessions are stored in MongoDB through `connect-mongo`.
-- Uploaded files are sent directly to Azure Blob Storage via memory-based multipart handling, and MongoDB stores only file URLs plus blob metadata.
+- Uploaded files are sent directly to Azure Blob Storage: memory-buffer uploads for small files and stream-based chunked uploads for large videos. MongoDB stores only file URLs plus blob metadata.
 - Production mode expects a built frontend in `dist/index.html`; `npm start` will fail if the frontend has not been built yet.
 - The frontend uses custom URL parsing and `window.history` synchronization inside `src/App.tsx` rather than a standard route declaration setup.
 

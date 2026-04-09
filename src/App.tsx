@@ -73,10 +73,12 @@ import { ForgotPasswordPage } from './components/pages/ForgotPasswordPage';
 import { TutorDashboardPage } from './components/pages/TutorDashboardPage';
 import { StudentDashboardPage } from './components/pages/StudentDashboardPage';
 import { TutorEarningsPage } from './components/pages/TutorEarningsPage';
+import { TutorSessionsPage } from './components/pages/TutorSessionsPage';
+import { StudentSessionsPage } from './components/pages/StudentSessionsPage';
 
 const STEM_SUBJECTS: string[] = [...ALLOWED_TUTOR_SUBJECTS];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'earnings' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'about';
+type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'tutorSessions' | 'studentSessions' | 'earnings' | 'settings' | 'tutorProfile' | 'tutorBooking' | 'about';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
@@ -93,6 +95,8 @@ const NAV_LABELS: Record<Tab, string> = {
   forgotPassword: 'Forgot Password',
   register: 'Profile',
   dashboard: 'Dashboard',
+  tutorSessions: 'Tutor Sessions',
+  studentSessions: 'My Sessions',
   earnings: 'Earnings',
   settings: 'Settings',
   tutorProfile: 'Tutor Profile',
@@ -119,11 +123,11 @@ const getAllowedTabs = (user: AppUser | null): Tab[] => {
   }
 
   if (user.role === 'student') {
-    return ['home', 'tutors', 'questions', 'courses', 'resources', 'quizzes', 'dashboard', 'settings', 'about'];
+    return ['home', 'tutors', 'questions', 'courses', 'resources', 'quizzes', 'dashboard', 'studentSessions', 'settings', 'about'];
   }
 
   if (user.role === 'tutor') {
-    return ['home', 'dashboard', 'earnings', 'manageAvailability', 'register', 'courses', 'resources', 'quizzes', 'settings', 'about'];
+    return ['home', 'dashboard', 'tutorSessions', 'earnings', 'manageAvailability', 'register', 'courses', 'resources', 'quizzes', 'settings', 'about'];
   }
 
   return ['home', 'about'];
@@ -5329,6 +5333,51 @@ export default function App() {
               handleShowCertificateModal={handleShowCertificateModal}
               getBookingTutorName={getBookingTutorName}
               setActiveTab={(tab: string) => setActiveTab(tab as Tab)}
+            />
+          )}
+
+          {activeTab === 'tutorSessions' && currentUser && isTutor && (
+            <TutorSessionsPage
+              filteredTutorBookings={filteredTutorBookings}
+              tutorBookingStatusFilter={tutorBookingStatusFilter}
+              setTutorBookingStatusFilter={setTutorBookingStatusFilter}
+              tutorSessionTimelineFilter={tutorSessionTimelineFilter}
+              setTutorSessionTimelineFilter={setTutorSessionTimelineFilter}
+              activeBookingActionId={activeBookingActionId}
+              handleTutorBookingStatusChange={handleTutorBookingStatusChange}
+              handleTutorRescheduleBooking={handleTutorRescheduleBooking}
+              handleTutorMeetingLinkUpdate={handleTutorMeetingLinkUpdate}
+              handleHideBookingForCurrentUser={handleHideBookingForCurrentUser}
+              getBookingPaymentStatus={getBookingPaymentStatus}
+              getBookingStatusPillClassName={getBookingStatusPillClassName}
+              getBookingPaymentPillClassName={getBookingPaymentPillClassName}
+              getBookingStudentName={getBookingStudentName}
+              isValidMeetingLink={isValidMeetingLink}
+              canStudentManageBeforeStart={canStudentManageBeforeStart}
+            />
+          )}
+
+          {activeTab === 'studentSessions' && currentUser && isStudent && (
+            <StudentSessionsPage
+              filteredStudentBookings={filteredStudentBookings}
+              studentBookingStatusFilter={studentBookingStatusFilter}
+              setStudentBookingStatusFilter={setStudentBookingStatusFilter}
+              studentSessionTimelineFilter={studentSessionTimelineFilter}
+              setStudentSessionTimelineFilter={setStudentSessionTimelineFilter}
+              activeBookingActionId={activeBookingActionId}
+              studentReviewsBySessionId={studentReviewsBySessionId}
+              sessionRatingDrafts={sessionRatingDrafts}
+              setSessionRatingDrafts={setSessionRatingDrafts}
+              activeRatingActionBookingId={activeRatingActionBookingId}
+              getBookingPaymentStatus={getBookingPaymentStatus}
+              getBookingTutorName={getBookingTutorName}
+              getBookingStatusPillClassName={getBookingStatusPillClassName}
+              getBookingPaymentPillClassName={getBookingPaymentPillClassName}
+              canStudentManageBeforeStart={canStudentManageBeforeStart}
+              isValidMeetingLink={isValidMeetingLink}
+              handleHideBookingForCurrentUser={handleHideBookingForCurrentUser}
+              handleStudentCancelBooking={handleStudentCancelBooking}
+              handleSubmitSessionRating={handleSubmitSessionRating}
             />
           )}
 

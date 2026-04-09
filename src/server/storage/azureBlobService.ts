@@ -9,6 +9,14 @@ export type AzureUploadedFile = {
   blobName: string;
 };
 
+export type EnsureSmallUploadOptions = {
+  skipIfExists?: boolean;
+};
+
+export type EnsuredAzureUpload = AzureUploadedFile & {
+  uploaded: boolean;
+};
+
 export type LargeUploadOptions = {
   blockSizeBytes?: number;
   maxConcurrency?: number;
@@ -187,17 +195,18 @@ export const uploadSmallFile = async (
   }
 
   const blobName = buildUniqueBlobName(fileName || 'file');
-  const blockBlobClient = await getBlockBlobClient(containerName, blobName);
-
-  await blockBlobClient.uploadData(fileBuffer, {
-    blobHTTPHeaders: {
-      blobContentType: mimeType || 'application/octet-stream',
-    },
-  });
+  const uploaded = await ensureSmallFileUploaded(
+    fileBuffer,
+    fileName,
+    containerName,
+    blobName,
+    mimeType,
+    { skipIfExists: false }
+  );
 
   return {
-    blobName,
-    blobUrl: blockBlobClient.url,
+    blobName: uploaded.blobName,
+    blobUrl: uploaded.blobUrl,
   };
 };
 
@@ -239,6 +248,67 @@ export const deleteFile = async (blobName: string, containerName: string): Promi
 
   const blockBlobClient = await getBlockBlobClient(containerName, normalizedBlobName);
   await blockBlobClient.deleteIfExists();
+};
+
+export const blobExists = async (blobName: string, containerName: string): Promise<boolean> => {
+  const normalizedBlobName = String(blobName || '').trim();
+  if (!normalizedBlobName) {
+    return false;
+  }
+
+  const blockBlobClient = await getBlockBlobClient(containerName, normalizedBlobName);
+  return blockBlobClient.exists();
+};
+
+export const getBlobUrl = async (blobName: string, containerName: string): Promise<string> => {
+  const normalizedBlobName = String(blobName || '').trim();
+  if (!normalizedBlobName) {
+    throw new Error('Blob name is required to resolve blob URL.');
+  }
+
+  const blockBlobClient = await getBlockBlobClient(containerName, normalizedBlobName);
+  return blockBlobClient.url;
+};
+
+export const ensureSmallFileUploaded = async (
+  fileBuffer: Buffer,
+  fileName: string,
+  containerName: string,
+  blobName: string,
+  mimeType?: string,
+  options?: EnsureSmallUploadOptions
+): Promise<EnsuredAzureUpload> => {
+  const normalizedBlobName = String(blobName || '').trim();
+  if (!normalizedBlobName) {
+    throw new Error('Blob name is required for deterministic uploads.');
+  }
+
+  const blockBlobClient = await getBlockBlobClient(containerName, normalizedBlobName);
+  const shouldSkipIfExists = options?.skipIfExists ?? true;
+
+  if (shouldSkipIfExists && (await blockBlobClient.exists())) {
+    return {
+      blobName: normalizedBlobName,
+      blobUrl: blockBlobClient.url,
+      uploaded: false,
+    };
+  }
+
+  if (!fileBuffer || fileBuffer.length === 0) {
+    throw new Error('Cannot upload an empty file.');
+  }
+
+  await blockBlobClient.uploadData(fileBuffer, {
+    blobHTTPHeaders: {
+      blobContentType: mimeType || 'application/octet-stream',
+    },
+  });
+
+  return {
+    blobName: normalizedBlobName,
+    blobUrl: blockBlobClient.url,
+    uploaded: true,
+  };
 };
 
 export const replaceFile = async (

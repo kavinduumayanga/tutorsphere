@@ -225,11 +225,12 @@ Use `.env.example` as the starting point.
 | `MONGODB_URI` | Yes | MongoDB connection string. |
 | `JWT_SECRET` | Yes in production | JWT signing secret. Development fallback exists, but setting it explicitly is recommended. |
 | `SESSION_SECRET` | Yes in production | Express session secret. Development fallback exists, but setting it explicitly is recommended. |
+| `ALLOWED_ORIGINS` | Yes in production | Comma-separated browser origins allowed to call the API with credentials (CORS allowlist). |
 | `GMAIL_USER` | Required for email flow | Gmail account used for OTP email delivery. |
 | `GMAIL_APP_PASSWORD` | Required for email flow | Gmail app password used by Nodemailer. |
 | `EMAIL_FROM` | Required for email flow | Sender address for TutorSphere security emails. |
 | `OTP_EXPIRY_MINUTES` | Optional | OTP validity window. The code clamps this between 1 and 30 minutes. |
-| `PASSWORD_RESET_FRONTEND_URL` | Optional | Legacy password-reset frontend URL setting included in `.env.example`. |
+| `PASSWORD_RESET_FRONTEND_URL` | Recommended | Frontend reset-password URL used in password-reset flows (set this to your production frontend domain in production). |
 | `PASSWORD_RESET_TOKEN_EXPIRY_MINUTES` | Optional | Legacy token-expiry setting included in `.env.example`. |
 | `AZURE_OPENAI_ENDPOINT` | Required for AI features | Azure OpenAI endpoint. |
 | `AZURE_OPENAI_API_KEY` | Required for AI features | Azure OpenAI API key. |

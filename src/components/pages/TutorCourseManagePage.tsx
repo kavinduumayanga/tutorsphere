@@ -37,6 +37,7 @@ import { EmptyState } from '../common/EmptyState';
 import { SkeletonCard, SkeletonGrid } from '../common/SkeletonCard';
 import { Pagination } from '../common/Pagination';
 import { formatLkr } from '../../utils/currency';
+import { DEFAULT_COURSE_THUMBNAIL_PLACEHOLDER } from '../../utils/defaultImages';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -783,7 +784,7 @@ const CourseCard: React.FC<{
       {/* Thumbnail */}
       <div className="relative sm:w-64 lg:w-72 flex-shrink-0 overflow-hidden bg-slate-100">
         <img
-          src={course.thumbnail || `https://picsum.photos/seed/${course.id}/400/250`}
+          src={course.thumbnail || DEFAULT_COURSE_THUMBNAIL_PLACEHOLDER}
           alt={course.title}
           className="w-full h-48 sm:h-full object-cover group-hover:scale-105 transition-transform duration-500"
           referrerPolicy="no-referrer"
@@ -1705,7 +1706,7 @@ export const TutorCourseManagePage: React.FC<TutorCourseManagePageProps> = ({
             >
               <div className="relative aspect-[16/9] overflow-hidden bg-slate-100 flex-shrink-0">
                 <img
-                  src={previewCourse.thumbnail || `https://picsum.photos/seed/${previewCourse.id}/600/340`}
+                  src={previewCourse.thumbnail || DEFAULT_COURSE_THUMBNAIL_PLACEHOLDER}
                   alt={previewCourse.title}
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"

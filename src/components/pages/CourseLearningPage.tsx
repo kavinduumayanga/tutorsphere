@@ -30,6 +30,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { Course, CourseEnrollment, Tutor, CourseModule } from '../../types';
+import { DEFAULT_AVATAR_PLACEHOLDER } from '../../utils/defaultAvatar';
 
 // --- Helpers (copied inline so the component is self-contained) ---
 
@@ -423,7 +424,7 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
                         className="flex items-center gap-1.5 hover:text-indigo-600 transition-colors"
                       >
                         <img
-                          src={courseTutor.avatar || 'https://via.placeholder.com/24'}
+                          src={courseTutor.avatar || DEFAULT_AVATAR_PLACEHOLDER}
                           alt=""
                           className="w-4 h-4 rounded-full object-cover"
                           referrerPolicy="no-referrer"
@@ -697,7 +698,7 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
                         </h4>
                         <div className="flex items-start gap-4">
                           <img
-                            src={courseTutor.avatar || 'https://via.placeholder.com/150'}
+                            src={courseTutor.avatar || DEFAULT_AVATAR_PLACEHOLDER}
                             alt={getTutorDisplayName(courseTutor)}
                             className="w-14 h-14 rounded-xl object-cover border-2 border-white shadow-md flex-shrink-0"
                             referrerPolicy="no-referrer"

@@ -673,9 +673,6 @@ const INVALID_TUTOR_SUBJECTS_ERROR =
   `Subjects must be STEM or ICT related. Please select at least one subject from: ${ALLOWED_TUTOR_SUBJECTS.join(', ')}.`;
 
 const validateAndNormalizeTutorSubjects = (subjects: unknown): { isValid: boolean; normalizedSubjects: string[] } => {
-  console.log('[TutorSubjectValidation] Received subjects:', subjects);
-  console.log('[TutorSubjectValidation] Allowed subjects:', ALLOWED_TUTOR_SUBJECTS);
-
   const normalizedSubjects = normalizeTutorSubjects(subjects);
   return {
     isValid: normalizedSubjects.length > 0,
@@ -1578,6 +1575,103 @@ async function normalizeBookingVisibilityFlags() {
   }
 }
 
+const isValidEmailAddress = (value: string): boolean => {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+};
+
+const ALLOWED_CORS_ORIGINS = String(process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+const DEV_ALLOWED_ORIGIN_PATTERN = /^https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?$/i;
+
+type SessionAuthContext = {
+  userId: string;
+  role: string;
+};
+
+const getSessionAuthContext = (req: express.Request): SessionAuthContext => {
+  const userId = String((req.session as any)?.userId || '').trim();
+  const role = String((req.session as any)?.role || '').trim().toLowerCase();
+  return { userId, role };
+};
+
+const requireAuthenticatedSession = (
+  req: express.Request,
+  res: express.Response
+): SessionAuthContext | null => {
+  const context = getSessionAuthContext(req);
+  if (!context.userId) {
+    res.status(401).json({ error: 'Authentication required. Please sign in again.' });
+    return null;
+  }
+
+  return context;
+};
+
+const requireRoleForSession = (
+  context: SessionAuthContext,
+  res: express.Response,
+  allowedRoles: string[],
+  deniedMessage: string
+): boolean => {
+  if (!allowedRoles.includes(context.role)) {
+    res.status(403).json({ error: deniedMessage });
+    return false;
+  }
+
+  return true;
+};
+
+const requireSessionUserMatch = (
+  context: SessionAuthContext,
+  res: express.Response,
+  expectedUserId: string,
+  deniedMessage: string
+): boolean => {
+  if (!expectedUserId || context.userId !== expectedUserId) {
+    res.status(403).json({ error: deniedMessage });
+    return false;
+  }
+
+  return true;
+};
+
+const requireAnySession: express.RequestHandler = (req, res, next) => {
+  const context = requireAuthenticatedSession(req, res);
+  if (!context) {
+    return;
+  }
+  next();
+};
+
+const requireTutorSession: express.RequestHandler = (req, res, next) => {
+  const context = requireAuthenticatedSession(req, res);
+  if (!context) {
+    return;
+  }
+
+  if (!requireRoleForSession(context, res, ['tutor'], 'Only tutor accounts can perform this action.')) {
+    return;
+  }
+
+  next();
+};
+
+const requireStudentSession: express.RequestHandler = (req, res, next) => {
+  const context = requireAuthenticatedSession(req, res);
+  if (!context) {
+    return;
+  }
+
+  if (!requireRoleForSession(context, res, ['student'], 'Only student accounts can perform this action.')) {
+    return;
+  }
+
+  next();
+};
+
 async function startServer() {
   console.log('[Startup] Bootstrapping server runtime...');
   const securityConfig = loadSecurityConfig();
@@ -1639,11 +1733,46 @@ async function startServer() {
   const sameSiteMode: 'none' | 'lax' = isProduction ? 'none' : 'lax';
   console.log(`[Startup] HTTP bind target set to 0.0.0.0:${port}`);
 
+  if (isProduction && ALLOWED_CORS_ORIGINS.length === 0) {
+    throw new Error('ALLOWED_ORIGINS must be configured in production for secure CORS handling.');
+  }
+
+  const allowedCorsOrigins = new Set(ALLOWED_CORS_ORIGINS);
+
   // Honor reverse-proxy headers (App Service / load balancers) for protocol and host awareness.
   app.set('trust proxy', 1);
 
   app.use(express.json());
-  app.use(cors({ origin: true, credentials: true }));
+  app.use(
+    cors({
+      credentials: true,
+      origin: (origin, callback) => {
+        if (!origin) {
+          callback(null, true);
+          return;
+        }
+
+        if (allowedCorsOrigins.has(origin)) {
+          callback(null, true);
+          return;
+        }
+
+        if (!isProduction && DEV_ALLOWED_ORIGIN_PATTERN.test(origin)) {
+          callback(null, true);
+          return;
+        }
+
+        callback(new Error('Not allowed by CORS'));
+      },
+    })
+  );
+  app.use((error: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (error instanceof Error && error.message === 'Not allowed by CORS') {
+      return res.status(403).json({ error: 'CORS origin blocked.' });
+    }
+
+    return next(error);
+  });
 
   const sessionStore = isProduction
     ? MongoStore.create({
@@ -1677,7 +1806,7 @@ async function startServer() {
   app.use('/api/messages', messagingRouter);
   console.log('[Startup] Core route setup completed.');
 
-  app.post('/api/uploads/course-thumbnail', handleCourseThumbnailUpload, async (req, res) => {
+  app.post('/api/uploads/course-thumbnail', requireTutorSession, handleCourseThumbnailUpload, async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: 'No thumbnail file was uploaded.' });
@@ -1703,9 +1832,9 @@ async function startServer() {
     }
   });
 
-  app.post('/api/uploads/course-video', handleCourseVideoUpload);
+  app.post('/api/uploads/course-video', requireTutorSession, handleCourseVideoUpload);
 
-  app.post('/api/uploads/course-resource', handleCourseResourceUpload, async (req, res) => {
+  app.post('/api/uploads/course-resource', requireTutorSession, handleCourseResourceUpload, async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: 'No resource file was uploaded.' });
@@ -1729,7 +1858,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/uploads/tutor-resource', handleTutorResourceUpload, async (req, res) => {
+  app.post('/api/uploads/tutor-resource', requireTutorSession, handleTutorResourceUpload, async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: 'No resource file was uploaded.' });
@@ -1753,7 +1882,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/uploads/tutor-certificate', handleTutorCertificateUpload, async (req, res) => {
+  app.post('/api/uploads/tutor-certificate', requireTutorSession, handleTutorCertificateUpload, async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: 'No certificate file was uploaded.' });
@@ -1777,18 +1906,34 @@ async function startServer() {
     }
   });
 
-  app.post('/api/uploads/recorded-lesson', handleRecordedLessonUpload);
+  app.post('/api/uploads/recorded-lesson', requireTutorSession, handleRecordedLessonUpload);
 
   // Auth APIs
   app.post("/api/auth/signup", async (req, res) => {
     try {
       const { firstName, lastName, email, password, role } = req.body;
-      const normalizedEmail = email ? email.trim() : '';
+      const normalizedFirstName = String(firstName || '').trim();
+      const normalizedLastName = String(lastName || '').trim();
+      const normalizedEmail = normalizeEmailAddress(email);
       const normalizedPassword = String(password || '');
-      const escapedEmail = normalizedEmail.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+      const normalizedRole = role === 'tutor' ? 'tutor' : 'student';
+      const escapedEmail = escapeRegexPattern(normalizedEmail);
 
-      if (!firstName || !lastName || !normalizedEmail || !normalizedPassword) {
+      if (!normalizedFirstName || !normalizedLastName || !normalizedEmail || !normalizedPassword) {
         return res.status(400).json({ error: "First name, last name, email, and password are required" });
+      }
+
+      if (!isValidEmailAddress(normalizedEmail)) {
+        return res.status(400).json({ error: 'Please provide a valid email address.' });
+      }
+
+      if (normalizedFirstName.length > 80 || normalizedLastName.length > 80) {
+        return res.status(400).json({ error: 'First name and last name must be 80 characters or fewer.' });
+      }
+
+      const strengthError = validatePasswordStrength(normalizedPassword);
+      if (strengthError) {
+        return res.status(400).json({ error: strengthError });
       }
 
       // Check if user already exists
@@ -1801,11 +1946,11 @@ async function startServer() {
       const hashedPassword = await hashPassword(normalizedPassword);
       const newUser = new User({
         id,
-        firstName,
-        lastName,
+        firstName: normalizedFirstName,
+        lastName: normalizedLastName,
         email: normalizedEmail,
         password: hashedPassword,
-        role: role || 'student',
+        role: normalizedRole,
       });
 
       await newUser.save();
@@ -1831,8 +1976,13 @@ async function startServer() {
         return res.status(400).json({ error: "Email and password are required" });
       }
 
-      const normalizedEmail = email.trim();
-      const escapedEmail = normalizedEmail.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+      const normalizedEmail = normalizeEmailAddress(email);
+      const escapedEmail = escapeRegexPattern(normalizedEmail);
+
+      if (!isValidEmailAddress(normalizedEmail)) {
+        return res.status(400).json({ error: 'Please provide a valid email address.' });
+      }
+
       const user = await User.findOne({
         email: { $regex: new RegExp(`^${escapedEmail}$`, 'i') },
       });
@@ -1897,6 +2047,10 @@ async function startServer() {
   app.post('/api/auth/change-password', async (req, res) => {
     try {
       const { userId, currentPassword, newPassword, confirmPassword } = req.body || {};
+      const sessionContext = requireAuthenticatedSession(req, res);
+      if (!sessionContext) {
+        return;
+      }
 
       const normalizedUserId = String(userId || '').trim();
       const currentPasswordValue = String(currentPassword || '');
@@ -1905,6 +2059,10 @@ async function startServer() {
 
       if (!normalizedUserId || !currentPasswordValue || !newPasswordValue || !confirmPasswordValue) {
         return res.status(400).json({ error: 'User ID, current password, new password, and confirm password are required.' });
+      }
+
+      if (!requireSessionUserMatch(sessionContext, res, normalizedUserId, 'You can only change your own password.')) {
+        return;
       }
 
       if (newPasswordValue !== confirmPasswordValue) {
@@ -1941,19 +2099,75 @@ async function startServer() {
     }
   });
 
+  app.post('/api/auth/logout', (req, res) => {
+    const clearSessionCookie = () => {
+      res.clearCookie('connect.sid', {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: sameSiteMode,
+      });
+    };
+
+    if (!req.session) {
+      clearSessionCookie();
+      return res.json({ message: 'Signed out successfully.' });
+    }
+
+    req.session.destroy((error) => {
+      if (error) {
+        console.error('Logout error:', error);
+        return res.status(500).json({ error: 'Failed to sign out. Please try again.' });
+      }
+
+      clearSessionCookie();
+      return res.json({ message: 'Signed out successfully.' });
+    });
+  });
+
   app.put("/api/auth/user/:id", handleAvatarUpload, async (req, res) => {
     try {
       const { id } = req.params;
       const { firstName, lastName, phone } = req.body;
+      const sessionContext = requireAuthenticatedSession(req, res);
+      if (!sessionContext) {
+        return;
+      }
+
+      if (!requireSessionUserMatch(sessionContext, res, id, 'You can only update your own profile.')) {
+        return;
+      }
 
       const user = await User.findOne({ id });
       if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
 
-      if (firstName) user.firstName = firstName;
-      if (lastName) user.lastName = lastName;
-      if (phone !== undefined) user.phone = phone;
+      if (firstName !== undefined) {
+        const normalizedFirstName = String(firstName || '').trim();
+        if (!normalizedFirstName) {
+          return res.status(400).json({ error: 'First name cannot be empty.' });
+        }
+        if (normalizedFirstName.length > 80) {
+          return res.status(400).json({ error: 'First name must be 80 characters or fewer.' });
+        }
+        user.firstName = normalizedFirstName;
+      }
+
+      if (lastName !== undefined) {
+        const normalizedLastName = String(lastName || '').trim();
+        if (!normalizedLastName) {
+          return res.status(400).json({ error: 'Last name cannot be empty.' });
+        }
+        if (normalizedLastName.length > 80) {
+          return res.status(400).json({ error: 'Last name must be 80 characters or fewer.' });
+        }
+        user.lastName = normalizedLastName;
+      }
+
+      if (phone !== undefined) {
+        user.phone = String(phone || '').trim();
+      }
+
       if (req.file) {
         const optimizedAvatar = await optimizeAvatarImageUpload(req.file);
         const containerName = getRequiredContainerName(
@@ -1978,12 +2192,6 @@ async function startServer() {
         (user as any).avatarBlobName = uploadedAvatar.blobName;
         (user as any).avatarMimeType = optimizedAvatar.mimetype;
         (user as any).avatarSize = optimizedAvatar.size;
-        console.log('Avatar uploaded to Azure Blob:', {
-          size: optimizedAvatar.size,
-          mimetype: optimizedAvatar.mimetype,
-          blobName: uploadedAvatar.blobName,
-          blobUrl: uploadedAvatar.blobUrl,
-        });
       }
 
       await user.save();
@@ -2007,14 +2215,21 @@ async function startServer() {
       res.json({ id: user.id, firstName: user.firstName, lastName: user.lastName, email: user.email, role: user.role, avatar: avatarUrl, phone: user.phone });
     } catch (error) {
       console.error("Update user error:", error);
-      const message = error instanceof Error ? error.message : "Internal server error";
-      res.status(500).json({ error: message });
+      res.status(500).json({ error: 'Failed to update profile.' });
     }
   });
 
   app.delete("/api/auth/user/:id", async (req, res) => {
     try {
       const { id } = req.params;
+      const sessionContext = requireAuthenticatedSession(req, res);
+      if (!sessionContext) {
+        return;
+      }
+
+      if (!requireSessionUserMatch(sessionContext, res, id, 'You can only delete your own account.')) {
+        return;
+      }
 
       const user = await User.findOne({ id });
       if (!user) {
@@ -2152,6 +2367,17 @@ async function startServer() {
         }
       }
 
+      req.session?.destroy((destroyError) => {
+        if (destroyError) {
+          console.warn('Failed to destroy session after account deletion:', destroyError);
+        }
+      });
+      res.clearCookie('connect.sid', {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: sameSiteMode,
+      });
+
       res.json({ message: "Account deleted successfully" });
     } catch (error) {
       console.error("Delete user account error:", error);
@@ -2162,11 +2388,8 @@ async function startServer() {
   app.get("/api/auth/user/:id/avatar", async (req, res) => {
     try {
       const { id } = req.params;
-      console.log('Avatar request for user:', id);
       const user = await User.findOne({ id });
-      console.log('User found:', !!user, 'Has avatar:', !!user?.avatar, 'Avatar value:', user?.avatar);
       if (!user || !user.avatar) {
-        console.log('Avatar not found for user:', id);
         return res.status(404).json({ error: "Avatar not found" });
       }
 
@@ -2188,7 +2411,6 @@ async function startServer() {
       }
 
       // Legacy binary avatar fallback.
-      console.log('Serving legacy binary avatar data');
       res.set('Content-Type', 'image/jpeg');
       res.send(user.avatar);
     } catch (error) {
@@ -2199,10 +2421,17 @@ async function startServer() {
 
   app.get('/api/notifications', async (req, res) => {
     try {
-      const userId = typeof req.query.userId === 'string' ? req.query.userId.trim() : '';
-      if (!userId) {
-        return res.status(400).json({ error: 'userId is required.' });
+      const sessionContext = requireAuthenticatedSession(req, res);
+      if (!sessionContext) {
+        return;
       }
+
+      const requestedUserId = typeof req.query.userId === 'string' ? req.query.userId.trim() : '';
+      if (requestedUserId && requestedUserId !== sessionContext.userId) {
+        return res.status(403).json({ error: 'You can only access your own notifications.' });
+      }
+
+      const userId = sessionContext.userId;
 
       const requestedLimit = Number(req.query.limit);
       const limit = Number.isFinite(requestedLimit)
@@ -2238,7 +2467,17 @@ async function startServer() {
 
   app.post('/api/notifications', async (req, res) => {
     try {
-      const userId = toNotificationText(req.body?.userId);
+      const sessionContext = requireAuthenticatedSession(req, res);
+      if (!sessionContext) {
+        return;
+      }
+
+      const requestedUserId = toNotificationText(req.body?.userId);
+      if (requestedUserId && requestedUserId !== sessionContext.userId) {
+        return res.status(403).json({ error: 'You can only create notifications for your own account.' });
+      }
+
+      const userId = requestedUserId || sessionContext.userId;
       const title = toNotificationText(req.body?.title);
       const message = toNotificationText(req.body?.message);
       const type = toNotificationText(req.body?.type, 'system');
@@ -2285,10 +2524,17 @@ async function startServer() {
 
   app.put('/api/notifications/read-all', async (req, res) => {
     try {
-      const userId = toNotificationText(req.body?.userId);
-      if (!userId) {
-        return res.status(400).json({ error: 'userId is required.' });
+      const sessionContext = requireAuthenticatedSession(req, res);
+      if (!sessionContext) {
+        return;
       }
+
+      const requestedUserId = toNotificationText(req.body?.userId);
+      if (requestedUserId && requestedUserId !== sessionContext.userId) {
+        return res.status(403).json({ error: 'You can only update your own notifications.' });
+      }
+
+      const userId = sessionContext.userId;
 
       const result = await Notification.updateMany(
         { userId, isRead: false },
@@ -2307,11 +2553,21 @@ async function startServer() {
 
   app.put('/api/notifications/:id/read', async (req, res) => {
     try {
-      const userId = toNotificationText(req.body?.userId || req.query.userId);
+      const sessionContext = requireAuthenticatedSession(req, res);
+      if (!sessionContext) {
+        return;
+      }
+
+      const requestedUserId = toNotificationText(req.body?.userId || req.query.userId);
+      if (requestedUserId && requestedUserId !== sessionContext.userId) {
+        return res.status(403).json({ error: 'You can only update your own notifications.' });
+      }
+
+      const userId = sessionContext.userId;
       const notificationId = toNotificationText(req.params.id);
 
-      if (!userId || !notificationId) {
-        return res.status(400).json({ error: 'userId and notification id are required.' });
+      if (!notificationId) {
+        return res.status(400).json({ error: 'Notification id is required.' });
       }
 
       const notification = await Notification.findOneAndUpdate(
@@ -2365,21 +2621,39 @@ async function startServer() {
     }
   });
 
-  app.post("/api/tutors", async (req, res) => {
+  app.post("/api/tutors", requireTutorSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
       const tutorData = req.body || {};
+      const tutorId = sessionContext.userId;
+
+      if (toNotificationText(tutorData.id) && toNotificationText(tutorData.id) !== tutorId) {
+        return res.status(403).json({ error: 'You can only create your own tutor profile.' });
+      }
+
+      const tutorAccount = await User.findOne({ id: tutorId, role: 'tutor' });
+      if (!tutorAccount) {
+        return res.status(403).json({ error: 'Only tutor accounts can create tutor profiles.' });
+      }
+
+      const existingTutor = await Tutor.findOne({ id: tutorId });
+      if (existingTutor) {
+        return res.status(409).json({ error: 'Tutor profile already exists. Use update instead.' });
+      }
+
       const { isValid, normalizedSubjects } = validateAndNormalizeTutorSubjects(tutorData.subjects);
 
       if (!isValid) {
         return res.status(400).json({ error: INVALID_TUTOR_SUBJECTS_ERROR });
       }
 
-      const id = tutorData.id || Math.random().toString(36).substr(2, 9);
       const tutor = new Tutor({
         ...tutorData,
+        id: tutorId,
+        email: normalizeEmailAddress(tutorData.email) || normalizeEmailAddress(tutorAccount.email),
+        role: 'tutor',
         subjects: normalizedSubjects,
         teachingLevel: normalizeTeachingLevel(tutorData.teachingLevel),
-        id,
       });
       await tutor.save();
       res.json(tutor);
@@ -2389,10 +2663,27 @@ async function startServer() {
     }
   });
 
-  app.put("/api/tutors/:id", async (req, res) => {
+  app.put("/api/tutors/:id", requireTutorSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
+      if (req.params.id !== sessionContext.userId) {
+        return res.status(403).json({ error: 'You can only update your own tutor profile.' });
+      }
+
+      const tutorAccount = await User.findOne({ id: sessionContext.userId, role: 'tutor' });
+      if (!tutorAccount) {
+        return res.status(403).json({ error: 'Only tutor accounts can update tutor profiles.' });
+      }
+
       let tutor = await Tutor.findOne({ id: req.params.id });
       const { teachingLevel: requestedTeachingLevel, ...incomingTutorData } = req.body || {};
+
+      if (toNotificationText((incomingTutorData as any)?.id) && toNotificationText((incomingTutorData as any).id) !== sessionContext.userId) {
+        return res.status(400).json({ error: 'Tutor profile id cannot be reassigned.' });
+      }
+
+      delete (incomingTutorData as any).id;
+      delete (incomingTutorData as any).role;
 
       if (tutor) {
         const nextTutorPayload: Record<string, unknown> = {
@@ -2432,7 +2723,7 @@ async function startServer() {
           ...incomingTutorData,
           id: user.id,
           name: incomingTutorData.name || `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}`,
-          email: incomingTutorData.email || user.email,
+          email: normalizeEmailAddress(incomingTutorData.email) || normalizeEmailAddress(user.email),
           role: 'tutor',
           qualifications: incomingTutorData.qualifications || 'Not specified',
           subjects: normalizedSubjects,
@@ -2454,8 +2745,13 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/tutors/:id", async (req, res) => {
+  app.delete("/api/tutors/:id", requireTutorSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
+      if (req.params.id !== sessionContext.userId) {
+        return res.status(403).json({ error: 'You can only delete your own tutor profile.' });
+      }
+
       const tutor = await Tutor.findOneAndDelete({ id: req.params.id });
       if (tutor) {
         res.json({ message: "Tutor deleted successfully" });
@@ -2489,16 +2785,22 @@ async function startServer() {
     }
   });
 
-  app.post("/api/reviews", async (req, res) => {
+  app.post("/api/reviews", requireStudentSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
       const reviewData = req.body || {};
       const tutorId = String(reviewData.tutorId || '').trim();
-      const studentId = String(reviewData.studentId || '').trim();
+      const requestedStudentId = String(reviewData.studentId || '').trim();
+      const studentId = requestedStudentId || sessionContext.userId;
       const studentName = String(reviewData.studentName || '').trim();
       const sessionId = String(reviewData.sessionId || '').trim();
       const rating = Number(reviewData.rating);
       const comment = String(reviewData.comment || '').trim();
       const date = String(reviewData.date || new Date().toISOString().split('T')[0]).trim();
+
+      if (!requireSessionUserMatch(sessionContext, res, studentId, 'You can only submit your own reviews.')) {
+        return;
+      }
 
       if (!tutorId || !studentId || !studentName) {
         return res.status(400).json({ error: 'tutorId, studentId, and studentName are required.' });
@@ -2540,11 +2842,51 @@ async function startServer() {
     }
   });
 
-  app.put("/api/reviews/:id", async (req, res) => {
+  app.put("/api/reviews/:id", requireStudentSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
+      const existingReview = await Review.findOne({ id: req.params.id });
+      if (!existingReview) {
+        return res.status(404).json({ error: 'Review not found' });
+      }
+
+      if (!requireSessionUserMatch(sessionContext, res, String(existingReview.studentId || '').trim(), 'You can only update your own reviews.')) {
+        return;
+      }
+
+      const updatePayload: Record<string, unknown> = {};
+
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'rating')) {
+        const rating = Number(req.body?.rating);
+        if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
+          return res.status(400).json({ error: 'rating must be between 1 and 5.' });
+        }
+        updatePayload.rating = rating;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'comment')) {
+        updatePayload.comment = String(req.body?.comment || '').trim();
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'date')) {
+        updatePayload.date = String(req.body?.date || '').trim() || new Date().toISOString().split('T')[0];
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'studentName')) {
+        const normalizedStudentName = String(req.body?.studentName || '').trim();
+        if (!normalizedStudentName) {
+          return res.status(400).json({ error: 'studentName cannot be empty.' });
+        }
+        updatePayload.studentName = normalizedStudentName;
+      }
+
+      if (Object.keys(updatePayload).length === 0) {
+        return res.json(existingReview);
+      }
+
       const review = await Review.findOneAndUpdate(
         { id: req.params.id },
-        req.body,
+        { $set: updatePayload },
         { new: true }
       );
       if (review) {
@@ -2558,8 +2900,18 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/reviews/:id", async (req, res) => {
+  app.delete("/api/reviews/:id", requireStudentSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
+      const existingReview = await Review.findOne({ id: req.params.id });
+      if (!existingReview) {
+        return res.status(404).json({ error: 'Review not found' });
+      }
+
+      if (!requireSessionUserMatch(sessionContext, res, String(existingReview.studentId || '').trim(), 'You can only delete your own reviews.')) {
+        return;
+      }
+
       const review = await Review.findOneAndDelete({ id: req.params.id });
       if (review) {
         res.json({ message: "Review deleted successfully" });
@@ -2599,15 +2951,19 @@ async function startServer() {
     }
   });
 
-  app.post("/api/courses", async (req, res) => {
+  app.post("/api/courses", requireTutorSession, async (req, res) => {
     try {
-      const courseData = req.body;
+      const sessionContext = getSessionAuthContext(req);
+      const courseData = req.body || {};
+      const requestedTutorId = String(courseData?.tutorId || '').trim();
 
-      if (!courseData?.tutorId) {
-        return res.status(400).json({ error: "tutorId is required to create a course" });
+      if (requestedTutorId && requestedTutorId !== sessionContext.userId) {
+        return res.status(403).json({ error: 'You can only create courses for your own tutor account.' });
       }
 
-      const tutorUser = await User.findOne({ id: courseData.tutorId, role: 'tutor' });
+      const tutorId = sessionContext.userId;
+
+      const tutorUser = await User.findOne({ id: tutorId, role: 'tutor' });
       if (!tutorUser) {
         return res.status(400).json({ error: "Invalid tutorId. Tutor account not found." });
       }
@@ -2629,6 +2985,7 @@ async function startServer() {
       const id = createEntityId();
       const course = new Course({
         ...courseData,
+        tutorId,
         id,
         isFree,
         price,
@@ -2643,15 +3000,17 @@ async function startServer() {
     }
   });
 
-  app.put("/api/courses/:id", async (req, res) => {
+  app.put("/api/courses/:id", requireTutorSession, async (req, res) => {
     try {
-      const actorId =
+      const sessionContext = getSessionAuthContext(req);
+      const actorId = sessionContext.userId;
+      const requestedActorId =
         (typeof req.body?.actorId === 'string' && req.body.actorId.trim()) ||
         (typeof req.query.actorId === 'string' && req.query.actorId.trim()) ||
         '';
 
-      if (!actorId) {
-        return res.status(401).json({ error: "actorId is required to update a course." });
+      if (requestedActorId && requestedActorId !== actorId) {
+        return res.status(403).json({ error: 'You can only update courses as the signed-in tutor.' });
       }
 
       const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
@@ -2792,15 +3151,17 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/courses/:id", async (req, res) => {
+  app.delete("/api/courses/:id", requireTutorSession, async (req, res) => {
     try {
-      const actorId =
+      const sessionContext = getSessionAuthContext(req);
+      const actorId = sessionContext.userId;
+      const requestedActorId =
         (typeof req.body?.actorId === 'string' && req.body.actorId.trim()) ||
         (typeof req.query.actorId === 'string' && req.query.actorId.trim()) ||
         '';
 
-      if (!actorId) {
-        return res.status(401).json({ error: "actorId is required to delete a course." });
+      if (requestedActorId && requestedActorId !== actorId) {
+        return res.status(403).json({ error: 'You can only delete courses as the signed-in tutor.' });
       }
 
       const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
@@ -2868,11 +3229,13 @@ async function startServer() {
     }
   });
 
-  app.get('/api/courses/:id/coupons', async (req, res) => {
+  app.get('/api/courses/:id/coupons', requireTutorSession, async (req, res) => {
     try {
-      const actorId = typeof req.query.actorId === 'string' ? req.query.actorId.trim() : '';
-      if (!actorId) {
-        return res.status(401).json({ error: 'actorId is required to view course coupons.' });
+      const sessionContext = getSessionAuthContext(req);
+      const actorId = sessionContext.userId;
+      const requestedActorId = typeof req.query.actorId === 'string' ? req.query.actorId.trim() : '';
+      if (requestedActorId && requestedActorId !== actorId) {
+        return res.status(403).json({ error: 'You can only view coupons for your own courses.' });
       }
 
       const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
@@ -2897,11 +3260,13 @@ async function startServer() {
     }
   });
 
-  app.post('/api/courses/:id/coupons', async (req, res) => {
+  app.post('/api/courses/:id/coupons', requireTutorSession, async (req, res) => {
     try {
-      const actorId = String(req.body?.actorId || '').trim();
-      if (!actorId) {
-        return res.status(401).json({ error: 'actorId is required to create a coupon.' });
+      const sessionContext = getSessionAuthContext(req);
+      const actorId = sessionContext.userId;
+      const requestedActorId = String(req.body?.actorId || '').trim();
+      if (requestedActorId && requestedActorId !== actorId) {
+        return res.status(403).json({ error: 'You can only create coupons for your own courses.' });
       }
 
       const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
@@ -2968,11 +3333,13 @@ async function startServer() {
     }
   });
 
-  app.put('/api/courses/:id/coupons/:couponId', async (req, res) => {
+  app.put('/api/courses/:id/coupons/:couponId', requireTutorSession, async (req, res) => {
     try {
-      const actorId = String(req.body?.actorId || '').trim();
-      if (!actorId) {
-        return res.status(401).json({ error: 'actorId is required to update a coupon.' });
+      const sessionContext = getSessionAuthContext(req);
+      const actorId = sessionContext.userId;
+      const requestedActorId = String(req.body?.actorId || '').trim();
+      if (requestedActorId && requestedActorId !== actorId) {
+        return res.status(403).json({ error: 'You can only update coupons for your own courses.' });
       }
 
       const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
@@ -3077,11 +3444,13 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/courses/:id/coupons/:couponId/status', async (req, res) => {
+  app.patch('/api/courses/:id/coupons/:couponId/status', requireTutorSession, async (req, res) => {
     try {
-      const actorId = String(req.body?.actorId || '').trim();
-      if (!actorId) {
-        return res.status(401).json({ error: 'actorId is required to update coupon status.' });
+      const sessionContext = getSessionAuthContext(req);
+      const actorId = sessionContext.userId;
+      const requestedActorId = String(req.body?.actorId || '').trim();
+      if (requestedActorId && requestedActorId !== actorId) {
+        return res.status(403).json({ error: 'You can only update coupons for your own courses.' });
       }
 
       const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
@@ -3119,11 +3488,13 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/courses/:id/coupons/:couponId', async (req, res) => {
+  app.delete('/api/courses/:id/coupons/:couponId', requireTutorSession, async (req, res) => {
     try {
-      const actorId = typeof req.query.actorId === 'string' ? req.query.actorId.trim() : '';
-      if (!actorId) {
-        return res.status(401).json({ error: 'actorId is required to delete a coupon.' });
+      const sessionContext = getSessionAuthContext(req);
+      const actorId = sessionContext.userId;
+      const requestedActorId = typeof req.query.actorId === 'string' ? req.query.actorId.trim() : '';
+      if (requestedActorId && requestedActorId !== actorId) {
+        return res.status(403).json({ error: 'You can only delete coupons for your own courses.' });
       }
 
       const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
@@ -3152,13 +3523,15 @@ async function startServer() {
     }
   });
 
-  app.post('/api/courses/:id/coupons/validate', async (req, res) => {
+  app.post('/api/courses/:id/coupons/validate', requireStudentSession, async (req, res) => {
     try {
-      const studentId = String(req.body?.studentId || '').trim();
+      const sessionContext = getSessionAuthContext(req);
+      const requestedStudentId = String(req.body?.studentId || '').trim();
+      const studentId = requestedStudentId || sessionContext.userId;
       const couponCode = normalizeCouponCode(req.body?.couponCode);
 
-      if (!studentId) {
-        return res.status(400).json({ error: 'studentId is required to validate a coupon.' });
+      if (!requireSessionUserMatch(sessionContext, res, studentId, 'You can only validate coupons for your own account.')) {
+        return;
       }
 
       if (!couponCode) {
@@ -3206,12 +3579,15 @@ async function startServer() {
     }
   });
 
-  app.post("/api/courses/:id/enroll", async (req, res) => {
+  app.post("/api/courses/:id/enroll", requireStudentSession, async (req, res) => {
     try {
-      const { studentId, paymentConfirmed, paymentReference, couponCode } = req.body;
+      const sessionContext = getSessionAuthContext(req);
+      const { paymentConfirmed, paymentReference, couponCode } = req.body || {};
+      const requestedStudentId = String(req.body?.studentId || '').trim();
+      const studentId = requestedStudentId || sessionContext.userId;
 
-      if (!studentId) {
-        return res.status(400).json({ error: "studentId is required for enrollment" });
+      if (!requireSessionUserMatch(sessionContext, res, studentId, 'You can only enroll courses for your own account.')) {
+        return;
       }
 
       const student = await User.findOne({ id: studentId, role: 'student' });
@@ -3447,11 +3823,14 @@ async function startServer() {
     }
   });
 
-  app.post("/api/courses/:id/unenroll", async (req, res) => {
+  app.post("/api/courses/:id/unenroll", requireStudentSession, async (req, res) => {
     try {
-      const { studentId } = req.body;
-      if (!studentId) {
-        return res.status(400).json({ error: "studentId is required for unenrollment" });
+      const sessionContext = getSessionAuthContext(req);
+      const requestedStudentId = String(req.body?.studentId || '').trim();
+      const studentId = requestedStudentId || sessionContext.userId;
+
+      if (!requireSessionUserMatch(sessionContext, res, studentId, 'You can only unenroll your own account.')) {
+        return;
       }
 
       await Course.findOneAndUpdate(
@@ -3473,9 +3852,37 @@ async function startServer() {
 
   app.get("/api/course-enrollments", async (req, res) => {
     try {
-      const studentId = typeof req.query.studentId === 'string' ? req.query.studentId.trim() : '';
+      const sessionContext = requireAuthenticatedSession(req, res);
+      if (!sessionContext) {
+        return;
+      }
+
+      const requestedStudentId = typeof req.query.studentId === 'string' ? req.query.studentId.trim() : '';
       const courseId = typeof req.query.courseId === 'string' ? req.query.courseId.trim() : '';
-      const tutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
+      const requestedTutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
+
+      let studentId = requestedStudentId;
+      let tutorId = requestedTutorId;
+
+      if (sessionContext.role === 'student') {
+        if (requestedTutorId) {
+          return res.status(403).json({ error: 'Student accounts cannot query tutor enrollment views.' });
+        }
+
+        if (requestedStudentId && requestedStudentId !== sessionContext.userId) {
+          return res.status(403).json({ error: 'You can only access your own enrollments.' });
+        }
+
+        studentId = sessionContext.userId;
+      } else if (sessionContext.role === 'tutor') {
+        if (requestedTutorId && requestedTutorId !== sessionContext.userId) {
+          return res.status(403).json({ error: 'You can only access enrollments for your own tutor account.' });
+        }
+
+        tutorId = sessionContext.userId;
+      } else {
+        return res.status(403).json({ error: 'Unsupported account role for enrollment access.' });
+      }
 
       const query: Record<string, string> = {};
       if (studentId) query.studentId = studentId;
@@ -3559,12 +3966,15 @@ async function startServer() {
     }
   });
 
-  app.put("/api/course-enrollments/:id/progress", async (req, res) => {
+  app.put("/api/course-enrollments/:id/progress", requireStudentSession, async (req, res) => {
     try {
-      const { studentId, completedModuleIds } = req.body;
+      const sessionContext = getSessionAuthContext(req);
+      const { completedModuleIds } = req.body || {};
+      const requestedStudentId = String(req.body?.studentId || '').trim();
+      const studentId = requestedStudentId || sessionContext.userId;
 
-      if (!studentId) {
-        return res.status(400).json({ error: "studentId is required to update progress" });
+      if (!requireSessionUserMatch(sessionContext, res, studentId, 'You can only update your own learning progress.')) {
+        return;
       }
 
       const enrollment = await CourseEnrollment.findOne({ id: req.params.id });
@@ -3652,12 +4062,16 @@ async function startServer() {
     }
   });
 
-  app.get('/api/withdrawals/summary', async (req, res) => {
+  app.get('/api/withdrawals/summary', requireTutorSession, async (req, res) => {
     try {
-      const tutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
-      if (!tutorId) {
-        return res.status(400).json({ error: 'tutorId is required.' });
+      const sessionContext = getSessionAuthContext(req);
+      const requestedTutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
+
+      if (requestedTutorId && requestedTutorId !== sessionContext.userId) {
+        return res.status(403).json({ error: 'You can only access your own withdrawal summary.' });
       }
+
+      const tutorId = sessionContext.userId;
 
       const tutor = await Tutor.findOne({ id: tutorId });
       if (!tutor) {
@@ -3672,12 +4086,16 @@ async function startServer() {
     }
   });
 
-  app.get('/api/withdrawals', async (req, res) => {
+  app.get('/api/withdrawals', requireTutorSession, async (req, res) => {
     try {
-      const tutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
-      if (!tutorId) {
-        return res.status(400).json({ error: 'tutorId is required.' });
+      const sessionContext = getSessionAuthContext(req);
+      const requestedTutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
+
+      if (requestedTutorId && requestedTutorId !== sessionContext.userId) {
+        return res.status(403).json({ error: 'You can only access your own withdrawals.' });
       }
+
+      const tutorId = sessionContext.userId;
 
       const tutor = await Tutor.findOne({ id: tutorId });
       if (!tutor) {
@@ -3706,15 +4124,17 @@ async function startServer() {
     }
   });
 
-  app.post('/api/withdrawals', async (req, res) => {
+  app.post('/api/withdrawals', requireTutorSession, async (req, res) => {
     try {
-      const tutorId = String(req.body?.tutorId || '').trim();
+      const sessionContext = getSessionAuthContext(req);
+      const requestedTutorId = String(req.body?.tutorId || '').trim();
+      const tutorId = requestedTutorId || sessionContext.userId;
       const payoutMethodDetails = String(req.body?.payoutMethodDetails || '').trim();
       const payoutMethodType = normalizeWithdrawalPayoutMethodType(req.body?.payoutMethodType);
       const amount = toFinitePrice(req.body?.amount);
 
-      if (!tutorId) {
-        return res.status(400).json({ error: 'tutorId is required.' });
+      if (!requireSessionUserMatch(sessionContext, res, tutorId, 'You can only create withdrawals for your own account.')) {
+        return;
       }
 
       if (!Number.isFinite(amount) || amount <= 0) {
@@ -3756,16 +4176,18 @@ async function startServer() {
     }
   });
 
-  app.get("/api/course-enrollments/:id/certificate", async (req, res) => {
+  app.get("/api/course-enrollments/:id/certificate", requireStudentSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
       const enrollment = await CourseEnrollment.findOne({ id: req.params.id });
       if (!enrollment) {
         return res.status(404).json({ error: "Enrollment not found" });
       }
 
-      const requestStudentId = typeof req.query.studentId === 'string' ? req.query.studentId.trim() : '';
-      if (!requestStudentId) {
-        return res.status(400).json({ error: "studentId query parameter is required." });
+      const requestedStudentId = typeof req.query.studentId === 'string' ? req.query.studentId.trim() : '';
+      const requestStudentId = requestedStudentId || sessionContext.userId;
+      if (!requireSessionUserMatch(sessionContext, res, requestStudentId, 'You can only access your own certificate.')) {
+        return;
       }
 
       if (requestStudentId !== enrollment.studentId) {
@@ -3835,9 +4257,10 @@ async function startServer() {
     }
   });
 
-  app.post("/api/resources", async (req, res) => {
+  app.post("/api/resources", requireTutorSession, async (req, res) => {
     try {
-      const resourceData = req.body;
+      const sessionContext = getSessionAuthContext(req);
+      const resourceData = req.body || {};
       const normalizedTitle = typeof resourceData?.title === 'string' ? resourceData.title.trim() : '';
       const normalizedSubject = typeof resourceData?.subject === 'string' ? resourceData.subject.trim() : '';
       const normalizedType = typeof resourceData?.type === 'string' ? resourceData.type.trim() : '';
@@ -3848,9 +4271,12 @@ async function startServer() {
       const normalizedMimeType = typeof resourceData?.mimeType === 'string' ? resourceData.mimeType.trim() : '';
       const parsedResourceSize = Number(resourceData?.size);
 
-      if (!resourceData?.tutorId) {
-        return res.status(400).json({ error: "tutorId is required to create a resource" });
+      const requestedTutorId = String(resourceData?.tutorId || '').trim();
+      if (requestedTutorId && requestedTutorId !== sessionContext.userId) {
+        return res.status(403).json({ error: 'You can only create resources for your own tutor account.' });
       }
+
+      const tutorId = sessionContext.userId;
 
       if (!normalizedTitle) {
         return res.status(400).json({ error: "Resource title is required." });
@@ -3868,7 +4294,7 @@ async function startServer() {
         return res.status(400).json({ error: "Resource URL must be a valid URL." });
       }
 
-      const tutorUser = await User.findOne({ id: resourceData.tutorId, role: 'tutor' });
+      const tutorUser = await User.findOne({ id: tutorId, role: 'tutor' });
       if (!tutorUser) {
         return res.status(400).json({ error: "Invalid tutorId. Tutor account not found." });
       }
@@ -3876,6 +4302,7 @@ async function startServer() {
       const id = createEntityId();
       const resource = new Resource({
         ...resourceData,
+        tutorId,
         id,
         title: normalizedTitle,
         subject: normalizedSubject,
@@ -3896,15 +4323,16 @@ async function startServer() {
     }
   });
 
-  app.put("/api/resources/:id", async (req, res) => {
+  app.put("/api/resources/:id", requireTutorSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
       const actorId =
         (typeof req.body?.actorId === 'string' && req.body.actorId.trim()) ||
         (typeof req.query.actorId === 'string' && req.query.actorId.trim()) ||
-        '';
+        sessionContext.userId;
 
-      if (!actorId) {
-        return res.status(401).json({ error: "actorId is required to update a resource." });
+      if (actorId !== sessionContext.userId) {
+        return res.status(403).json({ error: 'You can only update resources for your own account.' });
       }
 
       const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
@@ -4071,15 +4499,16 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/resources/:id", async (req, res) => {
+  app.delete("/api/resources/:id", requireTutorSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
       const actorId =
         (typeof req.body?.actorId === 'string' && req.body.actorId.trim()) ||
         (typeof req.query.actorId === 'string' && req.query.actorId.trim()) ||
-        '';
+        sessionContext.userId;
 
-      if (!actorId) {
-        return res.status(401).json({ error: "actorId is required to delete a resource." });
+      if (actorId !== sessionContext.userId) {
+        return res.status(403).json({ error: 'You can only delete resources for your own account.' });
       }
 
       const actorUser = await User.findOne({ id: actorId, role: 'tutor' });
@@ -4150,9 +4579,18 @@ async function startServer() {
   };
 
   // Booking APIs
-  app.get("/api/bookings", async (req, res) => {
+  app.get("/api/bookings", requireAnySession, async (req, res) => {
     try {
-      const bookings = await Booking.find();
+      const sessionContext = getSessionAuthContext(req);
+      if (sessionContext.role !== 'student' && sessionContext.role !== 'tutor') {
+        return res.status(403).json({ error: 'Unsupported account role for booking access.' });
+      }
+
+      const bookings = await Booking.find(
+        sessionContext.role === 'tutor'
+          ? { tutorId: sessionContext.userId }
+          : { studentId: sessionContext.userId }
+      );
       res.json(bookings);
     } catch (error) {
       console.error("Get bookings error:", error);
@@ -4160,10 +4598,12 @@ async function startServer() {
     }
   });
 
-  app.post("/api/bookings", async (req, res) => {
+  app.post("/api/bookings", requireStudentSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
       const bookingData = req.body || {};
-      const studentId = String(bookingData.studentId || '').trim();
+      const requestedStudentId = String(bookingData.studentId || '').trim();
+      const studentId = requestedStudentId || sessionContext.userId;
       const studentName = String(bookingData.studentName || '').trim();
       const tutorId = String(bookingData.tutorId || '').trim();
       const slotId = String(bookingData.slotId || '').trim();
@@ -4178,6 +4618,10 @@ async function startServer() {
       const hiddenForTutor = Boolean(bookingData.hiddenForTutor);
       const hiddenForStudent = Boolean(bookingData.hiddenForStudent);
       let status = normalizeBookingStatus(bookingData.status);
+
+      if (!requireSessionUserMatch(sessionContext, res, studentId, 'You can only create bookings for your own account.')) {
+        return;
+      }
 
       if (!studentId || !tutorId || !slotId || !subject || !date) {
         return res.status(400).json({ error: 'studentId, tutorId, slotId, subject, and date are required.' });
@@ -4244,8 +4688,8 @@ async function startServer() {
         paymentReference: paymentStatus === 'paid' ? paymentReference : undefined,
         paymentFailureReason: paymentStatus === 'failed' ? (paymentFailureReason || 'Payment failed before confirmation.') : undefined,
         paidAt: paymentStatus === 'paid' ? (paidAt || new Date().toISOString()) : undefined,
-        hiddenForTutor,
-        hiddenForStudent,
+        hiddenForTutor: false,
+        hiddenForStudent: false,
       });
       await booking.save();
 
@@ -4330,11 +4774,41 @@ async function startServer() {
     }
   });
 
-  app.put("/api/bookings/:id", async (req, res) => {
+  app.put("/api/bookings/:id", requireAnySession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
       const existingBooking = await Booking.findOne({ id: req.params.id });
       if (!existingBooking) {
         return res.status(404).json({ error: "Booking not found" });
+      }
+
+      const isTutorActor = sessionContext.role === 'tutor' && existingBooking.tutorId === sessionContext.userId;
+      const isStudentActor = sessionContext.role === 'student' && existingBooking.studentId === sessionContext.userId;
+
+      if (!isTutorActor && !isStudentActor) {
+        return res.status(403).json({ error: 'You can only update your own bookings.' });
+      }
+
+      if (req.body?.studentId !== undefined && String(req.body.studentId).trim() !== existingBooking.studentId) {
+        return res.status(400).json({ error: 'Booking student cannot be changed.' });
+      }
+
+      if (req.body?.tutorId !== undefined && String(req.body.tutorId).trim() !== existingBooking.tutorId) {
+        return res.status(400).json({ error: 'Booking tutor cannot be changed.' });
+      }
+
+      if (isStudentActor) {
+        const incomingKeys = Object.keys(req.body || {});
+        const allowedStudentKeys = new Set(['status', 'hiddenForStudent']);
+        const disallowedKeys = incomingKeys.filter((key) => !allowedStudentKeys.has(key));
+
+        if (disallowedKeys.length > 0) {
+          return res.status(403).json({ error: 'Students can only cancel or hide their own bookings.' });
+        }
+
+        if (req.body?.status !== undefined && normalizeBookingStatus(req.body.status) !== 'cancelled') {
+          return res.status(403).json({ error: 'Students can only change booking status to cancelled.' });
+        }
       }
 
       const incomingStatus = req.body?.status;
@@ -4676,8 +5150,20 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/bookings/:id", async (req, res) => {
+  app.delete("/api/bookings/:id", requireAnySession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
+      const existingBooking = await Booking.findOne({ id: req.params.id });
+      if (!existingBooking) {
+        return res.status(404).json({ error: 'Booking not found' });
+      }
+
+      const isTutorActor = sessionContext.role === 'tutor' && existingBooking.tutorId === sessionContext.userId;
+      const isStudentActor = sessionContext.role === 'student' && existingBooking.studentId === sessionContext.userId;
+      if (!isTutorActor && !isStudentActor) {
+        return res.status(403).json({ error: 'You can only delete your own bookings.' });
+      }
+
       const booking = await Booking.findOneAndDelete({ id: req.params.id });
       if (booking) {
         if (booking.status === 'confirmed' && booking.paymentStatus === 'paid') {
@@ -4701,9 +5187,14 @@ async function startServer() {
   });
 
   // Question APIs
-  app.get("/api/questions", async (req, res) => {
+  app.get("/api/questions", requireAnySession, async (req, res) => {
     try {
-      const questions = await Question.find();
+      const sessionContext = getSessionAuthContext(req);
+      const questions = await Question.find(
+        sessionContext.role === 'student'
+          ? { studentId: sessionContext.userId }
+          : {}
+      );
       res.json(questions);
     } catch (error) {
       console.error("Get questions error:", error);
@@ -4711,11 +5202,19 @@ async function startServer() {
     }
   });
 
-  app.post("/api/questions", async (req, res) => {
+  app.post("/api/questions", requireStudentSession, async (req, res) => {
     try {
-      const questionData = req.body;
+      const sessionContext = getSessionAuthContext(req);
+      const questionData = req.body || {};
+      const requestedStudentId = String(questionData?.studentId || '').trim();
+      const studentId = requestedStudentId || sessionContext.userId;
+
+      if (!requireSessionUserMatch(sessionContext, res, studentId, 'You can only create questions for your own account.')) {
+        return;
+      }
+
       const id = Math.random().toString(36).substr(2, 9);
-      const question = new Question({ ...questionData, id, timestamp: Date.now() });
+      const question = new Question({ ...questionData, studentId, id, timestamp: Date.now() });
       await question.save();
       res.json(question);
     } catch (error) {
@@ -4724,11 +5223,46 @@ async function startServer() {
     }
   });
 
-  app.put("/api/questions/:id", async (req, res) => {
+  app.put("/api/questions/:id", requireStudentSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
+      const existingQuestion = await Question.findOne({ id: req.params.id });
+      if (!existingQuestion) {
+        return res.status(404).json({ error: 'Question not found' });
+      }
+
+      if (!requireSessionUserMatch(sessionContext, res, String(existingQuestion.studentId || '').trim(), 'You can only update your own questions.')) {
+        return;
+      }
+
+      const updatePayload: Record<string, unknown> = {};
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'text')) {
+        const text = String(req.body?.text || '').trim();
+        if (!text) {
+          return res.status(400).json({ error: 'Question text cannot be empty.' });
+        }
+        updatePayload.text = text;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'subject')) {
+        const subject = String(req.body?.subject || '').trim();
+        if (!subject) {
+          return res.status(400).json({ error: 'Question subject cannot be empty.' });
+        }
+        updatePayload.subject = subject;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'answer')) {
+        updatePayload.answer = String(req.body?.answer || '').trim();
+      }
+
+      if (Object.keys(updatePayload).length === 0) {
+        return res.json(existingQuestion);
+      }
+
       const question = await Question.findOneAndUpdate(
         { id: req.params.id },
-        req.body,
+        { $set: updatePayload },
         { new: true }
       );
       if (question) {
@@ -4742,8 +5276,18 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/questions/:id", async (req, res) => {
+  app.delete("/api/questions/:id", requireStudentSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
+      const existingQuestion = await Question.findOne({ id: req.params.id });
+      if (!existingQuestion) {
+        return res.status(404).json({ error: 'Question not found' });
+      }
+
+      if (!requireSessionUserMatch(sessionContext, res, String(existingQuestion.studentId || '').trim(), 'You can only delete your own questions.')) {
+        return;
+      }
+
       const question = await Question.findOneAndDelete({ id: req.params.id });
       if (question) {
         res.json({ message: "Question deleted successfully" });
@@ -4757,7 +5301,7 @@ async function startServer() {
   });
 
   // Quiz APIs
-  app.get("/api/quizzes", async (req, res) => {
+  app.get("/api/quizzes", requireAnySession, async (req, res) => {
     try {
       const quizzes = await Quiz.find();
       res.json(quizzes);
@@ -4767,7 +5311,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/quizzes", async (req, res) => {
+  app.post("/api/quizzes", requireAnySession, async (req, res) => {
     try {
       const quizData = req.body;
       const id = Math.random().toString(36).substr(2, 9);
@@ -4780,7 +5324,7 @@ async function startServer() {
     }
   });
 
-  app.put("/api/quizzes/:id", async (req, res) => {
+  app.put("/api/quizzes/:id", requireAnySession, async (req, res) => {
     try {
       const quiz = await Quiz.findOneAndUpdate(
         { id: req.params.id },
@@ -4798,7 +5342,7 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/quizzes/:id", async (req, res) => {
+  app.delete("/api/quizzes/:id", requireAnySession, async (req, res) => {
     try {
       const quiz = await Quiz.findOneAndDelete({ id: req.params.id });
       if (quiz) {
@@ -4813,8 +5357,13 @@ async function startServer() {
   });
 
   // Study Plan APIs
-  app.get("/api/study-plans/:studentId", async (req, res) => {
+  app.get("/api/study-plans/:studentId", requireStudentSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
+      if (!requireSessionUserMatch(sessionContext, res, req.params.studentId, 'You can only access your own study plan.')) {
+        return;
+      }
+
       const studyPlan = await StudyPlan.findOne({ studentId: req.params.studentId });
       if (studyPlan) {
         res.json(studyPlan);
@@ -4827,11 +5376,19 @@ async function startServer() {
     }
   });
 
-  app.post("/api/study-plans", async (req, res) => {
+  app.post("/api/study-plans", requireStudentSession, async (req, res) => {
     try {
-      const studyPlanData = req.body;
+      const sessionContext = getSessionAuthContext(req);
+      const studyPlanData = req.body || {};
+      const requestedStudentId = String(studyPlanData?.studentId || '').trim();
+      const studentId = requestedStudentId || sessionContext.userId;
+
+      if (!requireSessionUserMatch(sessionContext, res, studentId, 'You can only create your own study plan.')) {
+        return;
+      }
+
       const id = Math.random().toString(36).substr(2, 9);
-      const studyPlan = new StudyPlan({ ...studyPlanData, id });
+      const studyPlan = new StudyPlan({ ...studyPlanData, studentId, id });
       await studyPlan.save();
       res.json(studyPlan);
     } catch (error) {
@@ -4840,11 +5397,24 @@ async function startServer() {
     }
   });
 
-  app.put("/api/study-plans/:id", async (req, res) => {
+  app.put("/api/study-plans/:id", requireStudentSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
+      const existingStudyPlan = await StudyPlan.findOne({ id: req.params.id });
+      if (!existingStudyPlan) {
+        return res.status(404).json({ error: 'Study plan not found' });
+      }
+
+      if (!requireSessionUserMatch(sessionContext, res, String(existingStudyPlan.studentId || '').trim(), 'You can only update your own study plan.')) {
+        return;
+      }
+
+      const updatePayload = { ...req.body };
+      delete (updatePayload as any).studentId;
+
       const studyPlan = await StudyPlan.findOneAndUpdate(
         { id: req.params.id },
-        req.body,
+        updatePayload,
         { new: true }
       );
       if (studyPlan) {
@@ -4858,8 +5428,18 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/study-plans/:id", async (req, res) => {
+  app.delete("/api/study-plans/:id", requireStudentSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
+      const existingStudyPlan = await StudyPlan.findOne({ id: req.params.id });
+      if (!existingStudyPlan) {
+        return res.status(404).json({ error: 'Study plan not found' });
+      }
+
+      if (!requireSessionUserMatch(sessionContext, res, String(existingStudyPlan.studentId || '').trim(), 'You can only delete your own study plan.')) {
+        return;
+      }
+
       const studyPlan = await StudyPlan.findOneAndDelete({ id: req.params.id });
       if (studyPlan) {
         res.json({ message: "Study plan deleted successfully" });
@@ -4873,8 +5453,13 @@ async function startServer() {
   });
 
   // Skill Level APIs
-  app.get("/api/skill-levels/:studentId", async (req, res) => {
+  app.get("/api/skill-levels/:studentId", requireStudentSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
+      if (!requireSessionUserMatch(sessionContext, res, req.params.studentId, 'You can only access your own skill levels.')) {
+        return;
+      }
+
       const skillLevels = await SkillLevel.find({ studentId: req.params.studentId });
       res.json(skillLevels);
     } catch (error) {
@@ -4883,11 +5468,19 @@ async function startServer() {
     }
   });
 
-  app.post("/api/skill-levels", async (req, res) => {
+  app.post("/api/skill-levels", requireStudentSession, async (req, res) => {
     try {
-      const skillLevelData = req.body;
+      const sessionContext = getSessionAuthContext(req);
+      const skillLevelData = req.body || {};
+      const requestedStudentId = String(skillLevelData?.studentId || '').trim();
+      const studentId = requestedStudentId || sessionContext.userId;
+
+      if (!requireSessionUserMatch(sessionContext, res, studentId, 'You can only create your own skill levels.')) {
+        return;
+      }
+
       const id = Math.random().toString(36).substr(2, 9);
-      const skillLevel = new SkillLevel({ ...skillLevelData, id });
+      const skillLevel = new SkillLevel({ ...skillLevelData, studentId, id });
       await skillLevel.save();
       res.json(skillLevel);
     } catch (error) {
@@ -4896,11 +5489,24 @@ async function startServer() {
     }
   });
 
-  app.put("/api/skill-levels/:id", async (req, res) => {
+  app.put("/api/skill-levels/:id", requireStudentSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
+      const existingSkillLevel = await SkillLevel.findOne({ id: req.params.id });
+      if (!existingSkillLevel) {
+        return res.status(404).json({ error: 'Skill level not found' });
+      }
+
+      if (!requireSessionUserMatch(sessionContext, res, String(existingSkillLevel.studentId || '').trim(), 'You can only update your own skill levels.')) {
+        return;
+      }
+
+      const updatePayload = { ...req.body };
+      delete (updatePayload as any).studentId;
+
       const skillLevel = await SkillLevel.findOneAndUpdate(
         { id: req.params.id },
-        req.body,
+        updatePayload,
         { new: true }
       );
       if (skillLevel) {
@@ -4914,8 +5520,18 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/skill-levels/:id", async (req, res) => {
+  app.delete("/api/skill-levels/:id", requireStudentSession, async (req, res) => {
     try {
+      const sessionContext = getSessionAuthContext(req);
+      const existingSkillLevel = await SkillLevel.findOne({ id: req.params.id });
+      if (!existingSkillLevel) {
+        return res.status(404).json({ error: 'Skill level not found' });
+      }
+
+      if (!requireSessionUserMatch(sessionContext, res, String(existingSkillLevel.studentId || '').trim(), 'You can only delete your own skill levels.')) {
+        return;
+      }
+
       const skillLevel = await SkillLevel.findOneAndDelete({ id: req.params.id });
       if (skillLevel) {
         res.json({ message: "Skill level deleted successfully" });

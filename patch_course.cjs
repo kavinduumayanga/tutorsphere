@@ -1,7 +1,13 @@
 const mongoose = require('mongoose');
+require('dotenv').config();
 
 async function patch() {
-  await mongoose.connect('mongodb://localhost:27017/tutorsphere');
+  const mongoUri = String(process.env.MONGODB_URI || '').trim();
+  if (!mongoUri) {
+    throw new Error('MONGODB_URI is required to run patch_course.cjs');
+  }
+
+  await mongoose.connect(mongoUri);
   const Course = mongoose.model('Course', new mongoose.Schema({}, { strict: false }));
   
   const res = await Course.updateMany(
@@ -9,6 +15,9 @@ async function patch() {
     { $set: { isFree: true, price: 0 } }
   );
   console.log('Update result:', res);
-  process.exit(0);
+  await mongoose.disconnect();
 }
-patch().catch(console.error);
+patch().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

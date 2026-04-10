@@ -24,6 +24,7 @@ import { normalizeTutorSubjects } from '../data/tutorSubjects';
 
 const LOCALHOST_API_BASE_URL = 'http://localhost:3000/api';
 const LOOPBACK_API_BASE_URL = 'http://127.0.0.1:3000/api';
+const API_UNAUTHORIZED_EVENT = 'tutorsphere:api-unauthorized';
 
 const resolveApiBaseUrl = (): string => {
   const runtimeOverride = ((window as any).__TUTORSPHERE_API_BASE_URL__ as string | undefined)?.trim();
@@ -80,6 +81,15 @@ const getApiBaseCandidates = (): string[] => {
   }
 
   return Array.from(new Set(candidates.filter(Boolean)));
+};
+
+const isSameHostApiBase = (baseUrl: string): boolean => {
+  try {
+    const parsedUrl = new URL(baseUrl, window.location.origin);
+    return parsedUrl.host === window.location.host;
+  } catch {
+    return false;
+  }
 };
 
 const shouldRetryApiRequest = (error: unknown): boolean => {
@@ -212,6 +222,34 @@ export type NotificationsResponse = {
 };
 
 class ApiService {
+  private shouldNotifyUnauthorized(endpoint: string): boolean {
+    const normalized = endpoint.trim().toLowerCase();
+    if (!normalized.startsWith('/auth/')) {
+      return true;
+    }
+
+    return ![
+      '/auth/login',
+      '/auth/signup',
+      '/auth/forgot-password',
+      '/auth/resend-otp',
+      '/auth/verify-otp',
+      '/auth/reset-password',
+    ].includes(normalized);
+  }
+
+  private notifyUnauthorized(endpoint: string): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.dispatchEvent(
+      new CustomEvent(API_UNAUTHORIZED_EVENT, {
+        detail: { endpoint },
+      })
+    );
+  }
+
   private sanitizeTutorName(value: string): string {
     return value.replace(/\s+updated\s*$/i, '').trim();
   }
@@ -366,7 +404,11 @@ class ApiService {
           }
         }
 
-        if (!isLastCandidate && (response.status === 404 || response.status === 405)) {
+        if (
+          !isLastCandidate &&
+          (response.status === 404 || response.status === 405) &&
+          !isSameHostApiBase(baseUrl)
+        ) {
           continue;
         }
 
@@ -419,6 +461,9 @@ class ApiService {
     const response = await this.fetchWithApiFallback(endpoint, requestOptions, true);
 
     if (!response.ok) {
+      if (response.status === 401 && this.shouldNotifyUnauthorized(endpoint)) {
+        this.notifyUnauthorized(endpoint);
+      }
       throw await this.createApiError(response);
     }
 
@@ -441,6 +486,12 @@ class ApiService {
     return this.request('/auth/signup', {
       method: 'POST',
       body: JSON.stringify({ firstName, lastName, email, password, role }),
+    });
+  }
+
+  async logout(): Promise<{ message: string }> {
+    return this.request('/auth/logout', {
+      method: 'POST',
     });
   }
 

@@ -2122,13 +2122,26 @@ async function startServer() {
   // Auth APIs
   app.post("/api/auth/signup", async (req, res) => {
     try {
-      const { firstName, lastName, email, password, role } = req.body;
+      const { firstName, lastName, email, password, role, tutorProfile, autoLogin } = req.body || {};
       const normalizedFirstName = String(firstName || '').trim();
       const normalizedLastName = String(lastName || '').trim();
       const normalizedEmail = normalizeEmailAddress(email);
       const normalizedPassword = String(password || '');
       const normalizedRole = role === 'tutor' ? 'tutor' : 'student';
       const escapedEmail = escapeRegexPattern(normalizedEmail);
+      const parsedTutorProfile =
+        typeof tutorProfile === 'object' && tutorProfile !== null
+          ? (tutorProfile as Record<string, unknown>)
+          : {};
+      const resolvedTutorProfile: Record<string, unknown> = {
+        qualifications: parsedTutorProfile.qualifications ?? req.body?.qualifications ?? req.body?.education,
+        education: parsedTutorProfile.education ?? req.body?.education,
+        subjects: parsedTutorProfile.subjects ?? req.body?.subjects,
+        teachingLevel: parsedTutorProfile.teachingLevel ?? req.body?.teachingLevel,
+        pricePerHour: parsedTutorProfile.pricePerHour ?? req.body?.pricePerHour ?? req.body?.hourlyRate,
+        hourlyRate: parsedTutorProfile.hourlyRate ?? req.body?.hourlyRate,
+        bio: parsedTutorProfile.bio ?? req.body?.bio,
+      };
 
       if (!normalizedFirstName || !normalizedLastName || !normalizedEmail || !normalizedPassword) {
         return res.status(400).json({ error: "First name, last name, email, and password are required" });
@@ -2165,6 +2178,62 @@ async function startServer() {
       });
 
       await newUser.save();
+
+      if (normalizedRole === 'tutor') {
+        try {
+          const rawTutorSubjects = resolvedTutorProfile.subjects;
+          const { isValid, normalizedSubjects } = validateAndNormalizeTutorSubjects(rawTutorSubjects);
+          const hasProvidedSubjects = Array.isArray(rawTutorSubjects) && rawTutorSubjects.length > 0;
+
+          if (hasProvidedSubjects && !isValid) {
+            await User.deleteOne({ id });
+            return res.status(400).json({ error: INVALID_TUTOR_SUBJECTS_ERROR });
+          }
+
+          const normalizedTutorSubjects = isValid ? normalizedSubjects : [ALLOWED_TUTOR_SUBJECTS[0]];
+          const rawTutorQualifications = String(
+            resolvedTutorProfile.qualifications ?? resolvedTutorProfile.education ?? ''
+          ).trim();
+          const normalizedTutorQualifications = rawTutorQualifications || 'Not specified';
+          const normalizedTutorBio = String(resolvedTutorProfile.bio ?? '').trim();
+          const normalizedTutorPrice = toFinitePrice(
+            resolvedTutorProfile.pricePerHour ?? resolvedTutorProfile.hourlyRate
+          );
+
+          await Tutor.findOneAndUpdate(
+            { id },
+            {
+              $set: {
+                id,
+                name: `${normalizedFirstName} ${normalizedLastName}`.trim() || 'Tutor',
+                email: normalizedEmail,
+                role: 'tutor',
+                qualifications: normalizedTutorQualifications,
+                subjects: normalizedTutorSubjects,
+                teachingLevel: normalizeTeachingLevel(resolvedTutorProfile.teachingLevel),
+                pricePerHour: normalizedTutorPrice,
+                bio: normalizedTutorBio,
+              },
+              $setOnInsert: {
+                rating: 0,
+                reviewCount: 0,
+                availability: [],
+                isVerified: false,
+              },
+            },
+            { upsert: true, new: true }
+          );
+        } catch (tutorSignupError) {
+          await User.deleteOne({ id });
+          throw tutorSignupError;
+        }
+      }
+
+      if (Boolean(autoLogin) && req.session) {
+        (req.session as any).userId = newUser.id;
+        (req.session as any).role = newUser.role;
+        req.session.cookie.maxAge = undefined;
+      }
 
       res.json({
         id,
@@ -2818,7 +2887,42 @@ async function startServer() {
   // Tutor APIs
   app.get("/api/tutors", async (req, res) => {
     try {
-      const tutors = await Tutor.find();
+      const tutorProfileDocs = await Tutor.find();
+      const tutorProfiles = tutorProfileDocs.map((doc) =>
+        typeof (doc as any).toObject === 'function' ? (doc as any).toObject() : doc
+      );
+      const tutorProfileIds = tutorProfiles
+        .map((profile) => String((profile as any)?.id || '').trim())
+        .filter(Boolean);
+
+      const tutorUsersWithoutProfiles = await User.find(
+        tutorProfileIds.length > 0
+          ? { role: 'tutor', id: { $nin: tutorProfileIds } }
+          : { role: 'tutor' },
+        { id: 1, firstName: 1, lastName: 1, email: 1, avatar: 1 }
+      );
+
+      const fallbackTutors = tutorUsersWithoutProfiles.map((userDoc: any) => {
+        const fullName = `${String(userDoc?.firstName || '').trim()} ${String(userDoc?.lastName || '').trim()}`.trim();
+        return {
+          id: String(userDoc?.id || '').trim(),
+          name: fullName || 'Tutor',
+          email: normalizeEmailAddress(userDoc?.email),
+          role: 'tutor',
+          qualifications: 'Not specified',
+          subjects: [],
+          teachingLevel: 'School',
+          pricePerHour: 0,
+          rating: 0,
+          reviewCount: 0,
+          bio: '',
+          availability: [],
+          isVerified: false,
+          avatar: String(userDoc?.avatar || '').trim() || undefined,
+        };
+      });
+
+      const tutors = [...tutorProfiles, ...fallbackTutors];
 
       if (tutors.length === 0) {
         return res.json([]);
@@ -2843,11 +2947,11 @@ async function startServer() {
       );
 
       const tutorResponses = await Promise.all(
-        tutors.map(async (tutorDoc) => {
+        tutors.map(async (tutorSource) => {
           const tutor =
-            typeof (tutorDoc as any).toObject === 'function'
-              ? (tutorDoc as any).toObject()
-              : tutorDoc;
+            typeof (tutorSource as any).toObject === 'function'
+              ? (tutorSource as any).toObject()
+              : { ...(tutorSource as any) };
 
           const tutorId = String((tutor as any)?.id || '').trim();
           const linkedUser = tutorId ? userById.get(tutorId) : undefined;
@@ -2873,8 +2977,9 @@ async function startServer() {
   app.get("/api/tutors/:id", async (req, res) => {
     try {
       const tutor = await Tutor.findOne({ id: req.params.id });
+
       if (tutor) {
-        const linkedUser = await User.findOne({ id: req.params.id }, { id: 1, avatar: 1 });
+        const linkedUser = await User.findOne({ id: req.params.id }, { id: 1, avatar: 1, role: 1 });
         const tutorResponse =
           typeof (tutor as any).toObject === 'function'
             ? (tutor as any).toObject()
@@ -2899,7 +3004,46 @@ async function startServer() {
 
         res.json(tutorResponse);
       } else {
-        res.status(404).json({ error: "Tutor not found" });
+        const tutorUser = await User.findOne(
+          { id: req.params.id, role: 'tutor' },
+          { id: 1, firstName: 1, lastName: 1, email: 1, avatar: 1 }
+        );
+
+        if (!tutorUser) {
+          return res.status(404).json({ error: "Tutor not found" });
+        }
+
+        const fullName = `${String((tutorUser as any)?.firstName || '').trim()} ${String((tutorUser as any)?.lastName || '').trim()}`.trim();
+        const fallbackTutor: Record<string, unknown> = {
+          id: String((tutorUser as any)?.id || '').trim(),
+          name: fullName || 'Tutor',
+          email: normalizeEmailAddress((tutorUser as any)?.email),
+          role: 'tutor',
+          qualifications: 'Not specified',
+          subjects: [],
+          teachingLevel: 'School',
+          pricePerHour: 0,
+          rating: 0,
+          reviewCount: 0,
+          bio: '',
+          availability: [],
+          isVerified: false,
+        };
+
+        const resolvedAvatar = await resolveTutorAvatarResponseUrl(
+          req,
+          fallbackTutor as any,
+          {
+            id: String((tutorUser as any)?.id || '').trim(),
+            avatar: String((tutorUser as any)?.avatar || '').trim() || undefined,
+          }
+        );
+
+        if (resolvedAvatar) {
+          fallbackTutor.avatar = resolvedAvatar;
+        }
+
+        return res.json(fallbackTutor);
       }
     } catch (error) {
       console.error("Get tutor error:", error);
@@ -2910,7 +3054,7 @@ async function startServer() {
   app.post("/api/tutors", requireTutorSession, async (req, res) => {
     try {
       const sessionContext = getSessionAuthContext(req);
-      const tutorData = req.body || {};
+      const tutorData = (req.body || {}) as Record<string, unknown>;
       const tutorId = sessionContext.userId;
 
       if (toNotificationText(tutorData.id) && toNotificationText(tutorData.id) !== tutorId) {
@@ -2933,13 +3077,30 @@ async function startServer() {
         return res.status(400).json({ error: INVALID_TUTOR_SUBJECTS_ERROR });
       }
 
+      const tutorDisplayName = normalizeNameValue(
+        String(tutorData.name || `${String((tutorAccount as any)?.firstName || '').trim()} ${String((tutorAccount as any)?.lastName || '').trim()}`)
+      );
+      const parsedTutorRating = Number(tutorData.rating);
+      const parsedTutorReviewCount = Number(tutorData.reviewCount);
+      const normalizedTutorQualifications = String(
+        tutorData.qualifications ?? tutorData.education ?? ''
+      ).trim();
+      const normalizedTutorBio = String(tutorData.bio ?? '').trim();
+
       const tutor = new Tutor({
-        ...tutorData,
         id: tutorId,
+        name: tutorDisplayName || 'Tutor',
         email: normalizeEmailAddress(tutorData.email) || normalizeEmailAddress(tutorAccount.email),
         role: 'tutor',
+        qualifications: normalizedTutorQualifications || 'Not specified',
         subjects: normalizedSubjects,
         teachingLevel: normalizeTeachingLevel(tutorData.teachingLevel),
+        pricePerHour: toFinitePrice(tutorData.pricePerHour ?? tutorData.hourlyRate),
+        rating: Number.isFinite(parsedTutorRating) ? Math.max(0, Math.min(5, parsedTutorRating)) : 0,
+        reviewCount: Number.isFinite(parsedTutorReviewCount) ? Math.max(0, Math.round(parsedTutorReviewCount)) : 0,
+        bio: normalizedTutorBio,
+        availability: Array.isArray(tutorData.availability) ? tutorData.availability : [],
+        isVerified: Boolean(tutorData.isVerified),
       });
       await tutor.save();
       res.json(tutor);
@@ -2962,7 +3123,11 @@ async function startServer() {
       }
 
       let tutor = await Tutor.findOne({ id: req.params.id });
-      const { teachingLevel: requestedTeachingLevel, ...incomingTutorData } = req.body || {};
+      const incomingTutorData: Record<string, unknown> = {
+        ...((req.body || {}) as Record<string, unknown>),
+      };
+      const requestedTeachingLevel = incomingTutorData.teachingLevel;
+      delete incomingTutorData.teachingLevel;
 
       if (toNotificationText((incomingTutorData as any)?.id) && toNotificationText((incomingTutorData as any).id) !== sessionContext.userId) {
         return res.status(400).json({ error: 'Tutor profile id cannot be reassigned.' });
@@ -2970,6 +3135,45 @@ async function startServer() {
 
       delete (incomingTutorData as any).id;
       delete (incomingTutorData as any).role;
+
+      if (
+        Object.prototype.hasOwnProperty.call(incomingTutorData, 'education')
+        && !Object.prototype.hasOwnProperty.call(incomingTutorData, 'qualifications')
+      ) {
+        incomingTutorData.qualifications = incomingTutorData.education;
+      }
+
+      if (
+        Object.prototype.hasOwnProperty.call(incomingTutorData, 'hourlyRate')
+        && !Object.prototype.hasOwnProperty.call(incomingTutorData, 'pricePerHour')
+      ) {
+        incomingTutorData.pricePerHour = incomingTutorData.hourlyRate;
+      }
+
+      delete (incomingTutorData as any).education;
+      delete (incomingTutorData as any).hourlyRate;
+
+      if (Object.prototype.hasOwnProperty.call(incomingTutorData, 'name')) {
+        const normalizedName = normalizeNameValue(incomingTutorData.name);
+        if (normalizedName) {
+          incomingTutorData.name = normalizedName;
+        } else {
+          delete (incomingTutorData as any).name;
+        }
+      }
+
+      if (Object.prototype.hasOwnProperty.call(incomingTutorData, 'qualifications')) {
+        const normalizedQualifications = String(incomingTutorData.qualifications ?? '').trim();
+        incomingTutorData.qualifications = normalizedQualifications || 'Not specified';
+      }
+
+      if (Object.prototype.hasOwnProperty.call(incomingTutorData, 'pricePerHour')) {
+        incomingTutorData.pricePerHour = toFinitePrice(incomingTutorData.pricePerHour);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(incomingTutorData, 'bio')) {
+        incomingTutorData.bio = String(incomingTutorData.bio ?? '').trim();
+      }
 
       if (tutor) {
         const nextTutorPayload: Record<string, unknown> = {
@@ -3005,21 +3209,28 @@ async function startServer() {
           return res.status(400).json({ error: INVALID_TUTOR_SUBJECTS_ERROR });
         }
 
+        const parsedTutorRating = Number(incomingTutorData.rating);
+        const parsedTutorReviewCount = Number(incomingTutorData.reviewCount);
+        const tutorDisplayName = normalizeNameValue(
+          String(incomingTutorData.name || `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}`)
+        );
+        const tutorQualifications = String(incomingTutorData.qualifications ?? '').trim();
+        const tutorBio = String(incomingTutorData.bio ?? '').trim();
+
         tutor = new Tutor({
-          ...incomingTutorData,
           id: user.id,
-          name: incomingTutorData.name || `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}`,
+          name: tutorDisplayName || 'Tutor',
           email: normalizeEmailAddress(incomingTutorData.email) || normalizeEmailAddress(user.email),
           role: 'tutor',
-          qualifications: incomingTutorData.qualifications || 'Not specified',
+          qualifications: tutorQualifications || 'Not specified',
           subjects: normalizedSubjects,
           teachingLevel: normalizeTeachingLevel(requestedTeachingLevel || 'School'),
-          pricePerHour: incomingTutorData.pricePerHour || 0,
-          rating: incomingTutorData.rating ?? 0,
-          reviewCount: incomingTutorData.reviewCount ?? 0,
-          bio: incomingTutorData.bio || 'New tutor on TutorSphere',
-          availability: incomingTutorData.availability || [],
-          isVerified: incomingTutorData.isVerified ?? false,
+          pricePerHour: toFinitePrice(incomingTutorData.pricePerHour),
+          rating: Number.isFinite(parsedTutorRating) ? Math.max(0, Math.min(5, parsedTutorRating)) : 0,
+          reviewCount: Number.isFinite(parsedTutorReviewCount) ? Math.max(0, Math.round(parsedTutorReviewCount)) : 0,
+          bio: tutorBio,
+          availability: Array.isArray(incomingTutorData.availability) ? incomingTutorData.availability : [],
+          isVerified: Boolean(incomingTutorData.isVerified),
         });
 
         await tutor.save();

@@ -72,6 +72,21 @@ type UploadedCourseAsset = {
   mimeType: string;
 };
 
+type TutorSignupProfile = {
+  qualifications?: string;
+  education?: string;
+  subjects?: string[];
+  teachingLevel?: Tutor['teachingLevel'] | string;
+  pricePerHour?: number;
+  hourlyRate?: number;
+  bio?: string;
+};
+
+type SignupOptions = {
+  autoLogin?: boolean;
+  tutorProfile?: TutorSignupProfile;
+};
+
 const getApiBaseCandidates = (): string[] => {
   const candidates = [API_BASE_URL];
   const hostname = window.location.hostname;
@@ -579,10 +594,30 @@ class ApiService {
     });
   }
 
-  async signup(firstName: string, lastName: string, email: string, password: string, role?: string): Promise<User> {
+  async signup(
+    firstName: string,
+    lastName: string,
+    email: string,
+    password: string,
+    role?: string,
+    options?: SignupOptions
+  ): Promise<User> {
+    const payload: Record<string, unknown> = {
+      firstName,
+      lastName,
+      email,
+      password,
+      role,
+      autoLogin: Boolean(options?.autoLogin),
+    };
+
+    if (options?.tutorProfile) {
+      payload.tutorProfile = options.tutorProfile;
+    }
+
     return this.request('/auth/signup', {
       method: 'POST',
-      body: JSON.stringify({ firstName, lastName, email, password, role }),
+      body: JSON.stringify(payload),
     });
   }
 

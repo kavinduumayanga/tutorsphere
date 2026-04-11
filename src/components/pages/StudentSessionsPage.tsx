@@ -263,7 +263,18 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
             const existingReview = studentReviewsBySessionId.get(booking.id);
             const meetingLinkMeta = getMeetingLinkMeta(booking, paymentStatus, hasValidMeetingLink, isSessionJoinEnabled(booking));
             const sessionTitle = `${booking.subject || 'Tutoring'} Session`;
-            const hasPendingRescheduleRequest = String(booking?.rescheduleRequest?.status || '').trim().toLowerCase() === 'pending';
+            const requestedDate = String(booking?.rescheduleRequest?.requestedDate || '').trim();
+            const requestedTimeSlot = String(booking?.rescheduleRequest?.requestedTimeSlot || '').trim();
+            const proposalDiffersFromCurrentSchedule =
+              requestedDate !== String(booking?.date || '').trim() ||
+              requestedTimeSlot !== String(booking?.timeSlot || '').trim();
+            const hasPendingRescheduleRequest =
+              booking.status !== 'cancelled' &&
+              booking.status !== 'completed' &&
+              String(booking?.rescheduleRequest?.status || '').trim().toLowerCase() === 'pending' &&
+              Boolean(requestedDate) &&
+              Boolean(requestedTimeSlot) &&
+              proposalDiffersFromCurrentSchedule;
             const sessionResources = Array.isArray(booking.sessionResources) ? booking.sessionResources : [];
 
             return (

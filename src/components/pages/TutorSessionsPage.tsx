@@ -230,7 +230,18 @@ export const TutorSessionsPage: React.FC<TutorSessionsPageProps> = ({
             const isPaidBooking = paymentStatus === 'paid';
             const canComplete = booking.status === 'confirmed' && isPaidBooking;
             const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed';
-            const hasPendingRescheduleRequest = String(booking?.rescheduleRequest?.status || '').trim().toLowerCase() === 'pending';
+            const requestedDate = String(booking?.rescheduleRequest?.requestedDate || '').trim();
+            const requestedTimeSlot = String(booking?.rescheduleRequest?.requestedTimeSlot || '').trim();
+            const proposalDiffersFromCurrentSchedule =
+              requestedDate !== String(booking?.date || '').trim() ||
+              requestedTimeSlot !== String(booking?.timeSlot || '').trim();
+            const hasPendingRescheduleRequest =
+              booking.status !== 'cancelled' &&
+              booking.status !== 'completed' &&
+              String(booking?.rescheduleRequest?.status || '').trim().toLowerCase() === 'pending' &&
+              Boolean(requestedDate) &&
+              Boolean(requestedTimeSlot) &&
+              proposalDiffersFromCurrentSchedule;
             const canReschedule = booking.status !== 'cancelled' && booking.status !== 'completed' && !hasPendingRescheduleRequest && isPaidBooking && canStudentManageBeforeStart(booking);
             const canSubmitMeetingLink = isPaidBooking && booking.status !== 'cancelled' && booking.status !== 'completed';
             const hasValidMeetingLink = isValidMeetingLink(booking.meetingLink);

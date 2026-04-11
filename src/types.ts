@@ -4,9 +4,11 @@ export type NotificationType =
   | 'booking_update'
   | 'session_confirmed'
   | 'session_cancelled'
+  | 'session_reschedule_request'
   | 'session_rescheduled'
   | 'session_completed'
   | 'payment_success'
+  | 'payment_refunded'
   | 'course_enrolled'
   | 'course_completed'
   | 'profile_update'
@@ -109,6 +111,26 @@ export interface TimeSlot {
   isBooked: boolean;
 }
 
+export interface BookingSessionResource {
+  id: string;
+  name: string;
+  url: string;
+  blobName?: string;
+  mimeType?: string;
+  size?: number;
+  uploadedByTutorId?: string;
+  uploadedAt?: string;
+}
+
+export interface BookingRescheduleRequest {
+  requestedDate: string;
+  requestedTimeSlot: string;
+  requestedSlotId?: string;
+  requestedAt: string;
+  requestedByTutorId: string;
+  status: 'pending';
+}
+
 export interface Booking {
   id: string;
   studentId: string;
@@ -121,10 +143,16 @@ export interface Booking {
   timeSlot?: string;
   meetingLink?: string;
   expertFeedback?: string;
-  paymentStatus?: 'pending' | 'paid' | 'failed';
+  paymentStatus?: 'pending' | 'paid' | 'failed' | 'refunded';
   paymentReference?: string;
   paymentFailureReason?: string;
   paidAt?: string;
+  refundedAt?: string;
+  refundReason?: string;
+  sessionDurationHours?: number;
+  sessionAmount?: number;
+  rescheduleRequest?: BookingRescheduleRequest;
+  sessionResources?: BookingSessionResource[];
   hiddenForTutor?: boolean;
   hiddenForStudent?: boolean;
   createdAt?: string;

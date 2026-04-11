@@ -72,6 +72,7 @@ import { ToastProvider } from './components/common/Toast';
 import { QuizChatbotPage } from './components/pages/QuizChatbotPage';
 import { FindTutorsPage } from './components/pages/FindTutorsPage';
 import { CertificateModal } from './components/common/CertificateModal';
+import { ConfirmDialog } from './components/common/ConfirmDialog';
 import { ForgotPasswordPage } from './components/pages/ForgotPasswordPage';
 import { TutorDashboardPage } from './components/pages/TutorDashboardPage';
 import { StudentDashboardPage } from './components/pages/StudentDashboardPage';
@@ -691,9 +692,11 @@ export default function App() {
   const [studentSessionTimelineFilter, setStudentSessionTimelineFilter] = useState<SessionTimelineFilter>('all');
   const [sessionRatingDrafts, setSessionRatingDrafts] = useState<Record<string, SessionRatingDraft>>({});
   const [activeRatingActionBookingId, setActiveRatingActionBookingId] = useState<string | null>(null);
+  const [activeResourceUploadBookingId, setActiveResourceUploadBookingId] = useState<string | null>(null);
   const [tutorTransactionFilter, setTutorTransactionFilter] = useState<TutorTransactionFilter>('all');
   const [tutorTransactionSortOrder, setTutorTransactionSortOrder] = useState<TutorTransactionSortOrder>('newest');
   const [bookingCancelNotice, setBookingCancelNotice] = useState<string | null>(null);
+  const [pendingCancelBooking, setPendingCancelBooking] = useState<{ booking: Booking; actorRole: 'student' | 'tutor' } | null>(null);
   const [withdrawalRequests, setWithdrawalRequests] = useState<WithdrawalRequest[]>([]);
   const [withdrawalSummary, setWithdrawalSummary] = useState<WithdrawalSummary>({
     totalEarnings: 0,
@@ -1579,7 +1582,12 @@ export default function App() {
           ...booking,
           paymentStatus:
             booking.paymentStatus ||
-            (booking.status === 'confirmed' || booking.status === 'completed' ? 'paid' : 'pending'),
+            (booking.status === 'cancelled'
+              ? 'refunded'
+              : booking.status === 'confirmed' || booking.status === 'completed'
+                ? 'paid'
+                : 'pending'),
+          sessionResources: Array.isArray(booking.sessionResources) ? booking.sessionResources : [],
           hiddenForTutor: Boolean(booking.hiddenForTutor),
           hiddenForStudent: Boolean(booking.hiddenForStudent),
         }));
@@ -1703,6 +1711,8 @@ export default function App() {
       slotId: string;
       sessionDate: string;
       sessionTime: string;
+      sessionDurationHours: number;
+      sessionAmount: number;
       paymentStatus: 'paid' | 'failed';
       paymentReference?: string;
       paymentFailureReason?: string;
@@ -1728,11 +1738,14 @@ export default function App() {
         subject: tutor.subjects?.[0] || 'General',
         date: bookingIntent.sessionDate,
         timeSlot: bookingIntent.sessionTime,
+        sessionDurationHours: bookingIntent.sessionDurationHours,
+        sessionAmount: bookingIntent.sessionAmount,
         meetingLink: undefined,
         paymentStatus: bookingIntent.paymentStatus,
         paymentReference: bookingIntent.paymentReference,
         paymentFailureReason: isPaid ? undefined : bookingIntent.paymentFailureReason,
         paidAt: isPaid ? new Date().toISOString() : undefined,
+        sessionResources: [],
         hiddenForTutor: false,
         hiddenForStudent: false,
       });
@@ -1742,7 +1755,12 @@ export default function App() {
           ...booking,
           paymentStatus:
             booking.paymentStatus ||
-            (booking.status === 'confirmed' || booking.status === 'completed' ? 'paid' : 'pending'),
+            (booking.status === 'cancelled'
+              ? 'refunded'
+              : booking.status === 'confirmed' || booking.status === 'completed'
+                ? 'paid'
+                : 'pending'),
+          sessionResources: Array.isArray(booking.sessionResources) ? booking.sessionResources : [],
           hiddenForTutor: Boolean(booking.hiddenForTutor),
           hiddenForStudent: Boolean(booking.hiddenForStudent),
         },
@@ -3159,7 +3177,22 @@ export default function App() {
       setBookings((prevBookings) =>
         prevBookings.map((booking) =>
           booking.id === bookingId
-            ? { ...booking, ...updatedBooking }
+            ? {
+                ...booking,
+                ...updatedBooking,
+                paymentStatus:
+                  updatedBooking.paymentStatus ||
+                  (updatedBooking.status === 'cancelled'
+                    ? 'refunded'
+                    : updatedBooking.status === 'confirmed' || updatedBooking.status === 'completed'
+                      ? 'paid'
+                      : 'pending'),
+                sessionResources: Array.isArray(updatedBooking.sessionResources)
+                  ? updatedBooking.sessionResources
+                  : Array.isArray(booking.sessionResources)
+                    ? booking.sessionResources
+                    : [],
+              }
             : booking
         )
       );
@@ -3261,6 +3294,62 @@ export default function App() {
     return baseDate;
   };
 
+  const parseBookingEndDate = (booking: Booking): Date | null => {
+    const rawDate = String(booking.date || '').trim();
+    if (!rawDate) {
+      return null;
+    }
+
+    const baseDate = new Date(rawDate);
+    if (Number.isNaN(baseDate.getTime())) {
+      return null;
+    }
+
+    const rawEndToken = String(booking.timeSlot || '')
+      .split('-')[1]
+      ?.trim();
+
+    if (!rawEndToken) {
+      const startDate = parseBookingStartDate(booking);
+      if (!startDate) {
+        return null;
+      }
+      return new Date(startDate.getTime() + 60 * 60 * 1000);
+    }
+
+    const twelveHourMatch = rawEndToken.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (twelveHourMatch) {
+      let hours = Number(twelveHourMatch[1]);
+      const minutes = Number(twelveHourMatch[2]);
+      const meridiem = twelveHourMatch[3].toUpperCase();
+
+      if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+        return null;
+      }
+
+      if (hours === 12) {
+        hours = meridiem === 'AM' ? 0 : 12;
+      } else if (meridiem === 'PM') {
+        hours += 12;
+      }
+
+      baseDate.setHours(hours, minutes, 0, 0);
+      return baseDate;
+    }
+
+    const twentyFourHourMatch = rawEndToken.match(/^(\d{1,2}):(\d{2})$/);
+    if (twentyFourHourMatch) {
+      const hours = Number(twentyFourHourMatch[1]);
+      const minutes = Number(twentyFourHourMatch[2]);
+      if (Number.isFinite(hours) && Number.isFinite(minutes)) {
+        baseDate.setHours(hours, minutes, 0, 0);
+        return baseDate;
+      }
+    }
+
+    return null;
+  };
+
   const getBookingSortTimestamp = (booking: Booking): number => {
     const sessionDate = parseBookingStartDate(booking);
     if (sessionDate) {
@@ -3316,6 +3405,19 @@ export default function App() {
     return sessionDate.getTime() > Date.now();
   };
 
+  const isSessionJoinEnabled = (booking: Booking): boolean => {
+    if (booking.status === 'completed' || booking.status === 'cancelled') {
+      return false;
+    }
+
+    const sessionEnd = parseBookingEndDate(booking);
+    if (!sessionEnd) {
+      return true;
+    }
+
+    return sessionEnd.getTime() >= Date.now();
+  };
+
   const formatTimeLabelFrom24Hour = (value: string): string | null => {
     const match = String(value || '').trim().match(/^(\d{1,2}):(\d{2})$/);
     if (!match) {
@@ -3340,8 +3442,77 @@ export default function App() {
     return `${year}-${month}-${day}`;
   };
 
-  const handleTutorBookingStatusChange = async (booking: Booking, status: Booking['status']) => {
+  const applyBookingUpdateToState = (updatedBooking: Booking) => {
+    setBookings((prevBookings) =>
+      prevBookings.map((booking) =>
+        booking.id === updatedBooking.id
+          ? {
+              ...booking,
+              ...updatedBooking,
+              paymentStatus:
+                updatedBooking.paymentStatus ||
+                (updatedBooking.status === 'cancelled'
+                  ? 'refunded'
+                  : updatedBooking.status === 'confirmed' || updatedBooking.status === 'completed'
+                    ? 'paid'
+                    : 'pending'),
+              sessionResources: Array.isArray(updatedBooking.sessionResources)
+                ? updatedBooking.sessionResources
+                : Array.isArray(booking.sessionResources)
+                  ? booking.sessionResources
+                  : [],
+            }
+          : booking
+      )
+    );
+  };
+
+  const confirmAndCancelBooking = async () => {
+    if (!pendingCancelBooking) {
+      return;
+    }
+
+    const { booking, actorRole } = pendingCancelBooking;
+    setActiveBookingActionId(booking.id);
+
+    try {
+      const updatedBooking = await apiService.updateBooking(booking.id, { status: 'cancelled' });
+      applyBookingUpdateToState(updatedBooking);
+
+      if (actorRole === 'student') {
+        const nextPaymentStatus = String(updatedBooking.paymentStatus || booking.paymentStatus || 'pending').trim().toLowerCase();
+        if (nextPaymentStatus === 'refunded') {
+          setBookingCancelNotice('Session cancelled successfully. Your payment has been refunded.');
+        } else if (nextPaymentStatus === 'paid') {
+          setBookingCancelNotice('Session cancelled successfully. Your payment refund is being processed.');
+        } else {
+          setBookingCancelNotice('Session cancelled successfully.');
+        }
+      } else {
+        setBookingCancelNotice('Session cancelled successfully.');
+      }
+    } catch (error) {
+      console.error('Failed to cancel booking:', error);
+      alert('Failed to cancel booking. Please try again.');
+    } finally {
+      setPendingCancelBooking(null);
+      setActiveBookingActionId(null);
+    }
+  };
+
+  const handleTutorBookingStatusChange = async (booking: Booking, statusValue: string) => {
+    const normalizedStatus = String(statusValue || '').trim().toLowerCase();
+    if (!['pending', 'confirmed', 'completed', 'cancelled'].includes(normalizedStatus)) {
+      return;
+    }
+
+    const status = normalizedStatus as Booking['status'];
     if (booking.status === status) {
+      return;
+    }
+
+    if (status === 'cancelled') {
+      setPendingCancelBooking({ booking, actorRole: 'tutor' });
       return;
     }
 
@@ -3366,6 +3537,11 @@ export default function App() {
   };
 
   const handleTutorMeetingLinkUpdate = async (booking: Booking) => {
+    if (booking.status === 'completed') {
+      alert('Meeting links cannot be updated after a session is completed.');
+      return;
+    }
+
     const paymentStatus = booking.paymentStatus || 'pending';
     if (paymentStatus !== 'paid') {
       alert('Meeting links can be added only after successful payment.');
@@ -3406,30 +3582,41 @@ export default function App() {
       return;
     }
 
-    const shouldCancel = confirm('Are you sure you want to cancel this booking?');
-    if (!shouldCancel) {
+    setPendingCancelBooking({ booking, actorRole: 'student' });
+  };
+
+  const handleStudentRescheduleDecision = async (booking: Booking, decision: 'accept' | 'decline') => {
+    if (!currentUser || currentUser.role !== 'student') {
+      alert('Only student accounts can respond to reschedule requests.');
+      return;
+    }
+
+    if (booking.studentId !== currentUser.id) {
+      alert('You can only respond to your own reschedule requests.');
+      return;
+    }
+
+    const requestStatus = String((booking as any)?.rescheduleRequest?.status || '').trim().toLowerCase();
+    if (requestStatus !== 'pending') {
+      alert('This session does not have a pending reschedule request.');
       return;
     }
 
     setActiveBookingActionId(booking.id);
     try {
-      const updatedBooking = await apiService.updateBooking(booking.id, { status: 'cancelled' });
-      setBookings((prevBookings) =>
-        prevBookings.map((entry) =>
-          entry.id === booking.id
-            ? { ...entry, ...updatedBooking }
-            : entry
-        )
-      );
+      const updatedBooking = await apiService.updateBooking(booking.id, { rescheduleDecision: decision } as any);
+      applyBookingUpdateToState(updatedBooking);
 
-      if ((booking.paymentStatus || 'pending') === 'paid') {
-        setBookingCancelNotice('Booking cancelled successfully. Your payment will be returned to your bank account within 3-5 business days.');
+      if (decision === 'accept') {
+        alert('Reschedule accepted. Your session time was updated without a new payment.');
+      } else if (String(updatedBooking.paymentStatus || '').trim().toLowerCase() === 'refunded') {
+        setBookingCancelNotice('Reschedule request declined. Session cancelled and your payment has been refunded.');
       } else {
-        setBookingCancelNotice('Booking cancelled successfully.');
+        setBookingCancelNotice('Reschedule request declined. Session cancelled successfully.');
       }
     } catch (error) {
-      console.error('Failed to cancel booking:', error);
-      alert('Failed to cancel booking. Please try again.');
+      console.error('Failed to respond to reschedule request:', error);
+      alert('Failed to update the reschedule decision. Please try again.');
     } finally {
       setActiveBookingActionId(null);
     }
@@ -3448,6 +3635,16 @@ export default function App() {
 
     if (!canStudentManageBeforeStart(booking)) {
       alert('You can only reschedule sessions before the session start time.');
+      return;
+    }
+
+    if ((booking.paymentStatus || 'pending') !== 'paid') {
+      alert('Only paid sessions can be rescheduled.');
+      return;
+    }
+
+    if (String((booking as any)?.rescheduleRequest?.status || '').trim().toLowerCase() === 'pending') {
+      alert('A reschedule request is already pending student approval for this session.');
       return;
     }
 
@@ -3507,12 +3704,94 @@ export default function App() {
       day: 'numeric',
     });
 
-    await updateTutorBooking(booking.id, {
-      date: formattedDate,
-      timeSlot: `${startLabel} - ${nextEndLabel}`,
-    });
+    const requestedTimeSlot = `${startLabel} - ${nextEndLabel}`;
 
-    alert('Session rescheduled successfully.');
+    setActiveBookingActionId(booking.id);
+    try {
+      const updatedBooking = await apiService.updateBooking(booking.id, {
+        rescheduleRequest: {
+          requestedDate: formattedDate,
+          requestedTimeSlot,
+          requestedSlotId: booking.slotId,
+        },
+      } as any);
+
+      applyBookingUpdateToState(updatedBooking);
+      alert('Reschedule request sent to the student for approval.');
+    } catch (error) {
+      console.error('Failed to request reschedule:', error);
+      alert('Failed to send reschedule request. Please try again.');
+    } finally {
+      setActiveBookingActionId(null);
+    }
+  };
+
+  const handleTutorUploadSessionResource = async (booking: Booking, file: File) => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      alert('Only tutor accounts can upload session resources.');
+      return;
+    }
+
+    if (!file) {
+      return;
+    }
+
+    const allowedExtensions = new Set([
+      'pdf',
+      'doc',
+      'docx',
+      'png',
+      'jpg',
+      'jpeg',
+      'webp',
+      'txt',
+      'csv',
+      'ppt',
+      'pptx',
+      'xls',
+      'xlsx',
+      'zip',
+      'rar',
+    ]);
+    const fileExtension = String(file.name || '').split('.').pop()?.toLowerCase() || '';
+
+    if (!allowedExtensions.has(fileExtension)) {
+      alert('Unsupported file type. Upload PDF, images, DOC/DOCX, PPT, XLS, TXT, CSV, ZIP, or RAR files.');
+      return;
+    }
+
+    setActiveResourceUploadBookingId(booking.id);
+    try {
+      const uploaded = await apiService.uploadTutorResource(file);
+      const resourceUrl = String(uploaded.blobUrl || uploaded.url || uploaded.path || '').trim();
+      if (!resourceUrl) {
+        throw new Error('Resource upload completed but no file URL was returned.');
+      }
+
+      const existingResources = Array.isArray(booking.sessionResources) ? booking.sessionResources : [];
+      const nextResource = {
+        id: Math.random().toString(36).slice(2, 11),
+        name: String(file.name || uploaded.originalName || 'Session Resource').trim() || 'Session Resource',
+        url: resourceUrl,
+        blobName: String(uploaded.blobName || '').trim() || undefined,
+        mimeType: String(uploaded.mimeType || file.type || '').trim() || undefined,
+        size: Number.isFinite(Number(uploaded.size)) ? Number(uploaded.size) : file.size,
+        uploadedByTutorId: currentUser.id,
+        uploadedAt: new Date().toISOString(),
+      };
+
+      const updatedBooking = await apiService.updateBooking(booking.id, {
+        sessionResources: [...existingResources, nextResource],
+      } as any);
+
+      applyBookingUpdateToState(updatedBooking);
+      alert('Session resource uploaded successfully.');
+    } catch (error) {
+      console.error('Failed to upload session resource:', error);
+      alert(error instanceof Error ? error.message : 'Failed to upload session resource.');
+    } finally {
+      setActiveResourceUploadBookingId(null);
+    }
   };
 
   const handleHideBookingForCurrentUser = async (booking: Booking) => {
@@ -3712,20 +3991,27 @@ export default function App() {
     }
   };
 
-  const getBookingStatusPillClassName = (status: Booking['status']) => {
-    if (status === 'completed') return 'text-emerald-700 bg-emerald-50 border-emerald-200';
-    if (status === 'confirmed') return 'text-indigo-700 bg-indigo-50 border-indigo-200';
-    if (status === 'pending') return 'text-amber-700 bg-amber-50 border-amber-200';
+  const getBookingStatusPillClassName = (status: string) => {
+    const normalizedStatus = String(status || '').trim().toLowerCase();
+    if (normalizedStatus === 'completed') return 'text-emerald-700 bg-emerald-50 border-emerald-200';
+    if (normalizedStatus === 'confirmed') return 'text-indigo-700 bg-indigo-50 border-indigo-200';
+    if (normalizedStatus === 'pending') return 'text-amber-700 bg-amber-50 border-amber-200';
     return 'text-rose-700 bg-rose-50 border-rose-200';
   };
 
-  const getBookingPaymentStatus = (booking: Booking): 'pending' | 'paid' | 'failed' => {
-    return booking.paymentStatus || 'pending';
+  const getBookingPaymentStatus = (booking: Booking): 'pending' | 'paid' | 'failed' | 'refunded' => {
+    const paymentStatus = String(booking.paymentStatus || '').trim().toLowerCase();
+    if (paymentStatus === 'paid') return 'paid';
+    if (paymentStatus === 'failed') return 'failed';
+    if (paymentStatus === 'refunded') return 'refunded';
+    return 'pending';
   };
 
-  const getBookingPaymentPillClassName = (paymentStatus: 'pending' | 'paid' | 'failed') => {
-    if (paymentStatus === 'paid') return 'text-emerald-700 bg-emerald-50 border-emerald-200';
-    if (paymentStatus === 'failed') return 'text-rose-700 bg-rose-50 border-rose-200';
+  const getBookingPaymentPillClassName = (paymentStatus: string) => {
+    const normalizedStatus = String(paymentStatus || '').trim().toLowerCase();
+    if (normalizedStatus === 'paid') return 'text-emerald-700 bg-emerald-50 border-emerald-200';
+    if (normalizedStatus === 'refunded') return 'text-rose-700 bg-rose-50 border-rose-200';
+    if (normalizedStatus === 'failed') return 'text-rose-700 bg-rose-50 border-rose-200';
     return 'text-amber-700 bg-amber-50 border-amber-200';
   };
 
@@ -3891,7 +4177,7 @@ export default function App() {
       const paymentStatus = getBookingPaymentStatus(booking);
       let status: TutorTransactionStatus;
 
-      if (booking.status === 'cancelled' || paymentStatus === 'failed') {
+      if (booking.status === 'cancelled' || paymentStatus === 'failed' || paymentStatus === 'refunded') {
         status = 'refunded_or_cancelled';
       } else if (paymentStatus === 'paid' && booking.status === 'completed') {
         status = 'paid';
@@ -6096,6 +6382,9 @@ export default function App() {
               getBookingStudentName={getBookingStudentName}
               isValidMeetingLink={isValidMeetingLink}
               canStudentManageBeforeStart={canStudentManageBeforeStart}
+              isSessionJoinEnabled={isSessionJoinEnabled}
+              activeResourceUploadBookingId={activeResourceUploadBookingId}
+              handleTutorUploadSessionResource={handleTutorUploadSessionResource}
             />
           )}
 
@@ -6117,8 +6406,10 @@ export default function App() {
               getBookingPaymentPillClassName={getBookingPaymentPillClassName}
               canStudentManageBeforeStart={canStudentManageBeforeStart}
               isValidMeetingLink={isValidMeetingLink}
+              isSessionJoinEnabled={isSessionJoinEnabled}
               handleHideBookingForCurrentUser={handleHideBookingForCurrentUser}
               handleStudentCancelBooking={handleStudentCancelBooking}
+              handleStudentRescheduleDecision={handleStudentRescheduleDecision}
               handleSubmitSessionRating={handleSubmitSessionRating}
             />
           )}
@@ -7371,6 +7662,20 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <ConfirmDialog
+        isOpen={Boolean(pendingCancelBooking)}
+        title="Cancel Session?"
+        message="Are you sure you want to cancel this session?"
+        confirmLabel="Yes"
+        cancelLabel="No"
+        variant="warning"
+        isLoading={Boolean(pendingCancelBooking) && activeBookingActionId === pendingCancelBooking?.booking.id}
+        onConfirm={() => {
+          void confirmAndCancelBooking();
+        }}
+        onCancel={() => setPendingCancelBooking(null)}
+      />
 
       <AnimatePresence>
         {bookingCancelNotice && (

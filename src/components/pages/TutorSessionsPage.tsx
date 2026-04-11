@@ -9,6 +9,7 @@ import {
   Link as LinkIcon,
   CheckCircle,
   Star,
+  Upload,
 } from 'lucide-react';
 
 export interface TutorSessionsPageProps {
@@ -25,11 +26,14 @@ export interface TutorSessionsPageProps {
   getBookingStatusPillClassName: (status: string) => string;
   isValidMeetingLink: (link: string | undefined) => boolean;
   canStudentManageBeforeStart: (booking: any) => boolean;
+  isSessionJoinEnabled: (booking: any) => boolean;
+  activeResourceUploadBookingId: string | null;
 
   handleHideBookingForCurrentUser: (booking: any) => void;
   handleTutorMeetingLinkUpdate: (booking: any) => void;
   handleTutorBookingStatusChange: (booking: any, newStatus: string) => void;
   handleTutorRescheduleBooking: (booking: any) => void;
+  handleTutorUploadSessionResource: (booking: any, file: File) => void | Promise<void>;
 }
 
 const fadeUp = {
@@ -37,7 +41,12 @@ const fadeUp = {
   show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } },
 };
 
-const getMeetingLinkMeta = (booking: any, paymentStatus: string, hasValidMeetingLink: boolean) => {
+const getMeetingLinkMeta = (
+  booking: any,
+  paymentStatus: string,
+  hasValidMeetingLink: boolean,
+  isSessionJoinEnabled: boolean
+) => {
   if (booking.status === 'cancelled') {
     return {
       label: 'Cancelled',
@@ -63,6 +72,14 @@ const getMeetingLinkMeta = (booking: any, paymentStatus: string, hasValidMeeting
   }
 
   if (hasValidMeetingLink) {
+    if (!isSessionJoinEnabled) {
+      return {
+        label: 'Session Ended',
+        badgeClassName: 'bg-slate-100 text-slate-600 border-slate-200',
+        valueClassName: 'text-slate-600',
+      };
+    }
+
     return {
       label: 'Ready',
       badgeClassName: 'bg-emerald-50 text-emerald-700 border-emerald-100',
@@ -122,10 +139,13 @@ export const TutorSessionsPage: React.FC<TutorSessionsPageProps> = ({
   getBookingStatusPillClassName,
   isValidMeetingLink,
   canStudentManageBeforeStart,
+  isSessionJoinEnabled,
+  activeResourceUploadBookingId,
   handleHideBookingForCurrentUser,
   handleTutorMeetingLinkUpdate,
   handleTutorBookingStatusChange,
   handleTutorRescheduleBooking,
+  handleTutorUploadSessionResource,
 }) => {
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-8 py-8 md:py-12">
@@ -187,12 +207,17 @@ export const TutorSessionsPage: React.FC<TutorSessionsPageProps> = ({
             const isPaidBooking = paymentStatus === 'paid';
             const canComplete = booking.status === 'confirmed' && isPaidBooking;
             const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed';
-            const canReschedule = booking.status !== 'cancelled' && booking.status !== 'completed' && canStudentManageBeforeStart(booking);
+            const hasPendingRescheduleRequest = String(booking?.rescheduleRequest?.status || '').trim().toLowerCase() === 'pending';
+            const canReschedule = booking.status !== 'cancelled' && booking.status !== 'completed' && !hasPendingRescheduleRequest && isPaidBooking && canStudentManageBeforeStart(booking);
             const canSubmitMeetingLink = isPaidBooking && booking.status !== 'cancelled' && booking.status !== 'completed';
             const hasValidMeetingLink = isValidMeetingLink(booking.meetingLink);
-            const canStartMeeting = booking.status === 'confirmed' && isPaidBooking && hasValidMeetingLink;
-            const meetingLinkMeta = getMeetingLinkMeta(booking, paymentStatus, hasValidMeetingLink);
+            const canStartMeeting = booking.status === 'confirmed' && isPaidBooking && hasValidMeetingLink && isSessionJoinEnabled(booking);
+            const meetingLinkMeta = getMeetingLinkMeta(booking, paymentStatus, hasValidMeetingLink, isSessionJoinEnabled(booking));
             const sessionTitle = `${booking.subject || 'Tutoring'} Session`;
+            const sessionResources = Array.isArray(booking.sessionResources) ? booking.sessionResources : [];
+            const isUploadingResource = activeResourceUploadBookingId === booking.id;
+            const canUploadResource = booking.status !== 'cancelled';
+            const resourceInputId = `session-resource-${booking.id}`;
 
             return (
               <motion.div
@@ -226,6 +251,11 @@ export const TutorSessionsPage: React.FC<TutorSessionsPageProps> = ({
                       <span className={`text-[10px] uppercase tracking-widest font-bold px-2.5 py-1 rounded-full border ${meetingLinkMeta.badgeClassName}`}>
                         Link: {meetingLinkMeta.label}
                       </span>
+                      {hasPendingRescheduleRequest && (
+                        <span className="text-[10px] uppercase tracking-widest font-bold px-2.5 py-1 rounded-full border bg-indigo-50 text-indigo-700 border-indigo-200">
+                          Reschedule Pending
+                        </span>
+                      )}
                     </div>
 
                     <h3 className="text-xl md:text-2xl font-bold text-slate-900 truncate">{sessionTitle}</h3>
@@ -259,6 +289,40 @@ export const TutorSessionsPage: React.FC<TutorSessionsPageProps> = ({
                       </div>
                     )}
 
+                    {hasPendingRescheduleRequest && booking.rescheduleRequest && (
+                      <div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm">
+                        <p className="text-xs font-black uppercase tracking-wider text-indigo-600">Awaiting Student Approval</p>
+                        <p className="mt-1 font-semibold text-indigo-900">
+                          Requested: {booking.rescheduleRequest.requestedDate} at {booking.rescheduleRequest.requestedTimeSlot}
+                        </p>
+                      </div>
+                    )}
+
+                    {sessionResources.length > 0 && (
+                      <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <p className="text-xs font-black uppercase tracking-wider text-slate-500 mb-2">Shared Resources</p>
+                        <div className="space-y-2">
+                          {sessionResources.map((resource: any) => (
+                            <div
+                              key={resource.id || `${booking.id}-${resource.url}`}
+                              className="flex items-center justify-between gap-3 rounded-lg bg-white border border-slate-200 px-3 py-2"
+                            >
+                              <p className="text-xs font-semibold text-slate-700 truncate">{resource.name || 'Session Resource'}</p>
+                              <a
+                                href={resource.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                download
+                                className="text-xs font-bold text-indigo-600 hover:text-indigo-700"
+                              >
+                                Download
+                              </a>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] font-bold text-slate-400 tracking-wider">
                       <span className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 uppercase">Booking ID: {booking.id}</span>
                     </div>
@@ -283,7 +347,7 @@ export const TutorSessionsPage: React.FC<TutorSessionsPageProps> = ({
                           disabled
                           className="inline-flex justify-center items-center gap-1.5 px-4 py-2.5 rounded-lg text-sm font-bold bg-slate-200 text-slate-500 cursor-not-allowed"
                         >
-                          <Video className="w-4 h-4" /> Start Meeting
+                          <Video className="w-4 h-4" /> {hasValidMeetingLink && !isSessionJoinEnabled(booking) ? 'Session Ended' : 'Start Meeting'}
                         </button>
                       )}
 
@@ -355,6 +419,31 @@ export const TutorSessionsPage: React.FC<TutorSessionsPageProps> = ({
                         </button>
                       )}
                     </div>
+
+                    <input
+                      id={resourceInputId}
+                      type="file"
+                      className="hidden"
+                      accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.webp,.txt,.csv,.ppt,.pptx,.xls,.xlsx,.zip,.rar"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file) {
+                          void Promise.resolve(handleTutorUploadSessionResource(booking, file));
+                        }
+                        event.currentTarget.value = '';
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={isLoading || isUploadingResource || !canUploadResource}
+                      onClick={() => {
+                        const input = document.getElementById(resourceInputId) as HTMLInputElement | null;
+                        input?.click();
+                      }}
+                      className="inline-flex w-full justify-center items-center gap-1.5 px-3 py-2.5 rounded-lg text-xs font-bold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition-colors shadow-sm"
+                    >
+                      <Upload className="w-3.5 h-3.5" /> {isUploadingResource ? 'Uploading Resource...' : 'Upload Resource'}
+                    </button>
 
                     {canComplete && (
                       <div className="rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2 text-xs font-semibold text-emerald-700">

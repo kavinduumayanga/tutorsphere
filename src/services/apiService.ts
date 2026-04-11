@@ -66,6 +66,7 @@ type UploadedCourseAsset = {
   url?: string;
   blobUrl?: string;
   blobName?: string;
+  containerName?: string;
   originalName: string;
   size: number;
   mimeType: string;
@@ -268,15 +269,67 @@ class ApiService {
     return 'School';
   }
 
+  private normalizeMediaUrl(value: unknown): string | undefined {
+    const rawValue = String(value || '').trim();
+    if (!rawValue) {
+      return undefined;
+    }
+
+    if (/^(https?:\/\/|data:|blob:)/i.test(rawValue)) {
+      return rawValue;
+    }
+
+    if (rawValue.startsWith('//')) {
+      return `${window.location.protocol}${rawValue}`;
+    }
+
+    try {
+      const apiOrigin = new URL(API_BASE_URL, window.location.origin).origin;
+
+      if (rawValue.startsWith('/')) {
+        return `${apiOrigin}${rawValue}`;
+      }
+
+      return `${apiOrigin}/${rawValue.replace(/^\/+/, '')}`;
+    } catch {
+      return rawValue;
+    }
+  }
+
+  private resolveTutorAvatarUrl(tutor: any): string | undefined {
+    const avatarCandidates = [
+      tutor?.avatar,
+      tutor?.profilePicture,
+      tutor?.profileImage,
+      tutor?.imageUrl,
+      tutor?.photo,
+      tutor?.photoUrl,
+      tutor?.blobUrl,
+      tutor?.userAvatar,
+      tutor?.user?.avatar,
+    ];
+
+    for (const candidate of avatarCandidates) {
+      const normalized = this.normalizeMediaUrl(candidate);
+      if (normalized) {
+        return normalized;
+      }
+    }
+
+    return undefined;
+  }
+
   private normalizeTutor(tutor: any): Tutor {
     const normalizedSubjects = normalizeTutorSubjects(tutor?.subjects);
     const firstName = this.sanitizeTutorName((tutor?.firstName || '').trim());
     const lastName = this.sanitizeTutorName((tutor?.lastName || '').trim());
     const fullName = this.sanitizeTutorName((tutor?.name || '').trim());
+    const resolvedAvatar = this.resolveTutorAvatarUrl(tutor);
 
     if (firstName || lastName) {
       return {
         ...tutor,
+        avatar: resolvedAvatar,
         subjects: normalizedSubjects,
         teachingLevel: this.normalizeTeachingLevel(tutor?.teachingLevel),
       } as Tutor;
@@ -288,6 +341,7 @@ class ApiService {
         ...tutor,
         firstName: parsedFirstName || 'Tutor',
         lastName: rest.join(' '),
+        avatar: resolvedAvatar,
         subjects: normalizedSubjects,
         teachingLevel: this.normalizeTeachingLevel(tutor?.teachingLevel),
       } as Tutor;
@@ -297,6 +351,7 @@ class ApiService {
       ...tutor,
       firstName: 'Tutor',
       lastName: '',
+      avatar: resolvedAvatar,
       subjects: normalizedSubjects,
       teachingLevel: this.normalizeTeachingLevel(tutor?.teachingLevel),
     } as Tutor;
@@ -380,7 +435,12 @@ class ApiService {
     } as Resource;
   }
 
-  private async fetchWithApiFallback(endpoint: string, options?: RequestInit, expectJson = false): Promise<Response> {
+  private async fetchWithApiFallback(
+    endpoint: string,
+    options?: RequestInit,
+    expectJson = false,
+    expectedContentTypes?: string[]
+  ): Promise<Response> {
     const baseCandidates = getApiBaseCandidates();
     let lastError: unknown;
 
@@ -400,6 +460,17 @@ class ApiService {
 
           // Some dev setups can return SPA HTML for missing API routes.
           if (!isJsonLike && !isLastCandidate) {
+            continue;
+          }
+        }
+
+        if (!expectJson && response.ok && Array.isArray(expectedContentTypes) && expectedContentTypes.length > 0) {
+          const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+          const isExpectedBinaryType = expectedContentTypes.some((expectedType) =>
+            contentType.includes(String(expectedType || '').toLowerCase())
+          );
+
+          if (!isExpectedBinaryType && !isLastCandidate) {
             continue;
           }
         }
@@ -430,6 +501,32 @@ class ApiService {
     }
 
     throw new Error('Failed to reach TutorSphere API.');
+  }
+
+  private async assertPdfResponse(response: Response, defaultMessage: string): Promise<void> {
+    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+    if (contentType.includes('application/pdf')) {
+      return;
+    }
+
+    let detailMessage = '';
+    try {
+      const maybeJson = await response.clone().json();
+      if (typeof maybeJson?.error === 'string' && maybeJson.error.trim()) {
+        detailMessage = maybeJson.error.trim();
+      }
+    } catch {
+      try {
+        const maybeText = (await response.clone().text()).trim();
+        if (maybeText) {
+          detailMessage = maybeText.slice(0, 220);
+        }
+      } catch {
+        detailMessage = '';
+      }
+    }
+
+    throw new Error(detailMessage ? `${defaultMessage}: ${detailMessage}` : `${defaultMessage}: Invalid PDF response.`);
   }
 
   private async createApiError(response: Response, defaultMessage = 'API request failed'): Promise<Error> {
@@ -747,6 +844,33 @@ class ApiService {
     throw new Error('Failed to upload resource file.');
   }
 
+  async uploadBookingSessionResource(file: File): Promise<UploadedCourseAsset> {
+    const formData = new FormData();
+    formData.append('resource', file);
+
+    const uploaded = await this.request<any>('/uploads/session-resource', {
+      method: 'POST',
+      body: formData,
+    });
+
+    const resolvedPath =
+      (uploaded && typeof uploaded.blobUrl === 'string' && uploaded.blobUrl.trim()) ||
+      (uploaded && typeof uploaded.url === 'string' && uploaded.url.trim()) ||
+      (uploaded && typeof uploaded.path === 'string' && uploaded.path.trim()) ||
+      '';
+
+    if (!resolvedPath) {
+      throw new Error('Upload succeeded but response format was invalid.');
+    }
+
+    return {
+      ...(uploaded || {}),
+      path: resolvedPath,
+      url: typeof uploaded?.url === 'string' ? uploaded.url : resolvedPath,
+      blobUrl: typeof uploaded?.blobUrl === 'string' ? uploaded.blobUrl : resolvedPath,
+    } as UploadedCourseAsset;
+  }
+
   async deleteCourse(id: string, actorId?: string): Promise<void> {
     const params = new URLSearchParams();
     if (actorId) {
@@ -902,12 +1026,17 @@ class ApiService {
 
   async downloadCourseCertificate(enrollmentId: string, studentId: string, fileBaseName: string): Promise<void> {
     const response = await this.fetchWithApiFallback(
-      `/course-enrollments/${enrollmentId}/certificate?studentId=${encodeURIComponent(studentId)}`
+      `/course-enrollments/${enrollmentId}/certificate?studentId=${encodeURIComponent(studentId)}`,
+      undefined,
+      false,
+      ['application/pdf']
     );
 
     if (!response.ok) {
       throw await this.createApiError(response, 'Certificate download failed');
     }
+
+    await this.assertPdfResponse(response, 'Certificate download failed');
 
     const blob = await response.blob();
     const suggestedFileName = getDownloadFileName(response.headers.get('Content-Disposition'));
@@ -920,7 +1049,9 @@ class ApiService {
     document.body.appendChild(link);
     link.click();
     link.remove();
-    URL.revokeObjectURL(objectUrl);
+    window.setTimeout(() => {
+      URL.revokeObjectURL(objectUrl);
+    }, 1200);
   }
 
   // Resource methods
@@ -999,6 +1130,98 @@ class ApiService {
     return this.request(`/bookings/${id}`, {
       method: 'DELETE',
     });
+  }
+
+  async downloadBookingReceipt(bookingId: string): Promise<void> {
+    const normalizedBookingId = String(bookingId || '').trim();
+    if (!normalizedBookingId) {
+      throw new Error('Booking id is required to download a receipt.');
+    }
+
+    const response = await this.fetchWithApiFallback(
+      `/bookings/${encodeURIComponent(normalizedBookingId)}/receipt`,
+      undefined,
+      false,
+      ['application/pdf']
+    );
+
+    if (!response.ok) {
+      throw await this.createApiError(response, 'Booking receipt download failed');
+    }
+
+    await this.assertPdfResponse(response, 'Booking receipt download failed');
+
+    const blob = await response.blob();
+    const suggestedFileName = getDownloadFileName(response.headers.get('Content-Disposition'));
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download =
+      suggestedFileName ||
+      `booking-receipt-${normalizedBookingId.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => {
+      URL.revokeObjectURL(objectUrl);
+    }, 1200);
+  }
+
+  async downloadBookingSessionResource(
+    bookingId: string,
+    resourceRef: string,
+    fallbackFileName = 'session-resource'
+  ): Promise<void> {
+    const normalizedBookingId = String(bookingId || '').trim();
+    const normalizedResourceRef = String(resourceRef || '').trim();
+
+    if (!normalizedBookingId || !normalizedResourceRef) {
+      throw new Error('Booking and resource identifiers are required for download.');
+    }
+
+    const response = await this.fetchWithApiFallback(
+      `/bookings/${encodeURIComponent(normalizedBookingId)}/resources/${encodeURIComponent(normalizedResourceRef)}/download`
+    );
+
+    if (!response.ok) {
+      throw await this.createApiError(response, 'Session resource download failed');
+    }
+
+    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+    if (contentType.includes('application/json')) {
+      throw await this.createApiError(response, 'Session resource download failed');
+    }
+
+    const blob = await response.blob();
+    const suggestedFileName = getDownloadFileName(response.headers.get('Content-Disposition'));
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download =
+      suggestedFileName ||
+      `${fallbackFileName.toLowerCase().replace(/[^a-z0-9._-]+/g, '-') || 'session-resource'}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => {
+      URL.revokeObjectURL(objectUrl);
+    }, 1200);
+  }
+
+  async deleteBookingSessionResource(bookingId: string, resourceRef: string): Promise<Booking> {
+    const normalizedBookingId = String(bookingId || '').trim();
+    const normalizedResourceRef = String(resourceRef || '').trim();
+
+    if (!normalizedBookingId || !normalizedResourceRef) {
+      throw new Error('Booking and resource identifiers are required for deletion.');
+    }
+
+    return this.request(
+      `/bookings/${encodeURIComponent(normalizedBookingId)}/resources/${encodeURIComponent(normalizedResourceRef)}`,
+      {
+        method: 'DELETE',
+      }
+    );
   }
 
   async getNotifications(

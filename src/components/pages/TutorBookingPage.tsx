@@ -20,13 +20,17 @@ import {
   PartyPopper,
   CalendarCheck,
   User as UserIcon,
+  Download,
 } from "lucide-react";
 import { formatLkr } from "../../utils/currency";
+import { apiService } from "../../services/apiService";
 
 type BookingCheckoutPayload = {
   slotId: string;
   sessionDate: string;
   sessionTime: string;
+  sessionDurationHours: number;
+  sessionAmount: number;
   paymentStatus: 'paid' | 'failed';
   paymentReference?: string;
   paymentFailureReason?: string;
@@ -35,6 +39,7 @@ type BookingCheckoutPayload = {
 type BookingCheckoutResponse = {
   ok: boolean;
   error?: string;
+  bookingId?: string;
 };
 
 interface TutorBookingPageProps {
@@ -67,6 +72,10 @@ type BookingSlotOption = {
   endTime: string;
   label: string;
 };
+
+type PaymentFieldKey = 'cardholderName' | 'cardNumber' | 'expiry' | 'cvv';
+
+type PaymentFieldErrors = Record<PaymentFieldKey, string>;
 
 const startOfDay = (date: Date): Date => new Date(date.getFullYear(), date.getMonth(), date.getDate());
 const startOfMonth = (date: Date): Date => new Date(date.getFullYear(), date.getMonth(), 1);
@@ -261,6 +270,51 @@ const isValidExpiry = (value: string): boolean => {
   return true;
 };
 
+const calculateSlotDurationHours = (slot: BookingSlotOption | null): number => {
+  if (!slot) {
+    return 1;
+  }
+
+  const start = parseTimeToMinutes(slot.startTime);
+  const end = parseTimeToMinutes(slot.endTime);
+  if (start === null || end === null || end <= start) {
+    return 1;
+  }
+
+  const duration = (end - start) / 60;
+  return duration > 0 ? duration : 1;
+};
+
+const getPaymentFieldErrors = (input: {
+  cardholderName: string;
+  cardNumber: string;
+  expiry: string;
+  cvv: string;
+}): PaymentFieldErrors => {
+  const cleanedCardholder = input.cardholderName.trim();
+  const cleanedCardNumber = getDigitsOnly(input.cardNumber);
+  const cleanedCvv = getDigitsOnly(input.cvv).slice(0, 3);
+
+  return {
+    cardholderName:
+      cleanedCardholder.length < 2
+        ? 'Enter the cardholder name as shown on your card.'
+        : '',
+    cardNumber:
+      cleanedCardNumber.length !== 16
+        ? 'Card number must be exactly 16 digits.'
+        : '',
+    expiry:
+      !isValidExpiry(input.expiry)
+        ? 'Enter a valid expiry date in MM/YY format.'
+        : '',
+    cvv:
+      cleanedCvv.length !== 3
+        ? 'CVV must be exactly 3 digits.'
+        : '',
+  };
+};
+
 const createPaymentReference = (): string => {
   const stamp = Date.now().toString(36).toUpperCase();
   const nonce = Math.floor(Math.random() * 900 + 100);
@@ -278,12 +332,21 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
   const [cardNumber, setCardNumber] = useState('');
   const [expiry, setExpiry] = useState('');
   const [cvv, setCvv] = useState('');
+  const [touchedPaymentFields, setTouchedPaymentFields] = useState<Record<PaymentFieldKey, boolean>>({
+    cardholderName: false,
+    cardNumber: false,
+    expiry: false,
+    cvv: false,
+  });
   const [bookingResult, setBookingResult] = useState<{
     status: 'success' | 'failure';
     title: string;
     message: string;
     paymentReference?: string;
+    bookingId?: string;
   } | null>(null);
+  const [isDownloadingReceipt, setIsDownloadingReceipt] = useState(false);
+  const [receiptDownloadError, setReceiptDownloadError] = useState<string | null>(null);
 
   if (!tutor) {
     return (
@@ -315,6 +378,23 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
   const selectedSlot = useMemo(
     () => availableSlots.find((slot) => slot.id === selectedSlotId) || null,
     [availableSlots, selectedSlotId]
+  );
+  const selectedSessionDurationHours = useMemo(
+    () => calculateSlotDurationHours(selectedSlot),
+    [selectedSlot]
+  );
+  const sessionTotalAmount = useMemo(() => {
+    const hourlyRate = Number(tutor.pricePerHour) || 0;
+    return Math.max(0, Math.round(hourlyRate * selectedSessionDurationHours * 100) / 100);
+  }, [tutor.pricePerHour, selectedSessionDurationHours]);
+  const formattedSessionTotal = useMemo(() => formatLkr(sessionTotalAmount), [sessionTotalAmount]);
+  const paymentFieldErrors = useMemo(
+    () => getPaymentFieldErrors({ cardholderName, cardNumber, expiry, cvv }),
+    [cardholderName, cardNumber, expiry, cvv]
+  );
+  const hasPaymentFieldErrors = useMemo(
+    () => Object.values(paymentFieldErrors).some((error) => Boolean(error)),
+    [paymentFieldErrors]
   );
 
   // Slot count per date for badge
@@ -362,12 +442,23 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
   });
   const selectedSlotLabel = selectedSlot?.label || 'Selected session time';
 
+  const markPaymentFieldTouched = (field: PaymentFieldKey) => {
+    setTouchedPaymentFields((prev) => ({ ...prev, [field]: true }));
+  };
+
   const handleContinueToCheckout = () => {
     if (!selectedSlot) {
       return;
     }
 
     setCheckoutError(null);
+    setReceiptDownloadError(null);
+    setTouchedPaymentFields({
+      cardholderName: false,
+      cardNumber: false,
+      expiry: false,
+      cvv: false,
+    });
     setBookingStep('checkout');
   };
 
@@ -378,32 +469,24 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
       return;
     }
 
-    const cleanedCardholder = cardholderName.trim();
     const cleanedCardNumber = getDigitsOnly(cardNumber);
-    const cleanedCvv = getDigitsOnly(cvv).slice(0, 4);
+    const cleanedCvv = getDigitsOnly(cvv).slice(0, 3);
 
-    if (cleanedCardholder.length < 2) {
-      setCheckoutError('Cardholder name is required.');
-      return;
-    }
+    setTouchedPaymentFields({
+      cardholderName: true,
+      cardNumber: true,
+      expiry: true,
+      cvv: true,
+    });
 
-    if (cleanedCardNumber.length !== 16) {
-      setCheckoutError('Enter a valid 16-digit card number.');
-      return;
-    }
-
-    if (!isValidExpiry(expiry)) {
-      setCheckoutError('Enter a valid expiry date in MM/YY format.');
-      return;
-    }
-
-    if (cleanedCvv.length < 3) {
-      setCheckoutError('Enter a valid CVV (3 or 4 digits).');
+    if (hasPaymentFieldErrors) {
+      setCheckoutError('Please correct the highlighted payment fields before continuing.');
       return;
     }
 
     setIsProcessingPayment(true);
     setCheckoutError(null);
+    setReceiptDownloadError(null);
 
     try {
       await new Promise((resolve) => setTimeout(resolve, 1200));
@@ -417,6 +500,8 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
           slotId: selectedSlot.id,
           sessionDate: sessionDateLabel,
           sessionTime: selectedSlot.label,
+          sessionDurationHours: selectedSessionDurationHours,
+          sessionAmount: sessionTotalAmount,
           paymentStatus: 'failed',
           paymentReference,
           paymentFailureReason: failureReason,
@@ -440,6 +525,8 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
         slotId: selectedSlot.id,
         sessionDate: sessionDateLabel,
         sessionTime: selectedSlot.label,
+        sessionDurationHours: selectedSessionDurationHours,
+        sessionAmount: sessionTotalAmount,
         paymentStatus: 'paid',
         paymentReference,
       });
@@ -454,11 +541,31 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
         title: 'Booking Confirmed!',
         message: 'Payment was successful and your session is now confirmed.',
         paymentReference,
+        bookingId: response.bookingId,
       });
     } catch (error) {
       setCheckoutError(error instanceof Error ? error.message : 'Failed to complete checkout. Please try again.');
     } finally {
       setIsProcessingPayment(false);
+    }
+  };
+
+  const handleDownloadReceipt = async () => {
+    const bookingId = String(bookingResult?.bookingId || '').trim();
+    if (!bookingId) {
+      setReceiptDownloadError('Receipt is not ready yet. Please refresh your sessions and try again.');
+      return;
+    }
+
+    setIsDownloadingReceipt(true);
+    setReceiptDownloadError(null);
+
+    try {
+      await apiService.downloadBookingReceipt(bookingId);
+    } catch (error) {
+      setReceiptDownloadError(error instanceof Error ? error.message : 'Failed to download receipt. Please try again.');
+    } finally {
+      setIsDownloadingReceipt(false);
     }
   };
 
@@ -558,7 +665,10 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
                   </div>
                   <div>
                     <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Total Charged</div>
-                    <div className="font-bold text-slate-900 text-sm">{formattedHourlyRate}</div>
+                    <div className="font-bold text-slate-900 text-sm">{formattedSessionTotal}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">
+                      {selectedSessionDurationHours.toFixed(2)} hour(s)
+                    </div>
                   </div>
                 </div>
 
@@ -577,13 +687,26 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
 
               <div className="flex flex-col gap-3">
                 {isSuccess ? (
-                  <button
-                    onClick={onBackToDashboard}
-                    className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200 flex items-center justify-center gap-2"
-                  >
-                    <CalendarCheck className="w-5 h-5" />
-                    Go to Dashboard
-                  </button>
+                  <>
+                    <button
+                      onClick={handleDownloadReceipt}
+                      disabled={isDownloadingReceipt || !bookingResult.bookingId}
+                      className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-200 flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      <Download className="w-5 h-5" />
+                      {isDownloadingReceipt ? 'Downloading Receipt...' : 'Download Receipt'}
+                    </button>
+                    {receiptDownloadError && (
+                      <p className="text-sm font-semibold text-rose-600">{receiptDownloadError}</p>
+                    )}
+                    <button
+                      onClick={onBackToDashboard}
+                      className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200 flex items-center justify-center gap-2"
+                    >
+                      <CalendarCheck className="w-5 h-5" />
+                      Go to Dashboard
+                    </button>
+                  </>
                 ) : (
                   <button
                     onClick={() => {
@@ -659,21 +782,45 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
                     <label className="text-xs font-black uppercase tracking-wider text-slate-500">Cardholder Name</label>
                     <input
                       value={cardholderName}
-                      onChange={(event) => setCardholderName(event.target.value)}
+                      onChange={(event) => {
+                        setCardholderName(event.target.value);
+                        markPaymentFieldTouched('cardholderName');
+                        setCheckoutError(null);
+                      }}
+                      onBlur={() => markPaymentFieldTouched('cardholderName')}
                       placeholder="Name on card"
-                      className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                      className={`mt-2 w-full rounded-2xl border bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:ring-2 ${
+                        touchedPaymentFields.cardholderName && paymentFieldErrors.cardholderName
+                          ? 'border-rose-300 focus:border-rose-400 focus:ring-rose-100'
+                          : 'border-slate-200 focus:border-indigo-400 focus:ring-indigo-100'
+                      }`}
                     />
+                    {touchedPaymentFields.cardholderName && paymentFieldErrors.cardholderName && (
+                      <p className="mt-1.5 text-xs font-semibold text-rose-600">{paymentFieldErrors.cardholderName}</p>
+                    )}
                   </div>
 
                   <div>
                     <label className="text-xs font-black uppercase tracking-wider text-slate-500">Card Number</label>
                     <input
                       value={cardNumber}
-                      onChange={(event) => setCardNumber(formatCardNumberInput(event.target.value))}
+                      onChange={(event) => {
+                        setCardNumber(formatCardNumberInput(event.target.value));
+                        markPaymentFieldTouched('cardNumber');
+                        setCheckoutError(null);
+                      }}
+                      onBlur={() => markPaymentFieldTouched('cardNumber')}
                       inputMode="numeric"
                       placeholder="4242 4242 4242 4242"
-                      className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium tracking-[0.2em] text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                      className={`mt-2 w-full rounded-2xl border bg-white px-4 py-3 text-sm font-medium tracking-[0.2em] text-slate-900 outline-none focus:ring-2 ${
+                        touchedPaymentFields.cardNumber && paymentFieldErrors.cardNumber
+                          ? 'border-rose-300 focus:border-rose-400 focus:ring-rose-100'
+                          : 'border-slate-200 focus:border-indigo-400 focus:ring-indigo-100'
+                      }`}
                     />
+                    {touchedPaymentFields.cardNumber && paymentFieldErrors.cardNumber && (
+                      <p className="mt-1.5 text-xs font-semibold text-rose-600">{paymentFieldErrors.cardNumber}</p>
+                    )}
                   </div>
 
                   <div className="grid sm:grid-cols-2 gap-4">
@@ -681,21 +828,45 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
                       <label className="text-xs font-black uppercase tracking-wider text-slate-500">Expiry</label>
                       <input
                         value={expiry}
-                        onChange={(event) => setExpiry(formatExpiryInput(event.target.value))}
+                        onChange={(event) => {
+                          setExpiry(formatExpiryInput(event.target.value));
+                          markPaymentFieldTouched('expiry');
+                          setCheckoutError(null);
+                        }}
+                        onBlur={() => markPaymentFieldTouched('expiry')}
                         inputMode="numeric"
                         placeholder="MM/YY"
-                        className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                        className={`mt-2 w-full rounded-2xl border bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:ring-2 ${
+                          touchedPaymentFields.expiry && paymentFieldErrors.expiry
+                            ? 'border-rose-300 focus:border-rose-400 focus:ring-rose-100'
+                            : 'border-slate-200 focus:border-indigo-400 focus:ring-indigo-100'
+                        }`}
                       />
+                      {touchedPaymentFields.expiry && paymentFieldErrors.expiry && (
+                        <p className="mt-1.5 text-xs font-semibold text-rose-600">{paymentFieldErrors.expiry}</p>
+                      )}
                     </div>
                     <div>
                       <label className="text-xs font-black uppercase tracking-wider text-slate-500">CVV</label>
                       <input
                         value={cvv}
-                        onChange={(event) => setCvv(getDigitsOnly(event.target.value).slice(0, 4))}
+                        onChange={(event) => {
+                          setCvv(getDigitsOnly(event.target.value).slice(0, 3));
+                          markPaymentFieldTouched('cvv');
+                          setCheckoutError(null);
+                        }}
+                        onBlur={() => markPaymentFieldTouched('cvv')}
                         inputMode="numeric"
                         placeholder="123"
-                        className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                        className={`mt-2 w-full rounded-2xl border bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:ring-2 ${
+                          touchedPaymentFields.cvv && paymentFieldErrors.cvv
+                            ? 'border-rose-300 focus:border-rose-400 focus:ring-rose-100'
+                            : 'border-slate-200 focus:border-indigo-400 focus:ring-indigo-100'
+                        }`}
                       />
+                      {touchedPaymentFields.cvv && paymentFieldErrors.cvv && (
+                        <p className="mt-1.5 text-xs font-semibold text-rose-600">{paymentFieldErrors.cvv}</p>
+                      )}
                     </div>
                   </div>
 
@@ -713,7 +884,7 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
                   <div className="flex flex-col sm:flex-row gap-3">
                     <button
                       type="button"
-                      disabled={isProcessingPayment}
+                      disabled={isProcessingPayment || hasPaymentFieldErrors}
                       onClick={handleSubmitPayment}
                       className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200 flex items-center justify-center gap-2 disabled:opacity-60"
                     >
@@ -781,13 +952,17 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
                     <span className="font-bold text-slate-500 text-sm">Rate per hour</span>
                     <span className="font-bold text-slate-900">{formattedHourlyRate}</span>
                   </div>
+                  <div className="flex justify-between items-center mb-2.5">
+                    <span className="font-bold text-slate-500 text-sm">Session Duration</span>
+                    <span className="font-bold text-slate-900">{selectedSessionDurationHours.toFixed(2)} h</span>
+                  </div>
                   <div className="flex justify-between items-center mb-4">
                     <span className="font-bold text-slate-500 text-sm">Service Fee</span>
                     <span className="font-bold text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-md text-xs uppercase tracking-wider">Free</span>
                   </div>
                   <div className="flex justify-between items-end pt-4 border-t border-slate-100">
                     <span className="font-black text-slate-900 text-lg">Total</span>
-                    <span className="font-black text-slate-900 text-3xl tracking-tight">{formattedHourlyRate}</span>
+                    <span className="font-black text-slate-900 text-3xl tracking-tight">{formattedSessionTotal}</span>
                   </div>
                 </div>
 
@@ -1139,13 +1314,17 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
                   <span className="font-bold text-slate-500 text-sm">Rate per hour</span>
                   <span className="font-bold text-slate-900">{formattedHourlyRate}</span>
                 </div>
+                <div className="flex justify-between items-center mb-2.5">
+                  <span className="font-bold text-slate-500 text-sm">Session Duration</span>
+                  <span className="font-bold text-slate-900">{selectedSessionDurationHours.toFixed(2)} h</span>
+                </div>
                 <div className="flex justify-between items-center mb-4">
                   <span className="font-bold text-slate-500 text-sm">Service Fee</span>
                   <span className="font-bold text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-md text-xs uppercase tracking-wider">Free</span>
                 </div>
                 <div className="flex justify-between items-end pt-4 border-t border-slate-100">
                   <span className="font-black text-slate-900 text-lg">Total</span>
-                  <span className="font-black text-slate-900 text-3xl tracking-tight">{formattedHourlyRate}</span>
+                  <span className="font-black text-slate-900 text-3xl tracking-tight">{formattedSessionTotal}</span>
                 </div>
               </div>
 

@@ -17,6 +17,7 @@ import { SkeletonGrid } from '../common/SkeletonCard';
 import { EmptyState } from '../common/EmptyState';
 import { Pagination } from '../common/Pagination';
 import { formatLkr } from '../../utils/currency';
+import { DEFAULT_AVATAR_PLACEHOLDER } from '../../utils/defaultAvatar';
 
 interface FindTutorsPageProps {
   tutors: Tutor[];
@@ -363,18 +364,12 @@ export const FindTutorsPage: React.FC<FindTutorsPageProps> = ({
                   {/* Profile Header */}
                   <div className="flex items-start gap-5">
                     <div className="relative">
-                      {tutor.avatar ? (
-                        <img
-                          src={tutor.avatar}
-                          alt={getTutorDisplayName(tutor)}
-                          className="w-20 h-20 rounded-2xl object-cover border-4 border-white shadow-xl"
-                          referrerPolicy="no-referrer"
-                        />
-                      ) : (
-                        <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-500 border-4 border-white shadow-xl flex items-center justify-center text-white text-2xl font-black">
-                          {getTutorDisplayName(tutor).charAt(0)}
-                        </div>
-                      )}
+                      <img
+                        src={tutor.avatar || DEFAULT_AVATAR_PLACEHOLDER}
+                        alt={getTutorDisplayName(tutor)}
+                        className="w-20 h-20 rounded-2xl object-cover border-4 border-white shadow-xl"
+                        referrerPolicy="no-referrer"
+                      />
                       {tutor.isVerified && (
                         <div className="absolute -bottom-1 -right-1 bg-indigo-600 p-1 rounded-lg border-2 border-white">
                           <CheckCircle className="w-3 h-3 text-white" />

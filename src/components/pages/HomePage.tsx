@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle, Calendar, MessageCircle, Star, GraduationCap, ArrowRight, User } from 'lucide-react';
 import { User as UserType, Tutor } from '../../types';
+import { DEFAULT_AVATAR_PLACEHOLDER } from '../../utils/defaultAvatar';
 
 type Tab =
   | 'home'
@@ -112,7 +113,7 @@ export const HomePage: React.FC<HomePageProps> = ({ setActiveTab, currentUser, t
           <div className="flex items-center gap-6 pt-4">
             <div className="flex -space-x-3">
               {tutors.slice(0, 4).map(t => (
-                <img key={t.id} src={t.avatar} className="w-10 h-10 rounded-full border-2 border-white shadow-sm object-contain object-center bg-white" referrerPolicy="no-referrer" />
+                <img key={t.id} src={t.avatar || DEFAULT_AVATAR_PLACEHOLDER} className="w-10 h-10 rounded-full border-2 border-white shadow-sm object-contain object-center bg-white" referrerPolicy="no-referrer" />
               ))}
             </div>
             <p className="text-sm text-slate-500 font-medium">Joined by <span className="text-slate-900 font-bold">2,000+</span> students this month</p>
@@ -306,7 +307,7 @@ export const HomePage: React.FC<HomePageProps> = ({ setActiveTab, currentUser, t
               onClick={() => setActiveTab('tutors')}
             >
               <div className="relative h-64 overflow-hidden">
-                <img src={tutor.avatar} alt={tutor.firstName + ' ' + tutor.lastName} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" referrerPolicy="no-referrer" />
+                <img src={tutor.avatar || DEFAULT_AVATAR_PLACEHOLDER} alt={tutor.firstName + ' ' + tutor.lastName} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" referrerPolicy="no-referrer" />
                 <div className="absolute top-4 right-4 bg-white/90 backdrop-blur-md px-3 py-1 rounded-full flex items-center gap-1 shadow-sm">
                   <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
                   <span className="text-xs font-bold">{tutor.rating}</span>

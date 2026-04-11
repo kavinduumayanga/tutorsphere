@@ -9,6 +9,7 @@ import {
 import { apiService } from '../../services/apiService';
 import { Tutor, Course, Review } from '../../types';
 import { formatLkr } from '../../utils/currency';
+import { DEFAULT_AVATAR_PLACEHOLDER } from '../../utils/defaultAvatar';
 import { SUBTLE_NOISE_TEXTURE_PLACEHOLDER } from '../../utils/defaultImages';
 
 interface TutorProfilePageProps {
@@ -190,17 +191,11 @@ export const TutorProfilePage: React.FC<TutorProfilePageProps> = ({
                 <div className="relative flex justify-center -mt-16 mb-4">
                   <div className="relative z-10">
                     <div className="w-32 h-32 md:w-40 md:h-40 rounded-2xl border-[6px] border-white shadow-xl overflow-hidden bg-white transition-transform duration-300 group-hover:scale-105">
-                      {tutor.avatar ? (
-                        <img 
-                          src={tutor.avatar} 
-                          alt={displayName} 
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center bg-slate-100 text-slate-400">
-                          <UserIcon className="w-16 h-16" />
-                        </div>
-                      )}
+                      <img 
+                        src={tutor.avatar || DEFAULT_AVATAR_PLACEHOLDER} 
+                        alt={displayName} 
+                        className="w-full h-full object-cover"
+                      />
                     </div>
                   </div>
                 </div>

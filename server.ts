@@ -1382,6 +1382,22 @@ const buildAvatarResponseUrl = async (
   return `${req.protocol}://${req.get('host')}/api/auth/user/${user.id}/avatar`;
 };
 
+const resolveTutorAvatarResponseUrl = async (
+  req: express.Request,
+  tutor: { avatar?: string },
+  user?: { id: string; avatar?: string }
+): Promise<string | undefined> => {
+  if (user) {
+    const linkedUserAvatar = await buildAvatarResponseUrl(req, user);
+    if (linkedUserAvatar) {
+      return linkedUserAvatar;
+    }
+  }
+
+  const tutorAvatar = String(tutor.avatar || '').trim();
+  return tutorAvatar || undefined;
+};
+
 async function migrateUsers() {
   try {
     const userCount = await User.countDocuments();
@@ -2387,6 +2403,14 @@ async function startServer() {
         (user as any).avatarBlobName = uploadedAvatar.blobName;
         (user as any).avatarMimeType = optimizedAvatar.mimetype;
         (user as any).avatarSize = optimizedAvatar.size;
+
+        if (user.role === 'tutor') {
+          await Tutor.findOneAndUpdate(
+            { id: user.id },
+            { $set: { avatar: uploadedAvatar.blobUrl } },
+            { new: false }
+          );
+        }
       }
 
       await user.save();
@@ -2795,7 +2819,51 @@ async function startServer() {
   app.get("/api/tutors", async (req, res) => {
     try {
       const tutors = await Tutor.find();
-      res.json(tutors);
+
+      if (tutors.length === 0) {
+        return res.json([]);
+      }
+
+      const tutorIds = tutors
+        .map((tutor) => String((tutor as any).id || '').trim())
+        .filter(Boolean);
+
+      const linkedUsers = tutorIds.length > 0
+        ? await User.find({ id: { $in: tutorIds } }, { id: 1, avatar: 1 })
+        : [];
+
+      const userById = new Map<string, { id: string; avatar?: string }>(
+        linkedUsers.map((userDoc: any) => [
+          String(userDoc?.id || '').trim(),
+          {
+            id: String(userDoc?.id || '').trim(),
+            avatar: String(userDoc?.avatar || '').trim() || undefined,
+          },
+        ])
+      );
+
+      const tutorResponses = await Promise.all(
+        tutors.map(async (tutorDoc) => {
+          const tutor =
+            typeof (tutorDoc as any).toObject === 'function'
+              ? (tutorDoc as any).toObject()
+              : tutorDoc;
+
+          const tutorId = String((tutor as any)?.id || '').trim();
+          const linkedUser = tutorId ? userById.get(tutorId) : undefined;
+          const resolvedAvatar = await resolveTutorAvatarResponseUrl(req, tutor as any, linkedUser);
+
+          if (resolvedAvatar) {
+            (tutor as any).avatar = resolvedAvatar;
+          } else {
+            delete (tutor as any).avatar;
+          }
+
+          return tutor;
+        })
+      );
+
+      return res.json(tutorResponses);
     } catch (error) {
       console.error("Get tutors error:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -2806,7 +2874,30 @@ async function startServer() {
     try {
       const tutor = await Tutor.findOne({ id: req.params.id });
       if (tutor) {
-        res.json(tutor);
+        const linkedUser = await User.findOne({ id: req.params.id }, { id: 1, avatar: 1 });
+        const tutorResponse =
+          typeof (tutor as any).toObject === 'function'
+            ? (tutor as any).toObject()
+            : tutor;
+
+        const resolvedAvatar = await resolveTutorAvatarResponseUrl(
+          req,
+          tutorResponse as any,
+          linkedUser
+            ? {
+                id: String((linkedUser as any).id || '').trim(),
+                avatar: String((linkedUser as any).avatar || '').trim() || undefined,
+              }
+            : undefined
+        );
+
+        if (resolvedAvatar) {
+          (tutorResponse as any).avatar = resolvedAvatar;
+        } else {
+          delete (tutorResponse as any).avatar;
+        }
+
+        res.json(tutorResponse);
       } else {
         res.status(404).json({ error: "Tutor not found" });
       }

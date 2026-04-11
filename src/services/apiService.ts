@@ -269,15 +269,67 @@ class ApiService {
     return 'School';
   }
 
+  private normalizeMediaUrl(value: unknown): string | undefined {
+    const rawValue = String(value || '').trim();
+    if (!rawValue) {
+      return undefined;
+    }
+
+    if (/^(https?:\/\/|data:|blob:)/i.test(rawValue)) {
+      return rawValue;
+    }
+
+    if (rawValue.startsWith('//')) {
+      return `${window.location.protocol}${rawValue}`;
+    }
+
+    try {
+      const apiOrigin = new URL(API_BASE_URL, window.location.origin).origin;
+
+      if (rawValue.startsWith('/')) {
+        return `${apiOrigin}${rawValue}`;
+      }
+
+      return `${apiOrigin}/${rawValue.replace(/^\/+/, '')}`;
+    } catch {
+      return rawValue;
+    }
+  }
+
+  private resolveTutorAvatarUrl(tutor: any): string | undefined {
+    const avatarCandidates = [
+      tutor?.avatar,
+      tutor?.profilePicture,
+      tutor?.profileImage,
+      tutor?.imageUrl,
+      tutor?.photo,
+      tutor?.photoUrl,
+      tutor?.blobUrl,
+      tutor?.userAvatar,
+      tutor?.user?.avatar,
+    ];
+
+    for (const candidate of avatarCandidates) {
+      const normalized = this.normalizeMediaUrl(candidate);
+      if (normalized) {
+        return normalized;
+      }
+    }
+
+    return undefined;
+  }
+
   private normalizeTutor(tutor: any): Tutor {
     const normalizedSubjects = normalizeTutorSubjects(tutor?.subjects);
     const firstName = this.sanitizeTutorName((tutor?.firstName || '').trim());
     const lastName = this.sanitizeTutorName((tutor?.lastName || '').trim());
     const fullName = this.sanitizeTutorName((tutor?.name || '').trim());
+    const resolvedAvatar = this.resolveTutorAvatarUrl(tutor);
 
     if (firstName || lastName) {
       return {
         ...tutor,
+        avatar: resolvedAvatar,
         subjects: normalizedSubjects,
         teachingLevel: this.normalizeTeachingLevel(tutor?.teachingLevel),
       } as Tutor;
@@ -289,6 +341,7 @@ class ApiService {
         ...tutor,
         firstName: parsedFirstName || 'Tutor',
         lastName: rest.join(' '),
+        avatar: resolvedAvatar,
         subjects: normalizedSubjects,
         teachingLevel: this.normalizeTeachingLevel(tutor?.teachingLevel),
       } as Tutor;
@@ -298,6 +351,7 @@ class ApiService {
       ...tutor,
       firstName: 'Tutor',
       lastName: '',
+      avatar: resolvedAvatar,
       subjects: normalizedSubjects,
       teachingLevel: this.normalizeTeachingLevel(tutor?.teachingLevel),
     } as Tutor;

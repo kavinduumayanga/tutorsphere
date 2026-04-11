@@ -3160,6 +3160,20 @@ export default function App() {
 
       const updatedUser = await apiService.updateUser(currentUser.id, formData);
       setCurrentUser(updatedUser);
+
+      if (updatedUser.role === 'tutor' && updatedUser.avatar) {
+        setTutors((prevTutors) =>
+          prevTutors.map((tutor) =>
+            tutor.id === updatedUser.id
+              ? {
+                  ...tutor,
+                  avatar: updatedUser.avatar,
+                }
+              : tutor
+          )
+        );
+      }
+
       alert('Profile updated successfully!');
     } catch (error) {
       console.error('Failed to update profile:', error);
@@ -5605,7 +5619,7 @@ export default function App() {
                   <div className="flex items-center gap-6 pt-4">
                     <div className="flex -space-x-3">
                       {tutors.slice(0, 4).map(t => (
-                        <img key={t.id} src={t.avatar} className="w-10 h-10 rounded-full border-2 border-white shadow-sm object-contain object-center bg-white" referrerPolicy="no-referrer" />
+                        <img key={t.id} src={t.avatar || DEFAULT_AVATAR_PLACEHOLDER} className="w-10 h-10 rounded-full border-2 border-white shadow-sm object-contain object-center bg-white" referrerPolicy="no-referrer" />
                       ))}
                     </div>
                     <p className="text-sm text-slate-500 font-medium">Joined by <span className="text-slate-900 font-bold">2,000+</span> students this month</p>
@@ -5805,7 +5819,7 @@ export default function App() {
                     >
                       <div className="relative h-56 overflow-hidden">
                         <div className="absolute inset-0 bg-gradient-to-t from-slate-900/65 via-slate-900/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-10" />
-                        <img src={tutor.avatar} alt={getTutorDisplayName(tutor)} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" referrerPolicy="no-referrer" />
+                        <img src={tutor.avatar || DEFAULT_AVATAR_PLACEHOLDER} alt={getTutorDisplayName(tutor)} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" referrerPolicy="no-referrer" />
 
                         {/* Subject Badge */}
                         <div className="absolute top-4 right-4 z-20">

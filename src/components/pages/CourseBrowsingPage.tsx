@@ -29,6 +29,7 @@ import {
   Shield,
   Lock,
   AlertTriangle,
+  Download,
 } from 'lucide-react';
 import { Course, CourseEnrollment, Tutor } from '../../types';
 import { formatLkr } from '../../utils/currency';
@@ -178,6 +179,39 @@ const createCoursePaymentReference = (): string => {
   const stamp = Date.now().toString(36).toUpperCase();
   const nonce = Math.floor(Math.random() * 900 + 100);
   return `CRS-${stamp}-${nonce}`;
+};
+
+type CoursePaymentFieldKey = 'cardholderName' | 'cardNumber' | 'expiry' | 'cvv';
+type CoursePaymentFieldErrors = Record<CoursePaymentFieldKey, string>;
+
+const getCoursePaymentFieldErrors = (input: {
+  cardholderName: string;
+  cardNumber: string;
+  expiry: string;
+  cvv: string;
+}): CoursePaymentFieldErrors => {
+  const cleanedCardholder = input.cardholderName.trim();
+  const cleanedCardNumber = getDigitsOnly(input.cardNumber);
+  const cleanedCvv = getDigitsOnly(input.cvv).slice(0, 3);
+
+  return {
+    cardholderName:
+      cleanedCardholder.length < 2
+        ? 'Enter the cardholder name as shown on your card.'
+        : '',
+    cardNumber:
+      cleanedCardNumber.length !== 16
+        ? 'Card number must be exactly 16 digits.'
+        : '',
+    expiry:
+      !isValidExpiry(input.expiry)
+        ? 'Enter a valid expiry date in MM/YY format.'
+        : '',
+    cvv:
+      cleanedCvv.length !== 3
+        ? 'CVV must be exactly 3 digits.'
+        : '',
+  };
 };
 
 // ─── Skeleton Components ──────────────────────────────────────────────────────
@@ -438,6 +472,9 @@ interface CheckoutModalProps {
   cardNumber: string;
   expiry: string;
   cvv: string;
+  touchedPaymentFields: Record<CoursePaymentFieldKey, boolean>;
+  paymentFieldErrors: CoursePaymentFieldErrors;
+  hasPaymentFieldErrors: boolean;
   isApplyingCoupon: boolean;
   isSubmitting: boolean;
   errorMessage: string | null;
@@ -461,6 +498,9 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
   cardNumber,
   expiry,
   cvv,
+  touchedPaymentFields,
+  paymentFieldErrors,
+  hasPaymentFieldErrors,
   isApplyingCoupon,
   isSubmitting,
   errorMessage,
@@ -536,8 +576,15 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
                           value={cardholderName}
                           onChange={(event) => onCardholderNameChange(event.target.value)}
                           placeholder="Name on card"
-                          className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                          className={`mt-2 w-full rounded-2xl border bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:ring-2 ${
+                            touchedPaymentFields.cardholderName && paymentFieldErrors.cardholderName
+                              ? 'border-rose-300 focus:border-rose-400 focus:ring-rose-100'
+                              : 'border-slate-200 focus:border-indigo-400 focus:ring-indigo-100'
+                          }`}
                         />
+                        {touchedPaymentFields.cardholderName && paymentFieldErrors.cardholderName && (
+                          <p className="mt-1.5 text-xs font-semibold text-rose-600">{paymentFieldErrors.cardholderName}</p>
+                        )}
                       </div>
 
                       <div>
@@ -547,8 +594,15 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
                           onChange={(event) => onCardNumberChange(event.target.value)}
                           inputMode="numeric"
                           placeholder="4242 4242 4242 4242"
-                          className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium tracking-[0.2em] text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                          className={`mt-2 w-full rounded-2xl border bg-white px-4 py-3 text-sm font-medium tracking-[0.2em] text-slate-900 outline-none focus:ring-2 ${
+                            touchedPaymentFields.cardNumber && paymentFieldErrors.cardNumber
+                              ? 'border-rose-300 focus:border-rose-400 focus:ring-rose-100'
+                              : 'border-slate-200 focus:border-indigo-400 focus:ring-indigo-100'
+                          }`}
                         />
+                        {touchedPaymentFields.cardNumber && paymentFieldErrors.cardNumber && (
+                          <p className="mt-1.5 text-xs font-semibold text-rose-600">{paymentFieldErrors.cardNumber}</p>
+                        )}
                       </div>
 
                       <div className="grid sm:grid-cols-2 gap-4">
@@ -559,8 +613,15 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
                             onChange={(event) => onExpiryChange(event.target.value)}
                             inputMode="numeric"
                             placeholder="MM/YY"
-                            className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                            className={`mt-2 w-full rounded-2xl border bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:ring-2 ${
+                              touchedPaymentFields.expiry && paymentFieldErrors.expiry
+                                ? 'border-rose-300 focus:border-rose-400 focus:ring-rose-100'
+                                : 'border-slate-200 focus:border-indigo-400 focus:ring-indigo-100'
+                            }`}
                           />
+                          {touchedPaymentFields.expiry && paymentFieldErrors.expiry && (
+                            <p className="mt-1.5 text-xs font-semibold text-rose-600">{paymentFieldErrors.expiry}</p>
+                          )}
                         </div>
                         <div>
                           <label className="text-xs font-black uppercase tracking-wider text-slate-500">CVV</label>
@@ -569,8 +630,15 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
                             onChange={(event) => onCvvChange(event.target.value)}
                             inputMode="numeric"
                             placeholder="123"
-                            className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                            className={`mt-2 w-full rounded-2xl border bg-white px-4 py-3 text-sm font-medium text-slate-900 outline-none focus:ring-2 ${
+                              touchedPaymentFields.cvv && paymentFieldErrors.cvv
+                                ? 'border-rose-300 focus:border-rose-400 focus:ring-rose-100'
+                                : 'border-slate-200 focus:border-indigo-400 focus:ring-indigo-100'
+                            }`}
                           />
+                          {touchedPaymentFields.cvv && paymentFieldErrors.cvv && (
+                            <p className="mt-1.5 text-xs font-semibold text-rose-600">{paymentFieldErrors.cvv}</p>
+                          )}
                         </div>
                       </div>
 
@@ -595,7 +663,7 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   <div className="flex flex-col sm:flex-row gap-3">
                     <button
                       type="button"
-                      disabled={isSubmitting}
+                      disabled={isSubmitting || (requiresPayment && hasPaymentFieldErrors)}
                       onClick={() => {
                         void onSubmit();
                       }}
@@ -769,11 +837,33 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
   const [cardNumber, setCardNumber] = useState('');
   const [expiry, setExpiry] = useState('');
   const [cvv, setCvv] = useState('');
+  const [touchedPaymentFields, setTouchedPaymentFields] = useState<Record<CoursePaymentFieldKey, boolean>>({
+    cardholderName: false,
+    cardNumber: false,
+    expiry: false,
+    cvv: false,
+  });
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [couponMessage, setCouponMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [isApplyingCoupon, setIsApplyingCoupon] = useState(false);
   const [isSubmittingCheckout, setIsSubmittingCheckout] = useState(false);
+  const [coursePaymentReceipt, setCoursePaymentReceipt] = useState<{
+    courseTitle: string;
+    totalAmount: number;
+    paymentReference: string;
+    couponCode?: string;
+    issuedAtIso: string;
+  } | null>(null);
+
+  const paymentFieldErrors = useMemo(
+    () => getCoursePaymentFieldErrors({ cardholderName, cardNumber, expiry, cvv }),
+    [cardholderName, cardNumber, expiry, cvv]
+  );
+  const hasPaymentFieldErrors = useMemo(
+    () => Object.values(paymentFieldErrors).some((error) => Boolean(error)),
+    [paymentFieldErrors]
+  );
 
   const categories = useMemo(() => ['All', ...stemSubjects], [stemSubjects]);
 
@@ -883,6 +973,12 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
     setCardNumber('');
     setExpiry('');
     setCvv('');
+    setTouchedPaymentFields({
+      cardholderName: false,
+      cardNumber: false,
+      expiry: false,
+      cvv: false,
+    });
     setCheckoutError(null);
     setCouponMessage(null);
     setIsApplyingCoupon(false);
@@ -986,27 +1082,18 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
       let paymentReference: string | undefined;
 
       if (requiresPayment) {
-        const cleanedCardholder = cardholderName.trim();
         const cleanedCardNumber = getDigitsOnly(cardNumber);
-        const cleanedCvv = getDigitsOnly(cvv).slice(0, 4);
+        const cleanedCvv = getDigitsOnly(cvv).slice(0, 3);
 
-        if (cleanedCardholder.length < 2) {
-          setCheckoutError('Cardholder name is required.');
-          return;
-        }
+        setTouchedPaymentFields({
+          cardholderName: true,
+          cardNumber: true,
+          expiry: true,
+          cvv: true,
+        });
 
-        if (cleanedCardNumber.length !== 16) {
-          setCheckoutError('Enter a valid 16-digit card number.');
-          return;
-        }
-
-        if (!isValidExpiry(expiry)) {
-          setCheckoutError('Enter a valid expiry date in MM/YY format.');
-          return;
-        }
-
-        if (cleanedCvv.length < 3) {
-          setCheckoutError('Enter a valid CVV (3 or 4 digits).');
+        if (hasPaymentFieldErrors) {
+          setCheckoutError('Please correct the highlighted payment fields before continuing.');
           return;
         }
 
@@ -1031,6 +1118,16 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
         return;
       }
 
+      if (requiresPayment && paymentReference) {
+        setCoursePaymentReceipt({
+          courseTitle: checkoutCourse.title,
+          totalAmount: effectiveFinalPrice,
+          paymentReference,
+          couponCode: appliedCoupon?.couponCode,
+          issuedAtIso: new Date().toISOString(),
+        });
+      }
+
       closeCheckoutModal();
     } finally {
       setIsSubmittingCheckout(false);
@@ -1045,6 +1142,33 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
     onSetCourseSearchQuery('');
     onSetCourseCategoryFilter('All Categories');
     setCurrentPage(1);
+  };
+
+  const downloadCourseReceipt = (receipt: NonNullable<typeof coursePaymentReceipt>) => {
+    const issuedDate = new Date(receipt.issuedAtIso);
+    const issuedAt = Number.isNaN(issuedDate.getTime())
+      ? receipt.issuedAtIso
+      : issuedDate.toLocaleString('en-US');
+
+    const content = [
+      'TutorSphere Course Payment Receipt',
+      '-------------------------------',
+      `Course: ${receipt.courseTitle}`,
+      `Total Paid: ${formatLkr(receipt.totalAmount)}`,
+      `Payment Reference: ${receipt.paymentReference}`,
+      `Coupon: ${receipt.couponCode || 'N/A'}`,
+      `Issued At: ${issuedAt}`,
+    ].join('\n');
+
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `tutorsphere-course-receipt-${receipt.paymentReference}.txt`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
   };
 
   // ── Render ──
@@ -1452,6 +1576,9 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
             cardNumber={cardNumber}
             expiry={expiry}
             cvv={cvv}
+            touchedPaymentFields={touchedPaymentFields}
+            paymentFieldErrors={paymentFieldErrors}
+            hasPaymentFieldErrors={hasPaymentFieldErrors}
             isApplyingCoupon={isApplyingCoupon}
             isSubmitting={isSubmittingCheckout}
             errorMessage={checkoutError}
@@ -1464,13 +1591,90 @@ export const CourseBrowsingPage: React.FC<CourseBrowsingPageProps> = ({
               setCouponMessage(null);
               setCheckoutError(null);
             }}
-            onCardholderNameChange={(value) => setCardholderName(value)}
-            onCardNumberChange={(value) => setCardNumber(formatCardNumberInput(value))}
-            onExpiryChange={(value) => setExpiry(formatExpiryInput(value))}
-            onCvvChange={(value) => setCvv(getDigitsOnly(value).slice(0, 4))}
+            onCardholderNameChange={(value) => {
+              setCardholderName(value);
+              setTouchedPaymentFields((prev) => ({ ...prev, cardholderName: true }));
+              setCheckoutError(null);
+            }}
+            onCardNumberChange={(value) => {
+              setCardNumber(formatCardNumberInput(value));
+              setTouchedPaymentFields((prev) => ({ ...prev, cardNumber: true }));
+              setCheckoutError(null);
+            }}
+            onExpiryChange={(value) => {
+              setExpiry(formatExpiryInput(value));
+              setTouchedPaymentFields((prev) => ({ ...prev, expiry: true }));
+              setCheckoutError(null);
+            }}
+            onCvvChange={(value) => {
+              setCvv(getDigitsOnly(value).slice(0, 3));
+              setTouchedPaymentFields((prev) => ({ ...prev, cvv: true }));
+              setCheckoutError(null);
+            }}
             onSubmit={handleCheckoutSubmit}
             onClose={closeCheckoutModal}
           />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {coursePaymentReceipt && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4 py-6"
+            onClick={() => setCoursePaymentReceipt(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 12 }}
+              transition={{ type: 'spring', damping: 24, stiffness: 300 }}
+              className="w-full max-w-lg rounded-3xl border border-emerald-200 bg-white shadow-2xl overflow-hidden"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-emerald-50 to-teal-50">
+                <h3 className="text-xl font-extrabold text-slate-900">Payment Receipt</h3>
+                <p className="mt-1 text-sm font-medium text-slate-600">Your course payment was completed successfully.</p>
+              </div>
+
+              <div className="p-6 space-y-3 text-sm">
+                <div className="flex justify-between gap-4">
+                  <span className="font-semibold text-slate-500">Course</span>
+                  <span className="font-bold text-slate-900 text-right">{coursePaymentReceipt.courseTitle}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="font-semibold text-slate-500">Total Paid</span>
+                  <span className="font-black text-emerald-700 text-right">{formatLkr(coursePaymentReceipt.totalAmount)}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="font-semibold text-slate-500">Coupon</span>
+                  <span className="font-bold text-slate-900 text-right">{coursePaymentReceipt.couponCode || 'N/A'}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="font-semibold text-slate-500">Payment Ref</span>
+                  <span className="font-bold text-slate-900 text-right break-all">{coursePaymentReceipt.paymentReference}</span>
+                </div>
+              </div>
+
+              <div className="px-6 pb-6 flex flex-col sm:flex-row gap-3">
+                <button
+                  onClick={() => downloadCourseReceipt(coursePaymentReceipt)}
+                  className="flex-1 py-3 rounded-2xl bg-emerald-600 text-white font-bold hover:bg-emerald-700 transition-colors flex items-center justify-center gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  Download Receipt
+                </button>
+                <button
+                  onClick={() => setCoursePaymentReceipt(null)}
+                  className="sm:w-36 py-3 rounded-2xl border border-slate-200 bg-white text-slate-700 font-bold hover:bg-slate-50 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>

@@ -12,13 +12,65 @@ export interface IBooking extends Document {
   timeSlot?: string;
   meetingLink?: string;
   expertFeedback?: string;
-  paymentStatus: 'pending' | 'paid' | 'failed';
+  paymentStatus: 'pending' | 'paid' | 'failed' | 'refunded';
   paymentReference?: string;
   paymentFailureReason?: string;
   paidAt?: string;
+  refundedAt?: string;
+  refundReason?: string;
+  sessionDurationHours?: number;
+  sessionAmount?: number;
+  rescheduleRequest?: {
+    requestedDate: string;
+    requestedTimeSlot: string;
+    requestedSlotId?: string;
+    note?: string;
+    requestedAt: string;
+    requestedByTutorId: string;
+    status: 'pending';
+  };
+  sessionResources?: Array<{
+    id: string;
+    name: string;
+    url: string;
+    blobName?: string;
+    containerName?: string;
+    mimeType?: string;
+    size?: number;
+    uploadedByTutorId?: string;
+    uploadedAt?: string;
+  }>;
   hiddenForTutor?: boolean;
   hiddenForStudent?: boolean;
 }
+
+const BookingRescheduleRequestSchema = new Schema(
+  {
+    requestedDate: { type: String, required: true },
+    requestedTimeSlot: { type: String, required: true },
+    requestedSlotId: { type: String },
+    note: { type: String },
+    requestedAt: { type: String, required: true },
+    requestedByTutorId: { type: String, required: true },
+    status: { type: String, enum: ['pending'], default: 'pending' },
+  },
+  { _id: false }
+);
+
+const BookingSessionResourceSchema = new Schema(
+  {
+    id: { type: String, required: true },
+    name: { type: String, required: true },
+    url: { type: String, required: true },
+    blobName: { type: String },
+    containerName: { type: String },
+    mimeType: { type: String },
+    size: { type: Number },
+    uploadedByTutorId: { type: String },
+    uploadedAt: { type: String },
+  },
+  { _id: false }
+);
 
 const BookingSchema: Schema = new Schema({
   id: { type: String, required: true, unique: true },
@@ -32,10 +84,16 @@ const BookingSchema: Schema = new Schema({
   timeSlot: { type: String },
   meetingLink: { type: String },
   expertFeedback: { type: String },
-  paymentStatus: { type: String, required: true, enum: ['pending', 'paid', 'failed'], default: 'pending' },
+  paymentStatus: { type: String, required: true, enum: ['pending', 'paid', 'failed', 'refunded'], default: 'pending' },
   paymentReference: { type: String },
   paymentFailureReason: { type: String },
   paidAt: { type: String },
+  refundedAt: { type: String },
+  refundReason: { type: String },
+  sessionDurationHours: { type: Number },
+  sessionAmount: { type: Number },
+  rescheduleRequest: { type: BookingRescheduleRequestSchema },
+  sessionResources: { type: [BookingSessionResourceSchema], default: [] },
   hiddenForTutor: { type: Boolean, default: false },
   hiddenForStudent: { type: Boolean, default: false },
 }, {

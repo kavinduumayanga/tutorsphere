@@ -35,10 +35,14 @@ export interface StudentSessionsPageProps {
   getBookingStatusPillClassName: (status: string) => string;
   isValidMeetingLink: (link: string | undefined) => boolean;
   canStudentManageBeforeStart: (booking: any) => boolean;
+  isSessionJoinEnabled: (booking: any) => boolean;
+  activeResourceDownloadKey: string | null;
 
   handleHideBookingForCurrentUser: (booking: any) => void;
   handleStudentCancelBooking: (booking: any) => void;
+  handleStudentRescheduleDecision: (booking: any, decision: 'accept' | 'decline') => void;
   handleSubmitSessionRating: (booking: any) => void;
+  handleDownloadSessionResource: (booking: any, resource: any) => void | Promise<void>;
 }
 
 const fadeUp = {
@@ -54,7 +58,12 @@ const ratingCopy: Record<number, string> = {
   5: 'Excellent',
 };
 
-const getMeetingLinkMeta = (booking: any, paymentStatus: string, hasValidMeetingLink: boolean) => {
+const getMeetingLinkMeta = (
+  booking: any,
+  paymentStatus: string,
+  hasValidMeetingLink: boolean,
+  isSessionJoinEnabled: boolean
+) => {
   if (booking.status === 'cancelled') {
     return {
       label: 'Cancelled',
@@ -64,6 +73,14 @@ const getMeetingLinkMeta = (booking: any, paymentStatus: string, hasValidMeeting
   }
 
   if (hasValidMeetingLink) {
+    if (!isSessionJoinEnabled) {
+      return {
+        label: 'Session Ended',
+        badgeClassName: 'bg-slate-100 text-slate-600 border-slate-200',
+        valueClassName: 'text-slate-600',
+      };
+    }
+
     return {
       label: 'Ready',
       badgeClassName: 'bg-emerald-50 text-emerald-700 border-emerald-100',
@@ -109,6 +126,20 @@ const getPaymentBadgeClassName = (paymentStatus: string, fallbackClassName: stri
   return fallbackClassName;
 };
 
+const resolveSessionResourceRef = (resource: any): string => {
+  return String(resource?.id || resource?.blobName || resource?.url || '').trim();
+};
+
+const buildSessionResourceDownloadHref = (booking: any, resource: any): string => {
+  const bookingId = String(booking?.id || '').trim();
+  const resourceRef = String(resource?.id || resource?.blobName || resource?.url || '').trim();
+  if (!bookingId || !resourceRef) {
+    return String(resource?.url || '#').trim() || '#';
+  }
+
+  return `/api/bookings/${encodeURIComponent(bookingId)}/resources/${encodeURIComponent(resourceRef)}/download`;
+};
+
 type InfoTileProps = {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
@@ -143,9 +174,13 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
   getBookingStatusPillClassName,
   isValidMeetingLink,
   canStudentManageBeforeStart,
+  isSessionJoinEnabled,
+  activeResourceDownloadKey,
   handleHideBookingForCurrentUser,
   handleStudentCancelBooking,
-  handleSubmitSessionRating
+  handleStudentRescheduleDecision,
+  handleSubmitSessionRating,
+  handleDownloadSessionResource,
 }) => {
   const [reviewModalBooking, setReviewModalBooking] = useState<any>(null);
 
@@ -224,10 +259,12 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
             const paymentBadgeClassName = getPaymentBadgeClassName(paymentStatus, getBookingPaymentPillClassName(paymentStatus));
             const canCancel = booking.status !== 'cancelled' && booking.status !== 'completed' && canStudentManageBeforeStart(booking);
             const hasValidMeetingLink = isValidMeetingLink(booking.meetingLink);
-            const canJoinMeeting = hasValidMeetingLink && booking.status === 'confirmed';
+            const canJoinMeeting = hasValidMeetingLink && booking.status === 'confirmed' && isSessionJoinEnabled(booking);
             const existingReview = studentReviewsBySessionId.get(booking.id);
-            const meetingLinkMeta = getMeetingLinkMeta(booking, paymentStatus, hasValidMeetingLink);
+            const meetingLinkMeta = getMeetingLinkMeta(booking, paymentStatus, hasValidMeetingLink, isSessionJoinEnabled(booking));
             const sessionTitle = `${booking.subject || 'Tutoring'} Session`;
+            const hasPendingRescheduleRequest = String(booking?.rescheduleRequest?.status || '').trim().toLowerCase() === 'pending';
+            const sessionResources = Array.isArray(booking.sessionResources) ? booking.sessionResources : [];
 
             return (
               <motion.div
@@ -286,6 +323,69 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
                       </div>
                     )}
 
+                    {hasPendingRescheduleRequest && booking.rescheduleRequest && booking.status !== 'cancelled' && booking.status !== 'completed' && (
+                      <div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+                        <p className="text-xs font-black uppercase tracking-wider text-indigo-600">Reschedule Request</p>
+                        <p className="mt-1 text-sm font-semibold text-indigo-900">
+                          Tutor proposed: {booking.rescheduleRequest.requestedDate} at {booking.rescheduleRequest.requestedTimeSlot}
+                        </p>
+                        {booking.rescheduleRequest.note && (
+                          <p className="mt-1 text-xs font-medium text-indigo-700">Note: {booking.rescheduleRequest.note}</p>
+                        )}
+                        <div className="mt-3 flex flex-col sm:flex-row gap-2">
+                          <button
+                            type="button"
+                            disabled={isLoading}
+                            onClick={() => handleStudentRescheduleDecision(booking, 'accept')}
+                            className="inline-flex justify-center items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60 transition-colors"
+                          >
+                            Accept
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isLoading}
+                            onClick={() => handleStudentRescheduleDecision(booking, 'decline')}
+                            className="inline-flex justify-center items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 disabled:opacity-60 transition-colors"
+                          >
+                            Decline
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {sessionResources.length > 0 && (
+                      <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <p className="text-xs font-black uppercase tracking-wider text-slate-500 mb-2">Shared Resources</p>
+                        <div className="space-y-2">
+                          {sessionResources.map((resource: any) => {
+                            const resourceRef = resolveSessionResourceRef(resource);
+                            const actionKey = `${booking.id}:${resourceRef}`;
+                            const isDownloadingResource = activeResourceDownloadKey === actionKey;
+
+                            return (
+                              <div
+                                key={resource.id || `${booking.id}-${resource.url}`}
+                                className="flex items-center justify-between gap-3 rounded-lg bg-white border border-slate-200 px-3 py-2"
+                              >
+                                <p className="text-xs font-semibold text-slate-700 truncate">{resource.name || 'Session Resource'}</p>
+                                <button
+                                  type="button"
+                                  disabled={!resourceRef || isDownloadingResource}
+                                  onClick={() => {
+                                    void Promise.resolve(handleDownloadSessionResource(booking, resource));
+                                  }}
+                                  className="text-xs font-bold text-indigo-600 hover:text-indigo-700 disabled:text-slate-400"
+                                  title={buildSessionResourceDownloadHref(booking, resource)}
+                                >
+                                  {isDownloadingResource ? 'Downloading...' : 'Download'}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
                     {!canStudentManageBeforeStart(booking) && booking.status !== 'cancelled' && booking.status !== 'completed' && (
                       <div className="mt-4">
                         <span className="text-[11px] font-bold text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 inline-block">
@@ -313,7 +413,7 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
                         disabled
                         className="inline-flex w-full justify-center items-center gap-1.5 px-4 py-2.5 rounded-lg text-sm font-bold bg-slate-200 text-slate-500 cursor-not-allowed"
                       >
-                        <Video className="w-4 h-4" /> Join Meeting
+                        <Video className="w-4 h-4" /> {hasValidMeetingLink && !isSessionJoinEnabled(booking) ? 'Session Ended' : 'Join Meeting'}
                       </button>
                     )}
 

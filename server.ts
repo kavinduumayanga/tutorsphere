@@ -43,7 +43,9 @@ import {
 import { loadSecurityConfig } from "./src/server/config/securityConfig.js";
 import { ALLOWED_TUTOR_SUBJECTS, normalizeTutorSubjects } from "./src/data/tutorSubjects.js";
 import {
+  blobExists,
   deleteFile as deleteBlobFile,
+  downloadBlobToBuffer,
   extractBlobNameFromUrl,
   getLargeUploadTuning,
   optimizeImageBuffer,
@@ -70,6 +72,7 @@ const AZURE_BLOB_CONTAINER_PROFILE_IMAGES = String(process.env.AZURE_BLOB_CONTAI
 const AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS = String(process.env.AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS || '').trim();
 const AZURE_BLOB_CONTAINER_VIDEOS = String(process.env.AZURE_BLOB_CONTAINER_VIDEOS || '').trim();
 const AZURE_BLOB_CONTAINER_RESOURCES = String(process.env.AZURE_BLOB_CONTAINER_RESOURCES || '').trim();
+const AZURE_BLOB_CONTAINER_SESSION_RESOURCES = String(process.env.AZURE_BLOB_CONTAINER_SESSION_RESOURCES || '').trim();
 const AZURE_BLOB_CONTAINER_RECORDED_LESSONS = String(process.env.AZURE_BLOB_CONTAINER_RECORDED_LESSONS || '').trim();
 const AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES = String(process.env.AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES || '').trim();
 
@@ -130,12 +133,14 @@ type UploadResponseFileMeta = {
 
 const toUploadedAssetResponse = (
   uploaded: { blobUrl: string; blobName: string },
-  file: UploadResponseFileMeta
+  file: UploadResponseFileMeta,
+  containerName?: string
 ) => ({
   path: uploaded.blobUrl,
   url: uploaded.blobUrl,
   blobUrl: uploaded.blobUrl,
   blobName: uploaded.blobName,
+  containerName: String(containerName || '').trim() || undefined,
   originalName: file.originalname,
   size: file.size,
   mimeType: file.mimetype,
@@ -397,6 +402,10 @@ const isResourceUpload = (file: Express.Multer.File): boolean => {
     'application/pdf',
     'application/msword',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'image/png',
+    'image/jpeg',
+    'image/jpg',
+    'image/webp',
     'application/vnd.ms-powerpoint',
     'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     'application/vnd.ms-excel',
@@ -418,6 +427,10 @@ const isResourceUpload = (file: Express.Multer.File): boolean => {
     '.pdf',
     '.doc',
     '.docx',
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.webp',
     '.ppt',
     '.pptx',
     '.xls',
@@ -466,7 +479,7 @@ const handleCourseThumbnailUpload = createSingleFileUploadMiddleware({
 const handleCourseResourceUpload = createSingleFileUploadMiddleware({
   fieldName: 'resource',
   maxFileSizeMB: 50,
-  invalidTypeMessage: 'Unsupported resource file type. Upload PDF, DOC/DOCX, PPT/PPTX, XLS/XLSX, TXT, CSV, ZIP, or RAR files.',
+  invalidTypeMessage: 'Unsupported resource file type. Upload PDF, image, DOC/DOCX, PPT/PPTX, XLS/XLSX, TXT, CSV, ZIP, or RAR files.',
   sizeExceededMessage: 'Module resource file must be less than 50MB.',
   genericErrorMessage: 'Course resource upload failed.',
   isAllowedFile: isResourceUpload,
@@ -475,7 +488,7 @@ const handleCourseResourceUpload = createSingleFileUploadMiddleware({
 const handleTutorResourceUpload = createSingleFileUploadMiddleware({
   fieldName: 'resource',
   maxFileSizeMB: 50,
-  invalidTypeMessage: 'Unsupported resource file type. Upload PDF, DOC/DOCX, PPT/PPTX, XLS/XLSX, TXT, CSV, ZIP, or RAR files.',
+  invalidTypeMessage: 'Unsupported resource file type. Upload PDF, image, DOC/DOCX, PPT/PPTX, XLS/XLSX, TXT, CSV, ZIP, or RAR files.',
   sizeExceededMessage: 'Resource file must be less than 50MB.',
   genericErrorMessage: 'Tutor resource upload failed.',
   isAllowedFile: isResourceUpload,
@@ -689,6 +702,22 @@ type CertificatePdfInput = {
   tutorLabel: string;
 };
 
+type BookingReceiptPdfInput = {
+  platformName: string;
+  bookingId: string;
+  studentName: string;
+  tutorName: string;
+  sessionTitle: string;
+  sessionDate: string;
+  sessionTime: string;
+  durationLabel: string;
+  hourlyRateLabel: string;
+  totalPaidLabel: string;
+  paymentStatusLabel: string;
+  transactionReference: string;
+  generatedDateLabel: string;
+};
+
 const buildBrandedCertificatePdf = (input: CertificatePdfInput): Buffer => {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -779,6 +808,125 @@ const buildBrandedCertificatePdf = (input: CertificatePdfInput): Buffer => {
   doc.setFontSize(10);
   doc.setTextColor(148, 163, 184);
   doc.text('Issued by TutorSphere Learning Platform', pageWidth / 2, pageHeight - 40, { align: 'center' });
+
+  return Buffer.from(doc.output('arraybuffer'));
+};
+
+const formatLkrCurrency = (value: number): string => {
+  const normalized = roundCurrency(Math.max(0, Number.isFinite(value) ? value : 0));
+
+  try {
+    return new Intl.NumberFormat('en-LK', {
+      style: 'currency',
+      currency: 'LKR',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(normalized);
+  } catch {
+    return `LKR ${normalized.toFixed(2)}`;
+  }
+};
+
+const toTitleCase = (value: string): string => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) {
+    return '';
+  }
+
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+};
+
+const buildBookingReceiptPdf = (input: BookingReceiptPdfInput): Buffer => {
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const cardLeft = 34;
+  const cardTop = 122;
+  const cardWidth = pageWidth - (cardLeft * 2);
+  const cardHeight = pageHeight - cardTop - 40;
+  const cardRight = cardLeft + cardWidth;
+
+  doc.setFillColor(248, 250, 252);
+  doc.rect(0, 0, pageWidth, pageHeight, 'F');
+
+  doc.setFillColor(15, 23, 42);
+  doc.rect(0, 0, pageWidth, 104, 'F');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(24);
+  doc.setTextColor(255, 255, 255);
+  doc.text(input.platformName, 40, 50);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(12);
+  doc.setTextColor(203, 213, 225);
+  doc.text('Booking Payment Receipt', 40, 74);
+  doc.text(`Generated: ${input.generatedDateLabel}`, pageWidth - 40, 50, { align: 'right' });
+  doc.text(`Receipt ID: ${input.bookingId}`, pageWidth - 40, 74, { align: 'right' });
+
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(226, 232, 240);
+  doc.setLineWidth(1);
+  doc.roundedRect(cardLeft, cardTop, cardWidth, cardHeight, 12, 12, 'FD');
+
+  let y = cardTop + 34;
+  const valueColumnX = cardLeft + 196;
+  const valueColumnWidth = cardRight - valueColumnX - 24;
+
+  const drawSectionHeader = (title: string) => {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(71, 85, 105);
+    doc.text(title.toUpperCase(), cardLeft + 20, y);
+
+    y += 10;
+    doc.setDrawColor(148, 163, 184);
+    doc.setLineWidth(0.8);
+    doc.line(cardLeft + 20, y, cardRight - 20, y);
+    y += 16;
+  };
+
+  const drawField = (label: string, value: string) => {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(100, 116, 139);
+    doc.text(label.toUpperCase(), cardLeft + 20, y);
+
+    const safeValue = String(value || 'N/A').trim() || 'N/A';
+    const valueLines = doc.splitTextToSize(safeValue, valueColumnWidth);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(12);
+    doc.setTextColor(15, 23, 42);
+    doc.text(valueLines, valueColumnX, y);
+
+    const rowHeight = Math.max(20, valueLines.length * 14);
+    y += rowHeight;
+
+    doc.setDrawColor(241, 245, 249);
+    doc.setLineWidth(0.6);
+    doc.line(cardLeft + 20, y + 2, cardRight - 20, y + 2);
+    y += 16;
+  };
+
+  drawSectionHeader('Session Details');
+  drawField('Student Name', input.studentName);
+  drawField('Tutor Name', input.tutorName);
+  drawField('Session Title', input.sessionTitle);
+  drawField('Date', input.sessionDate);
+  drawField('Time', input.sessionTime);
+  drawField('Duration', input.durationLabel);
+  drawField('Hourly Rate', input.hourlyRateLabel);
+
+  drawSectionHeader('Payment Details');
+  drawField('Total Paid Amount', input.totalPaidLabel);
+  drawField('Payment Status', input.paymentStatusLabel);
+  drawField('Transaction Reference ID', input.transactionReference);
+  drawField('Generated Date', input.generatedDateLabel);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.setTextColor(100, 116, 139);
+  doc.text('This is a system-generated receipt from TutorSphere.', pageWidth / 2, pageHeight - 16, { align: 'center' });
 
   return Buffer.from(doc.output('arraybuffer'));
 };
@@ -1825,7 +1973,7 @@ async function startServer() {
         optimizedThumbnail.mimetype
       );
 
-      res.json(toUploadedAssetResponse(uploaded, optimizedThumbnail));
+      res.json(toUploadedAssetResponse(uploaded, optimizedThumbnail, containerName));
     } catch (error) {
       console.error('Course thumbnail upload error:', error);
       res.status(500).json({ error: 'Failed to upload course thumbnail.' });
@@ -1851,7 +1999,7 @@ async function startServer() {
         req.file.mimetype
       );
 
-      res.json(toUploadedAssetResponse(uploaded, req.file));
+      res.json(toUploadedAssetResponse(uploaded, req.file, containerName));
     } catch (error) {
       console.error('Course resource upload error:', error);
       res.status(500).json({ error: 'Failed to upload course resource file.' });
@@ -1875,10 +2023,57 @@ async function startServer() {
         req.file.mimetype
       );
 
-      res.json(toUploadedAssetResponse(uploaded, req.file));
+      res.json(toUploadedAssetResponse(uploaded, req.file, containerName));
     } catch (error) {
       console.error('Tutor resource upload error:', error);
       res.status(500).json({ error: 'Failed to upload tutor resource file.' });
+    }
+  });
+
+  app.post('/api/uploads/session-resource', requireTutorSession, handleTutorResourceUpload, async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No resource file was uploaded.' });
+      }
+
+      const containerName = getRequiredContainerName(
+        AZURE_BLOB_CONTAINER_SESSION_RESOURCES,
+        'AZURE_BLOB_CONTAINER_SESSION_RESOURCES'
+      );
+      console.info('Session resource upload started', {
+        containerName,
+        originalName: req.file.originalname,
+        mimeType: req.file.mimetype,
+        size: req.file.size,
+      });
+
+      const uploaded = await uploadSmallFile(
+        req.file.buffer,
+        req.file.originalname || 'session-resource',
+        containerName,
+        req.file.mimetype
+      );
+
+      const uploadedBlobExists = await blobExists(uploaded.blobName, containerName);
+      if (!uploadedBlobExists) {
+        console.error('Session resource upload verification failed', {
+          containerName,
+          blobName: uploaded.blobName,
+          blobUrl: uploaded.blobUrl,
+        });
+        return res.status(500).json({ error: 'Uploaded session resource could not be verified in Azure Blob Storage.' });
+      }
+
+      console.info('Session resource upload success', {
+        containerName,
+        blobName: uploaded.blobName,
+        blobUrl: uploaded.blobUrl,
+      });
+
+      res.json(toUploadedAssetResponse(uploaded, req.file, containerName));
+    } catch (error) {
+      console.error('Session resource upload error:', error);
+      res.status(500).json({ error: 'Failed to upload booking session resource file.' });
     }
   });
 
@@ -1899,7 +2094,7 @@ async function startServer() {
         req.file.mimetype
       );
 
-      res.json(toUploadedAssetResponse(uploaded, req.file));
+      res.json(toUploadedAssetResponse(uploaded, req.file, containerName));
     } catch (error) {
       console.error('Tutor certificate upload error:', error);
       res.status(500).json({ error: 'Failed to upload tutor certificate file.' });
@@ -4562,10 +4757,11 @@ async function startServer() {
     return 'pending';
   };
 
-  const normalizeBookingPaymentStatus = (value: unknown): 'pending' | 'paid' | 'failed' => {
+  const normalizeBookingPaymentStatus = (value: unknown): 'pending' | 'paid' | 'failed' | 'refunded' => {
     const normalized = String(value || '').trim().toLowerCase();
     if (normalized === 'paid') return 'paid';
     if (normalized === 'failed') return 'failed';
+    if (normalized === 'refunded') return 'refunded';
     return 'pending';
   };
 
@@ -4578,16 +4774,356 @@ async function startServer() {
     }
   };
 
+  const parseBookingTimeTokenToMinutes = (value: unknown): number | null => {
+    const token = String(value || '').trim();
+    if (!token) {
+      return null;
+    }
+
+    const twelveHourMatch = token.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (twelveHourMatch) {
+      let hours = Number(twelveHourMatch[1]);
+      const minutes = Number(twelveHourMatch[2]);
+      const meridiem = String(twelveHourMatch[3] || '').toUpperCase();
+
+      if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours < 1 || hours > 12 || minutes < 0 || minutes > 59) {
+        return null;
+      }
+
+      if (hours === 12) {
+        hours = meridiem === 'AM' ? 0 : 12;
+      } else if (meridiem === 'PM') {
+        hours += 12;
+      }
+
+      return (hours * 60) + minutes;
+    }
+
+    const twentyFourHourMatch = token.match(/^(\d{1,2}):(\d{2})$/);
+    if (!twentyFourHourMatch) {
+      return null;
+    }
+
+    const hours = Number(twentyFourHourMatch[1]);
+    const minutes = Number(twentyFourHourMatch[2]);
+    if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+      return null;
+    }
+
+    return (hours * 60) + minutes;
+  };
+
+  const parseBookingTimeRange = (value: unknown): { startMinutes: number; endMinutes: number } | null => {
+    const raw = String(value || '').trim();
+    if (!raw) {
+      return null;
+    }
+
+    const tokens = raw
+      .split('-')
+      .map((token) => token.trim())
+      .filter(Boolean);
+
+    if (tokens.length !== 2) {
+      return null;
+    }
+
+    const startMinutes = parseBookingTimeTokenToMinutes(tokens[0]);
+    const endMinutes = parseBookingTimeTokenToMinutes(tokens[1]);
+    if (startMinutes === null || endMinutes === null || endMinutes <= startMinutes) {
+      return null;
+    }
+
+    return { startMinutes, endMinutes };
+  };
+
+  const parseSessionStartDateTime = (dateValue: unknown, timeSlotValue: unknown): Date | null => {
+    const rawDate = String(dateValue || '').trim();
+    if (!rawDate) {
+      return null;
+    }
+
+    const date = new Date(rawDate);
+    if (Number.isNaN(date.getTime())) {
+      return null;
+    }
+
+    const timeRange = parseBookingTimeRange(timeSlotValue);
+    if (!timeRange) {
+      date.setHours(0, 0, 0, 0);
+      return date;
+    }
+
+    const hours = Math.floor(timeRange.startMinutes / 60);
+    const minutes = timeRange.startMinutes % 60;
+    date.setHours(hours, minutes, 0, 0);
+    return date;
+  };
+
+  const bookingTimeRangesOverlap = (
+    a: { startMinutes: number; endMinutes: number },
+    b: { startMinutes: number; endMinutes: number }
+  ): boolean => {
+    return a.startMinutes < b.endMinutes && b.startMinutes < a.endMinutes;
+  };
+
+  const resolveSessionRoleForRequest = async (
+    req: express.Request,
+    context: SessionAuthContext
+  ): Promise<string> => {
+    const roleFromSession = String(context.role || '').trim().toLowerCase();
+    if (roleFromSession === 'student' || roleFromSession === 'tutor' || roleFromSession === 'admin') {
+      return roleFromSession;
+    }
+
+    if (!context.userId) {
+      return '';
+    }
+
+    try {
+      const user = await User.findOne({ id: context.userId }, { role: 1 });
+      const resolvedRole = String(user?.role || '').trim().toLowerCase();
+      if ((resolvedRole === 'student' || resolvedRole === 'tutor' || resolvedRole === 'admin') && req.session) {
+        (req.session as any).role = resolvedRole;
+      }
+      return resolvedRole;
+    } catch (error) {
+      console.warn('Session role hydration warning:', error);
+      return roleFromSession;
+    }
+  };
+
+  const hasTutorBookingConflict = async (input: {
+    tutorId: string;
+    date: string;
+    slotId?: string;
+    timeSlot?: string;
+    excludeBookingId?: string;
+  }): Promise<boolean> => {
+    const tutorId = String(input.tutorId || '').trim();
+    const date = String(input.date || '').trim();
+    const slotId = String(input.slotId || '').trim();
+    const timeSlot = String(input.timeSlot || '').trim();
+    const excludeBookingId = String(input.excludeBookingId || '').trim();
+
+    if (!tutorId || !date) {
+      return false;
+    }
+
+    const baseQuery: Record<string, any> = {
+      tutorId,
+      date,
+      status: { $in: ['pending', 'confirmed'] },
+      paymentStatus: { $nin: ['failed', 'refunded'] },
+    };
+
+    if (excludeBookingId) {
+      baseQuery.id = { $ne: excludeBookingId };
+    }
+
+    if (slotId) {
+      const slotConflict = await Booking.findOne({
+        ...baseQuery,
+        slotId,
+      });
+
+      if (slotConflict) {
+        return true;
+      }
+    }
+
+    const targetRange = parseBookingTimeRange(timeSlot);
+    if (!targetRange) {
+      return false;
+    }
+
+    const existingBookings = await Booking.find(baseQuery, { id: 1, timeSlot: 1 });
+    for (const booking of existingBookings) {
+      if (excludeBookingId && String((booking as any).id || '').trim() === excludeBookingId) {
+        continue;
+      }
+
+      const existingRange = parseBookingTimeRange((booking as any).timeSlot);
+      if (!existingRange) {
+        continue;
+      }
+
+      if (bookingTimeRangesOverlap(targetRange, existingRange)) {
+        return true;
+      }
+    }
+
+    return false;
+  };
+
+  const getBookingSessionResourceContainerCandidates = (resource: unknown): string[] => {
+    const explicitContainerName = String((resource as any)?.containerName || '').trim();
+
+    const candidates = [
+      explicitContainerName,
+      String(AZURE_BLOB_CONTAINER_SESSION_RESOURCES || '').trim(),
+      String(AZURE_BLOB_CONTAINER_RESOURCES || '').trim(),
+    ].filter(Boolean);
+
+    return Array.from(new Set(candidates));
+  };
+
+  const resolveBookingSessionResourceLocation = async (
+    resource: unknown
+  ): Promise<{ url: string; blobName?: string; containerName?: string; blobExistsInAzure: boolean } | null> => {
+    const resourceUrl = String((resource as any)?.url || '').trim();
+    const explicitBlobName = String((resource as any)?.blobName || '').trim();
+    const containerCandidates = getBookingSessionResourceContainerCandidates(resource);
+
+    for (const containerName of containerCandidates) {
+      const inferredBlobName = explicitBlobName || extractBlobNameFromUrl(resourceUrl, containerName) || '';
+      if (!inferredBlobName) {
+        continue;
+      }
+
+      try {
+        if (await blobExists(inferredBlobName, containerName)) {
+          return {
+            url: resourceUrl,
+            blobName: inferredBlobName,
+            containerName,
+            blobExistsInAzure: true,
+          };
+        }
+      } catch (error) {
+        console.warn('Session resource blob URL resolution warning:', error);
+      }
+    }
+
+    if (isHttpUrl(resourceUrl)) {
+      for (const containerName of containerCandidates) {
+        const inferredBlobName = explicitBlobName || extractBlobNameFromUrl(resourceUrl, containerName) || '';
+        if (inferredBlobName) {
+          return {
+            url: resourceUrl,
+            blobName: inferredBlobName,
+            containerName,
+            blobExistsInAzure: false,
+          };
+        }
+      }
+
+      return {
+        url: resourceUrl,
+        blobName: explicitBlobName || undefined,
+        containerName: containerCandidates[0] || undefined,
+        blobExistsInAzure: false,
+      };
+    }
+
+    return null;
+  };
+
+  const normalizeBookingSessionResources = async (value: unknown): Promise<Array<Record<string, unknown>>> => {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    const normalized = await Promise.all(
+      value.map(async (resource) => {
+        const name = String((resource as any)?.name || '').trim();
+        const url = String((resource as any)?.url || '').trim();
+        const normalizedId = String((resource as any)?.id || '').trim() || createEntityId();
+        const blobName = String((resource as any)?.blobName || '').trim();
+        const containerName = String((resource as any)?.containerName || '').trim();
+        const mimeType = String((resource as any)?.mimeType || '').trim();
+        const uploadedByTutorId = String((resource as any)?.uploadedByTutorId || '').trim();
+        const uploadedAt = String((resource as any)?.uploadedAt || '').trim();
+        const parsedSize = Number((resource as any)?.size);
+
+        const resolvedLocation = await resolveBookingSessionResourceLocation({
+          url,
+          blobName,
+          containerName,
+        });
+
+        const effectiveUrl = resolvedLocation?.url || url;
+
+        if (!name || !effectiveUrl) {
+          return null;
+        }
+
+        const normalizedBlobName = resolvedLocation?.blobName || blobName || undefined;
+        const normalizedContainerName = resolvedLocation?.containerName || containerName || undefined;
+        const blobExistsInAzure = Boolean(resolvedLocation?.blobExistsInAzure);
+
+        if (normalizedBlobName && normalizedContainerName && !blobExistsInAzure) {
+          console.warn('Session resource normalization detected missing blob in Azure', {
+            bookingResourceId: normalizedId,
+            containerName: normalizedContainerName,
+            blobName: normalizedBlobName,
+            url: effectiveUrl,
+          });
+        }
+
+        return {
+          id: normalizedId,
+          name,
+          url: effectiveUrl,
+          blobName: normalizedBlobName,
+          containerName: normalizedContainerName,
+          mimeType: mimeType || undefined,
+          size: Number.isFinite(parsedSize) && parsedSize >= 0 ? parsedSize : undefined,
+          uploadedByTutorId: uploadedByTutorId || undefined,
+          uploadedAt: uploadedAt || undefined,
+        };
+      })
+    );
+
+    return normalized.filter(Boolean) as Array<Record<string, unknown>>;
+  };
+
+  const syncBookingSlotLockState = async (
+    previousBooking: any,
+    nextBooking: any,
+    reason: string
+  ) => {
+    const wasSlotLocked =
+      normalizeBookingStatus(previousBooking?.status) === 'confirmed' &&
+      normalizeBookingPaymentStatus(previousBooking?.paymentStatus) === 'paid';
+    const isSlotLocked =
+      normalizeBookingStatus(nextBooking?.status) === 'confirmed' &&
+      normalizeBookingPaymentStatus(nextBooking?.paymentStatus) === 'paid';
+
+    try {
+      if (
+        wasSlotLocked &&
+        (!isSlotLocked || previousBooking?.slotId !== nextBooking?.slotId || previousBooking?.tutorId !== nextBooking?.tutorId)
+      ) {
+        await Tutor.updateOne(
+          { id: previousBooking?.tutorId, 'availability.id': previousBooking?.slotId },
+          { $set: { 'availability.$.isBooked': false } }
+        );
+      }
+
+      if (isSlotLocked) {
+        await Tutor.updateOne(
+          { id: nextBooking?.tutorId, 'availability.id': nextBooking?.slotId },
+          { $set: { 'availability.$.isBooked': true } }
+        );
+      }
+    } catch (availabilitySyncError) {
+      console.warn(`Booking slot sync warning (${reason}):`, availabilitySyncError);
+    }
+  };
+
   // Booking APIs
   app.get("/api/bookings", requireAnySession, async (req, res) => {
     try {
       const sessionContext = getSessionAuthContext(req);
-      if (sessionContext.role !== 'student' && sessionContext.role !== 'tutor') {
+      const resolvedRole = await resolveSessionRoleForRequest(req, sessionContext);
+
+      if (resolvedRole !== 'student' && resolvedRole !== 'tutor') {
         return res.status(403).json({ error: 'Unsupported account role for booking access.' });
       }
 
       const bookings = await Booking.find(
-        sessionContext.role === 'tutor'
+        resolvedRole === 'tutor'
           ? { tutorId: sessionContext.userId }
           : { studentId: sessionContext.userId }
       );
@@ -4598,9 +5134,303 @@ async function startServer() {
     }
   });
 
-  app.post("/api/bookings", requireStudentSession, async (req, res) => {
+  app.get("/api/bookings/:id/resources/:resourceRef/download", requireAnySession, async (req, res) => {
     try {
       const sessionContext = getSessionAuthContext(req);
+      const resolvedRole = await resolveSessionRoleForRequest(req, sessionContext);
+      const requestedBookingId = String(req.params.id || '').trim();
+      const requestedResourceRef = decodeURIComponent(String(req.params.resourceRef || '').trim());
+
+      if (!requestedBookingId || !requestedResourceRef) {
+        return res.status(400).json({ error: 'Booking id and resource reference are required.' });
+      }
+
+      const canMatchObjectId = /^[a-fA-F0-9]{24}$/.test(requestedBookingId);
+      const booking = await Booking.findOne(
+        canMatchObjectId
+          ? { $or: [{ id: requestedBookingId }, { _id: requestedBookingId }] }
+          : { id: requestedBookingId }
+      );
+
+      if (!booking) {
+        return res.status(404).json({ error: 'Booking not found.' });
+      }
+
+      const isOwner = booking.studentId === sessionContext.userId || booking.tutorId === sessionContext.userId;
+      const isAdmin = resolvedRole === 'admin';
+      if (!isOwner && !isAdmin) {
+        return res.status(403).json({ error: 'You can only access resources for your own bookings.' });
+      }
+
+      const sessionResources = Array.isArray((booking as any).sessionResources)
+        ? (booking as any).sessionResources
+        : [];
+
+      const matchedResource = sessionResources.find((resource: any) => {
+        const id = String(resource?.id || '').trim();
+        const blobName = String(resource?.blobName || '').trim();
+        const url = String(resource?.url || '').trim();
+
+        return (
+          (id && id === requestedResourceRef) ||
+          (blobName && blobName === requestedResourceRef) ||
+          (url && url === requestedResourceRef)
+        );
+      });
+
+      if (!matchedResource) {
+        return res.status(404).json({ error: 'Session resource not found.' });
+      }
+
+      const resolvedLocation = await resolveBookingSessionResourceLocation(matchedResource);
+      if (!resolvedLocation || !resolvedLocation.blobName || !resolvedLocation.containerName) {
+        return res.status(404).json({ error: 'Session resource is unavailable for download.' });
+      }
+
+      console.info('Booking session resource download lookup', {
+        bookingId: (booking as any).id,
+        resourceRef: requestedResourceRef,
+        resolvedContainerName: resolvedLocation.containerName,
+        resolvedBlobName: resolvedLocation.blobName,
+        blobExistsInAzure: resolvedLocation.blobExistsInAzure,
+      });
+
+      if (!resolvedLocation.blobExistsInAzure) {
+        return res.status(404).json({ error: 'Session resource blob is missing in Azure Blob Storage.' });
+      }
+
+      const downloaded = await downloadBlobToBuffer(resolvedLocation.blobName, resolvedLocation.containerName);
+      const fileNameRaw = String((matchedResource as any)?.name || 'session-resource').trim() || 'session-resource';
+      const safeFileName = fileNameRaw.replace(/[\r\n]/g, '').replace(/"/g, '');
+
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Content-Type', downloaded.mimeType || String((matchedResource as any)?.mimeType || '').trim() || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeFileName}"`);
+      res.setHeader('Content-Length', String(downloaded.buffer.length));
+      return res.send(downloaded.buffer);
+    } catch (error) {
+      console.error('Download booking session resource error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.delete("/api/bookings/:id/resources/:resourceRef", requireTutorSession, async (req, res) => {
+    try {
+      const sessionContext = getSessionAuthContext(req);
+      const requestedBookingId = String(req.params.id || '').trim();
+      const requestedResourceRef = decodeURIComponent(String(req.params.resourceRef || '').trim());
+
+      if (!requestedBookingId || !requestedResourceRef) {
+        return res.status(400).json({ error: 'Booking id and resource reference are required.' });
+      }
+
+      const canMatchObjectId = /^[a-fA-F0-9]{24}$/.test(requestedBookingId);
+      const booking = await Booking.findOne(
+        canMatchObjectId
+          ? { $or: [{ id: requestedBookingId }, { _id: requestedBookingId }] }
+          : { id: requestedBookingId }
+      );
+
+      if (!booking) {
+        return res.status(404).json({ error: 'Booking not found.' });
+      }
+
+      if (booking.tutorId !== sessionContext.userId) {
+        return res.status(403).json({ error: 'You can only remove resources from your own sessions.' });
+      }
+
+      const existingResources = Array.isArray((booking as any).sessionResources)
+        ? (booking as any).sessionResources
+        : [];
+
+      const matchedResource = existingResources.find((resource: any) => {
+        const id = String(resource?.id || '').trim();
+        const blobName = String(resource?.blobName || '').trim();
+        const url = String(resource?.url || '').trim();
+
+        return (
+          (id && id === requestedResourceRef) ||
+          (blobName && blobName === requestedResourceRef) ||
+          (url && url === requestedResourceRef)
+        );
+      });
+
+      if (!matchedResource) {
+        return res.status(404).json({ error: 'Session resource not found.' });
+      }
+
+      const resolvedLocation = await resolveBookingSessionResourceLocation(matchedResource);
+      console.info('Booking session resource delete requested', {
+        bookingId: (booking as any).id,
+        tutorId: sessionContext.userId,
+        resourceRef: requestedResourceRef,
+        resolvedContainerName: resolvedLocation?.containerName,
+        resolvedBlobName: resolvedLocation?.blobName,
+        blobExistsInAzure: resolvedLocation?.blobExistsInAzure,
+      });
+
+      if (resolvedLocation?.blobName && resolvedLocation?.containerName && resolvedLocation.blobExistsInAzure) {
+        await deleteBlobFile(resolvedLocation.blobName, resolvedLocation.containerName);
+      }
+
+      const filteredResources = existingResources.filter((resource: any) => {
+        const id = String(resource?.id || '').trim();
+        const blobName = String(resource?.blobName || '').trim();
+        const url = String(resource?.url || '').trim();
+
+        return !(
+          (id && id === requestedResourceRef) ||
+          (blobName && blobName === requestedResourceRef) ||
+          (url && url === requestedResourceRef)
+        );
+      });
+
+      const updatedBooking = await Booking.findOneAndUpdate(
+        { id: String((booking as any).id || '').trim() },
+        { $set: { sessionResources: filteredResources } },
+        { new: true }
+      );
+
+      if (!updatedBooking) {
+        return res.status(404).json({ error: 'Booking not found.' });
+      }
+
+      console.info('Booking session resource delete saved', {
+        bookingId: updatedBooking.id,
+        resourceCount: Array.isArray((updatedBooking as any).sessionResources)
+          ? (updatedBooking as any).sessionResources.length
+          : 0,
+      });
+
+      return res.json(updatedBooking);
+    } catch (error) {
+      console.error('Delete booking session resource error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.get("/api/bookings/:id/receipt", requireAnySession, async (req, res) => {
+    try {
+      const sessionContext = getSessionAuthContext(req);
+      const resolvedRole = await resolveSessionRoleForRequest(req, sessionContext);
+      const requestedBookingId = String(req.params.id || '').trim();
+
+      if (!requestedBookingId) {
+        return res.status(400).json({ error: 'Booking id is required.' });
+      }
+
+      const canMatchObjectId = /^[a-fA-F0-9]{24}$/.test(requestedBookingId);
+      const booking = await Booking.findOne(
+        canMatchObjectId
+          ? { $or: [{ id: requestedBookingId }, { _id: requestedBookingId }] }
+          : { id: requestedBookingId }
+      );
+
+      if (!booking) {
+        return res.status(404).json({ error: 'Booking not found.' });
+      }
+
+      const isOwner = booking.studentId === sessionContext.userId || booking.tutorId === sessionContext.userId;
+      const isAdmin = resolvedRole === 'admin';
+      if (!isOwner && !isAdmin) {
+        return res.status(403).json({ error: 'You can only download receipts for your own bookings.' });
+      }
+
+      const paymentStatus = normalizeBookingPaymentStatus((booking as any).paymentStatus);
+      if (paymentStatus !== 'paid' && paymentStatus !== 'refunded') {
+        return res.status(400).json({ error: 'A receipt is available only for paid bookings.' });
+      }
+
+      const [studentUser, tutorUser, tutorProfile] = await Promise.all([
+        User.findOne({ id: booking.studentId }, { firstName: 1, lastName: 1 }),
+        User.findOne({ id: booking.tutorId }, { firstName: 1, lastName: 1 }),
+        Tutor.findOne({ id: booking.tutorId }, { pricePerHour: 1 }),
+      ]);
+
+      const studentName =
+        toNotificationText((booking as any).studentName) ||
+        getDisplayNameFromParts(studentUser?.firstName, studentUser?.lastName, 'Student');
+      const tutorName = getDisplayNameFromParts(tutorUser?.firstName, tutorUser?.lastName, 'Tutor');
+      const sessionTitle = `${toNotificationText((booking as any).subject, 'Tutoring')} Session`;
+      const sessionDate = toNotificationText((booking as any).date, 'N/A');
+      const sessionTime = toNotificationText((booking as any).timeSlot, 'N/A');
+
+      const parsedStoredDuration = Number((booking as any).sessionDurationHours);
+      const parsedRange = parseBookingTimeRange((booking as any).timeSlot);
+      const durationHours =
+        Number.isFinite(parsedStoredDuration) && parsedStoredDuration > 0
+          ? roundCurrency(parsedStoredDuration)
+          : parsedRange
+            ? roundCurrency((parsedRange.endMinutes - parsedRange.startMinutes) / 60)
+            : 0;
+
+      const durationLabel = durationHours > 0 ? `${durationHours.toFixed(2)} hour(s)` : 'N/A';
+
+      const parsedSessionAmount = Number((booking as any).sessionAmount);
+      const parsedTutorRate = Number((tutorProfile as any)?.pricePerHour);
+      const totalPaidAmount =
+        Number.isFinite(parsedSessionAmount) && parsedSessionAmount >= 0
+          ? roundCurrency(parsedSessionAmount)
+          : Number.isFinite(parsedTutorRate) && parsedTutorRate >= 0 && durationHours > 0
+            ? roundCurrency(parsedTutorRate * durationHours)
+            : 0;
+
+      const hourlyRateAmount =
+        Number.isFinite(parsedTutorRate) && parsedTutorRate >= 0
+          ? roundCurrency(parsedTutorRate)
+          : totalPaidAmount > 0 && durationHours > 0
+            ? roundCurrency(totalPaidAmount / durationHours)
+            : 0;
+
+      const receiptBookingId = toNotificationText((booking as any).id, requestedBookingId);
+      const receiptTransactionReference = toNotificationText((booking as any).paymentReference, receiptBookingId);
+      const generatedDateLabel = new Date().toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      const pdfBuffer = buildBookingReceiptPdf({
+        platformName: String(process.env.APP_NAME || 'TutorSphere').trim() || 'TutorSphere',
+        bookingId: receiptBookingId,
+        studentName,
+        tutorName,
+        sessionTitle,
+        sessionDate,
+        sessionTime,
+        durationLabel,
+        hourlyRateLabel: durationHours > 0 || hourlyRateAmount > 0 ? formatLkrCurrency(hourlyRateAmount) : 'N/A',
+        totalPaidLabel: formatLkrCurrency(totalPaidAmount),
+        paymentStatusLabel: toTitleCase(paymentStatus),
+        transactionReference: receiptTransactionReference,
+        generatedDateLabel,
+      });
+
+      if (!pdfBuffer || pdfBuffer.length < 8 || pdfBuffer.subarray(0, 5).toString() !== '%PDF-') {
+        throw new Error('Generated receipt content is not a valid PDF buffer.');
+      }
+
+      const safeBookingId = sanitizeFileSegment(receiptBookingId) || 'booking';
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="booking-receipt-${safeBookingId}.pdf"`);
+      res.setHeader('Content-Length', String(pdfBuffer.length));
+      return res.send(pdfBuffer);
+    } catch (error) {
+      console.error('Download booking receipt error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.post("/api/bookings", requireAnySession, async (req, res) => {
+    try {
+      const sessionContext = getSessionAuthContext(req);
+      const resolvedRole = await resolveSessionRoleForRequest(req, sessionContext);
+      if (resolvedRole !== 'student') {
+        return res.status(403).json({ error: 'Only student accounts can perform this action.' });
+      }
+
       const bookingData = req.body || {};
       const requestedStudentId = String(bookingData.studentId || '').trim();
       const studentId = requestedStudentId || sessionContext.userId;
@@ -4615,8 +5445,16 @@ async function startServer() {
       const paymentFailureReason = String(bookingData.paymentFailureReason || '').trim();
       const paidAt = String(bookingData.paidAt || '').trim();
       const meetingLink = String(bookingData.meetingLink || '').trim();
-      const hiddenForTutor = Boolean(bookingData.hiddenForTutor);
-      const hiddenForStudent = Boolean(bookingData.hiddenForStudent);
+      const parsedSessionDurationHours = Number(bookingData.sessionDurationHours);
+      const sessionDurationHours =
+        Number.isFinite(parsedSessionDurationHours) && parsedSessionDurationHours > 0
+          ? Math.round(parsedSessionDurationHours * 100) / 100
+          : undefined;
+      const parsedSessionAmount = Number(bookingData.sessionAmount);
+      const sessionAmount =
+        Number.isFinite(parsedSessionAmount) && parsedSessionAmount >= 0
+          ? Math.round(parsedSessionAmount * 100) / 100
+          : undefined;
       let status = normalizeBookingStatus(bookingData.status);
 
       if (!requireSessionUserMatch(sessionContext, res, studentId, 'You can only create bookings for your own account.')) {
@@ -4635,6 +5473,10 @@ async function startServer() {
         return res.status(400).json({ error: 'Payment reference is required for paid bookings.' });
       }
 
+      if (paymentStatus === 'refunded') {
+        return res.status(400).json({ error: 'Bookings cannot start with refunded payment status.' });
+      }
+
       if (paymentStatus !== 'paid' && status === 'completed') {
         status = 'pending';
       }
@@ -4651,15 +5493,14 @@ async function startServer() {
         status = 'confirmed';
       }
 
-      const conflictingBooking = await Booking.findOne({
+      const hasConflict = await hasTutorBookingConflict({
         tutorId,
-        slotId,
         date,
-        status: { $in: ['pending', 'confirmed'] },
-        paymentStatus: { $ne: 'failed' },
+        slotId,
+        timeSlot,
       });
 
-      if (conflictingBooking) {
+      if (hasConflict) {
         return res.status(409).json({ error: 'This time slot is already booked.' });
       }
 
@@ -4688,21 +5529,15 @@ async function startServer() {
         paymentReference: paymentStatus === 'paid' ? paymentReference : undefined,
         paymentFailureReason: paymentStatus === 'failed' ? (paymentFailureReason || 'Payment failed before confirmation.') : undefined,
         paidAt: paymentStatus === 'paid' ? (paidAt || new Date().toISOString()) : undefined,
+        sessionDurationHours,
+        sessionAmount,
+        sessionResources: [],
         hiddenForTutor: false,
         hiddenForStudent: false,
       });
       await booking.save();
 
-      if (booking.status === 'confirmed' && booking.paymentStatus === 'paid') {
-        try {
-          await Tutor.updateOne(
-            { id: booking.tutorId, "availability.id": booking.slotId },
-            { $set: { "availability.$.isBooked": true } }
-          );
-        } catch (availabilitySyncError) {
-          console.warn('Booking slot sync warning (create):', availabilitySyncError);
-        }
-      }
+      await syncBookingSlotLockState({}, booking, 'create');
 
       const tutorUser = await User.findOne({ id: tutorId }, { firstName: 1, lastName: 1 });
       const tutorDisplayName = getDisplayNameFromParts(tutorUser?.firstName, tutorUser?.lastName, 'Tutor');
@@ -4777,13 +5612,14 @@ async function startServer() {
   app.put("/api/bookings/:id", requireAnySession, async (req, res) => {
     try {
       const sessionContext = getSessionAuthContext(req);
+      const resolvedRole = await resolveSessionRoleForRequest(req, sessionContext);
       const existingBooking = await Booking.findOne({ id: req.params.id });
       if (!existingBooking) {
         return res.status(404).json({ error: "Booking not found" });
       }
 
-      const isTutorActor = sessionContext.role === 'tutor' && existingBooking.tutorId === sessionContext.userId;
-      const isStudentActor = sessionContext.role === 'student' && existingBooking.studentId === sessionContext.userId;
+      const isTutorActor = resolvedRole === 'tutor' && existingBooking.tutorId === sessionContext.userId;
+      const isStudentActor = resolvedRole === 'student' && existingBooking.studentId === sessionContext.userId;
 
       if (!isTutorActor && !isStudentActor) {
         return res.status(403).json({ error: 'You can only update your own bookings.' });
@@ -4797,18 +5633,304 @@ async function startServer() {
         return res.status(400).json({ error: 'Booking tutor cannot be changed.' });
       }
 
+      const incomingRescheduleDecision = String(req.body?.rescheduleDecision || '').trim().toLowerCase();
+      const incomingRescheduleRequest = req.body?.rescheduleRequest;
+
       if (isStudentActor) {
         const incomingKeys = Object.keys(req.body || {});
-        const allowedStudentKeys = new Set(['status', 'hiddenForStudent']);
+        const allowedStudentKeys = new Set(['status', 'hiddenForStudent', 'rescheduleDecision']);
         const disallowedKeys = incomingKeys.filter((key) => !allowedStudentKeys.has(key));
 
         if (disallowedKeys.length > 0) {
-          return res.status(403).json({ error: 'Students can only cancel or hide their own bookings.' });
+          return res.status(403).json({ error: 'Students can only cancel, hide, or respond to reschedule requests.' });
         }
 
         if (req.body?.status !== undefined && normalizeBookingStatus(req.body.status) !== 'cancelled') {
           return res.status(403).json({ error: 'Students can only change booking status to cancelled.' });
         }
+
+        if (incomingRescheduleDecision && incomingRescheduleDecision !== 'accept' && incomingRescheduleDecision !== 'decline') {
+          return res.status(400).json({ error: 'rescheduleDecision must be either accept or decline.' });
+        }
+      }
+
+      if (isTutorActor && incomingRescheduleDecision) {
+        return res.status(403).json({ error: 'Tutors cannot respond to student reschedule decisions.' });
+      }
+
+      if (incomingRescheduleRequest !== undefined) {
+        if (!isTutorActor) {
+          return res.status(403).json({ error: 'Only tutors can request a session reschedule.' });
+        }
+
+        if (normalizeBookingStatus(existingBooking.status) === 'cancelled' || normalizeBookingStatus(existingBooking.status) === 'completed') {
+          return res.status(400).json({ error: 'Only active sessions can be rescheduled.' });
+        }
+
+        if (normalizeBookingPaymentStatus(existingBooking.paymentStatus) !== 'paid') {
+          return res.status(400).json({ error: 'Only paid sessions can be rescheduled.' });
+        }
+
+        const requestedDate = String(incomingRescheduleRequest?.requestedDate || '').trim();
+        const requestedTimeSlot = String(incomingRescheduleRequest?.requestedTimeSlot || '').trim();
+        const requestedSlotId = String(incomingRescheduleRequest?.requestedSlotId || existingBooking.slotId || '').trim();
+        const requestedNote = String(incomingRescheduleRequest?.note || '').trim();
+
+        if (!requestedDate || !requestedTimeSlot || !requestedSlotId) {
+          return res.status(400).json({ error: 'requestedDate, requestedTimeSlot, and requestedSlotId are required.' });
+        }
+
+        const requestedStart = parseSessionStartDateTime(requestedDate, requestedTimeSlot);
+        if (requestedStart && requestedStart.getTime() <= Date.now()) {
+          return res.status(400).json({ error: 'Rescheduled session must be in the future.' });
+        }
+
+        const hasConflict = await hasTutorBookingConflict({
+          tutorId: existingBooking.tutorId,
+          date: requestedDate,
+          slotId: requestedSlotId,
+          timeSlot: requestedTimeSlot,
+          excludeBookingId: existingBooking.id,
+        });
+
+        if (hasConflict) {
+          return res.status(409).json({ error: 'The requested reschedule time conflicts with another booking.' });
+        }
+
+        const requestPayload = {
+          requestedDate,
+          requestedTimeSlot,
+          requestedSlotId,
+          note: requestedNote || undefined,
+          requestedAt: new Date().toISOString(),
+          requestedByTutorId: sessionContext.userId,
+          status: 'pending',
+        };
+
+        const booking = await Booking.findOneAndUpdate(
+          { id: req.params.id },
+          { $set: { rescheduleRequest: requestPayload } },
+          { new: true }
+        );
+
+        if (!booking) {
+          return res.status(404).json({ error: 'Booking not found' });
+        }
+
+        const [studentUser, tutorUser] = await Promise.all([
+          User.findOne({ id: booking.studentId }, { firstName: 1, lastName: 1 }),
+          User.findOne({ id: booking.tutorId }, { firstName: 1, lastName: 1 }),
+        ]);
+
+        const studentDisplayName =
+          toNotificationText(booking.studentName) ||
+          getDisplayNameFromParts(studentUser?.firstName, studentUser?.lastName, 'Student');
+        const tutorDisplayName = getDisplayNameFromParts(tutorUser?.firstName, tutorUser?.lastName, 'Tutor');
+        const currentSessionLabel = formatSessionLabel(existingBooking);
+        const requestedSessionLabel = formatSessionLabel({
+          subject: booking.subject,
+          date: requestedDate,
+          timeSlot: requestedTimeSlot,
+        });
+
+        await createUserNotifications([
+          {
+            userId: booking.studentId,
+            type: 'session_reschedule_request',
+            title: 'Reschedule request',
+            message: `${tutorDisplayName} requested to move your ${currentSessionLabel} to ${requestedSessionLabel}.${requestedNote ? ` Note: ${requestedNote}` : ''} Please accept or decline this request.`,
+            targetTab: 'studentSessions',
+            link: '/studentSessions',
+            relatedEntityId: booking.id,
+          },
+          {
+            userId: booking.tutorId,
+            type: 'booking_update',
+            title: 'Reschedule request sent',
+            message: `Reschedule request for ${studentDisplayName}'s ${currentSessionLabel} was sent. Waiting for student approval.`,
+            targetTab: 'tutorSessions',
+            link: '/tutorSessions',
+            relatedEntityId: booking.id,
+          },
+        ]);
+
+        return res.json(booking);
+      }
+
+      if (incomingRescheduleDecision) {
+        if (!isStudentActor) {
+          return res.status(403).json({ error: 'Only students can respond to reschedule requests.' });
+        }
+
+        const activeRescheduleRequest = (existingBooking as any)?.rescheduleRequest;
+        if (!activeRescheduleRequest || String(activeRescheduleRequest.status || '').trim().toLowerCase() !== 'pending') {
+          return res.status(400).json({ error: 'No pending reschedule request was found for this session.' });
+        }
+
+        const requestedDate = String(activeRescheduleRequest.requestedDate || '').trim();
+        const requestedTimeSlot = String(activeRescheduleRequest.requestedTimeSlot || '').trim();
+        const requestedSlotId = String(activeRescheduleRequest.requestedSlotId || existingBooking.slotId || '').trim();
+
+        if (incomingRescheduleDecision === 'accept') {
+          const requestedStart = parseSessionStartDateTime(requestedDate, requestedTimeSlot);
+          if (requestedStart && requestedStart.getTime() <= Date.now()) {
+            return res.status(400).json({ error: 'This rescheduled time is no longer valid because it is in the past.' });
+          }
+
+          const hasConflict = await hasTutorBookingConflict({
+            tutorId: existingBooking.tutorId,
+            date: requestedDate,
+            slotId: requestedSlotId,
+            timeSlot: requestedTimeSlot,
+            excludeBookingId: existingBooking.id,
+          });
+
+          if (hasConflict) {
+            return res.status(409).json({ error: 'The requested reschedule time is no longer available.' });
+          }
+
+          const booking = await Booking.findOneAndUpdate(
+            { id: req.params.id },
+            {
+              $set: {
+                date: requestedDate,
+                timeSlot: requestedTimeSlot,
+                slotId: requestedSlotId,
+              },
+              $unset: {
+                rescheduleRequest: '',
+              },
+            },
+            { new: true }
+          );
+
+          if (!booking) {
+            return res.status(404).json({ error: 'Booking not found' });
+          }
+
+          await syncBookingSlotLockState(existingBooking, booking, 'reschedule accept');
+
+          const [studentUser, tutorUser] = await Promise.all([
+            User.findOne({ id: booking.studentId }, { firstName: 1, lastName: 1 }),
+            User.findOne({ id: booking.tutorId }, { firstName: 1, lastName: 1 }),
+          ]);
+
+          const studentDisplayName =
+            toNotificationText(existingBooking.studentName) ||
+            getDisplayNameFromParts(studentUser?.firstName, studentUser?.lastName, 'Student');
+          const nextSessionLabel = formatSessionLabel(booking);
+
+          await createUserNotifications([
+            {
+              userId: booking.studentId,
+              type: 'session_rescheduled',
+              title: 'Reschedule accepted',
+              message: `You accepted the reschedule request. Your session is now set to ${nextSessionLabel}.`,
+              targetTab: 'studentSessions',
+              link: '/studentSessions',
+              relatedEntityId: booking.id,
+            },
+            {
+              userId: booking.tutorId,
+              type: 'session_rescheduled',
+              title: 'Reschedule accepted',
+              message: `${studentDisplayName} accepted the reschedule request. Session moved to ${nextSessionLabel}.`,
+              targetTab: 'tutorSessions',
+              link: '/tutorSessions',
+              relatedEntityId: booking.id,
+            },
+          ]);
+
+          return res.json(booking);
+        }
+
+        const wasPaid = normalizeBookingPaymentStatus(existingBooking.paymentStatus) === 'paid';
+        const nextPaymentStatus: 'pending' | 'paid' | 'failed' | 'refunded' = wasPaid
+          ? 'refunded'
+          : normalizeBookingPaymentStatus(existingBooking.paymentStatus);
+
+        const booking = await Booking.findOneAndUpdate(
+          { id: req.params.id },
+          {
+            $set: {
+              status: 'cancelled',
+              paymentStatus: nextPaymentStatus,
+              ...(wasPaid
+                ? {
+                    refundedAt: new Date().toISOString(),
+                    refundReason: 'Payment refunded because the student declined the reschedule request.',
+                  }
+                : {}),
+            },
+            $unset: {
+              rescheduleRequest: '',
+            },
+          },
+          { new: true }
+        );
+
+        if (!booking) {
+          return res.status(404).json({ error: 'Booking not found' });
+        }
+
+        await syncBookingSlotLockState(existingBooking, booking, 'reschedule decline');
+
+        const [studentUser, tutorUser] = await Promise.all([
+          User.findOne({ id: booking.studentId }, { firstName: 1, lastName: 1 }),
+          User.findOne({ id: booking.tutorId }, { firstName: 1, lastName: 1 }),
+        ]);
+
+        const studentDisplayName =
+          toNotificationText(existingBooking.studentName) ||
+          getDisplayNameFromParts(studentUser?.firstName, studentUser?.lastName, 'Student');
+        const previousSessionLabel = formatSessionLabel(existingBooking);
+
+        const notifications: NotificationDraft[] = [
+          {
+            userId: booking.studentId,
+            type: 'session_cancelled',
+            title: 'Session cancelled',
+            message: `You declined the reschedule request. Your ${previousSessionLabel} has been cancelled.`,
+            targetTab: 'studentSessions',
+            link: '/studentSessions',
+            relatedEntityId: booking.id,
+          },
+          {
+            userId: booking.tutorId,
+            type: 'session_cancelled',
+            title: 'Session cancelled',
+            message: `${studentDisplayName} declined the reschedule request. ${previousSessionLabel} was cancelled.`,
+            targetTab: 'tutorSessions',
+            link: '/tutorSessions',
+            relatedEntityId: booking.id,
+          },
+        ];
+
+        if (wasPaid) {
+          notifications.push(
+            {
+              userId: booking.studentId,
+              type: 'payment_refunded',
+              title: 'Payment refunded',
+              message: `Your payment for ${previousSessionLabel} has been refunded.`,
+              targetTab: 'studentSessions',
+              link: '/studentSessions',
+              relatedEntityId: booking.id,
+            },
+            {
+              userId: booking.tutorId,
+              type: 'payment_refunded',
+              title: 'Session payment refunded',
+              message: `Payment for ${studentDisplayName}'s ${previousSessionLabel} was refunded.`,
+              targetTab: 'tutorSessions',
+              link: '/tutorSessions',
+              relatedEntityId: booking.id,
+            }
+          );
+        }
+
+        await createUserNotifications(notifications);
+        return res.json(booking);
       }
 
       const incomingStatus = req.body?.status;
@@ -4816,13 +5938,16 @@ async function startServer() {
       let status = incomingStatus !== undefined
         ? normalizeBookingStatus(incomingStatus)
         : normalizeBookingStatus(existingBooking.status);
-      const paymentStatus = incomingPaymentStatus !== undefined
+      let paymentStatus = incomingPaymentStatus !== undefined
         ? normalizeBookingPaymentStatus(incomingPaymentStatus)
         : normalizeBookingPaymentStatus(existingBooking.paymentStatus);
 
       const nextTutorId = String(req.body?.tutorId ?? existingBooking.tutorId).trim();
       const nextSlotId = String(req.body?.slotId ?? existingBooking.slotId).trim();
       const nextDate = String(req.body?.date ?? existingBooking.date).trim();
+      const nextTimeSlot = req.body?.timeSlot !== undefined
+        ? String(req.body?.timeSlot || '').trim()
+        : String(existingBooking.timeSlot || '').trim();
 
       if (!nextTutorId || !nextSlotId || !nextDate) {
         return res.status(400).json({ error: 'tutorId, slotId, and date must be valid values.' });
@@ -4840,8 +5965,16 @@ async function startServer() {
         status = 'confirmed';
       }
 
+      if (paymentStatus === 'refunded' && status !== 'cancelled') {
+        status = 'cancelled';
+      }
+
       if ((status === 'confirmed' || status === 'completed') && paymentStatus !== 'paid') {
         return res.status(400).json({ error: 'Only paid bookings can be confirmed or completed.' });
+      }
+
+      if (status === 'cancelled' && paymentStatus === 'paid') {
+        paymentStatus = 'refunded';
       }
 
       const paymentReference = req.body?.paymentReference !== undefined
@@ -4859,25 +5992,31 @@ async function startServer() {
       const paidAt = req.body?.paidAt !== undefined
         ? String(req.body.paidAt || '').trim()
         : String(existingBooking.paidAt || '').trim();
+      const refundedAt = req.body?.refundedAt !== undefined
+        ? String(req.body.refundedAt || '').trim()
+        : String((existingBooking as any).refundedAt || '').trim();
+      const refundReason = req.body?.refundReason !== undefined
+        ? String(req.body.refundReason || '').trim()
+        : String((existingBooking as any).refundReason || '').trim();
 
       const scheduleRelevantChange =
         req.body?.tutorId !== undefined ||
         req.body?.slotId !== undefined ||
         req.body?.date !== undefined ||
+        req.body?.timeSlot !== undefined ||
         req.body?.status !== undefined ||
         req.body?.paymentStatus !== undefined;
 
-      if (scheduleRelevantChange && (status === 'pending' || status === 'confirmed') && paymentStatus !== 'failed') {
-        const conflictingBooking = await Booking.findOne({
-          id: { $ne: req.params.id },
+      if (scheduleRelevantChange && (status === 'pending' || status === 'confirmed') && paymentStatus !== 'failed' && paymentStatus !== 'refunded') {
+        const hasConflict = await hasTutorBookingConflict({
           tutorId: nextTutorId,
-          slotId: nextSlotId,
           date: nextDate,
-          status: { $in: ['pending', 'confirmed'] },
-          paymentStatus: { $ne: 'failed' },
+          slotId: nextSlotId,
+          timeSlot: nextTimeSlot,
+          excludeBookingId: req.params.id,
         });
 
-        if (conflictingBooking) {
+        if (hasConflict) {
           return res.status(409).json({ error: 'This time slot is already booked.' });
         }
       }
@@ -4888,6 +6027,8 @@ async function startServer() {
         paymentStatus,
       };
       const updateUnset: Record<string, ''> = {};
+      delete updateSet.rescheduleDecision;
+      delete updateSet.rescheduleRequest;
 
       if (req.body?.tutorId !== undefined) {
         updateSet.tutorId = nextTutorId;
@@ -4928,18 +6069,57 @@ async function startServer() {
         updateSet.hiddenForStudent = Boolean(req.body.hiddenForStudent);
       }
 
+      if (req.body?.sessionResources !== undefined) {
+        if (!isTutorActor) {
+          return res.status(403).json({ error: 'Only tutors can upload session resources.' });
+        }
+
+        const normalizedSessionResources = await normalizeBookingSessionResources(req.body.sessionResources);
+        updateSet.sessionResources = normalizedSessionResources;
+        console.info('Booking session resource update requested', {
+          bookingId: existingBooking.id,
+          tutorId: existingBooking.tutorId,
+          resourceCount: normalizedSessionResources.length,
+          resources: normalizedSessionResources.map((resource) => ({
+            id: String((resource as any)?.id || '').trim(),
+            containerName: String((resource as any)?.containerName || '').trim() || undefined,
+            blobName: String((resource as any)?.blobName || '').trim() || undefined,
+            url: String((resource as any)?.url || '').trim() || undefined,
+          })),
+        });
+      }
+
+      if (status === 'cancelled' || status === 'completed') {
+        updateUnset.rescheduleRequest = '';
+      }
+
       if (paymentStatus === 'paid') {
         updateSet.paymentReference = paymentReference;
-        updateSet.paidAt = paidAt || new Date().toISOString();
+        updateSet.paidAt = paidAt || String(existingBooking.paidAt || '').trim() || new Date().toISOString();
+        updateUnset.paymentFailureReason = '';
+        updateUnset.refundedAt = '';
+        updateUnset.refundReason = '';
+      } else if (paymentStatus === 'refunded') {
+        if (paymentReference) {
+          updateSet.paymentReference = paymentReference;
+        }
+
+        updateSet.paidAt = paidAt || String(existingBooking.paidAt || '').trim() || new Date().toISOString();
+        updateSet.refundedAt = refundedAt || new Date().toISOString();
+        updateSet.refundReason = refundReason || 'Payment refunded due to session cancellation.';
         updateUnset.paymentFailureReason = '';
       } else if (paymentStatus === 'failed') {
         updateSet.paymentFailureReason = paymentFailureReason || 'Payment failed before confirmation.';
         updateUnset.paymentReference = '';
         updateUnset.paidAt = '';
+        updateUnset.refundedAt = '';
+        updateUnset.refundReason = '';
       } else {
         updateUnset.paymentReference = '';
         updateUnset.paymentFailureReason = '';
         updateUnset.paidAt = '';
+        updateUnset.refundedAt = '';
+        updateUnset.refundReason = '';
       }
 
       delete updateSet.id;
@@ -4953,31 +6133,17 @@ async function startServer() {
       );
 
       if (booking) {
-        const wasSlotLocked =
-          existingBooking.status === 'confirmed' && normalizeBookingPaymentStatus(existingBooking.paymentStatus) === 'paid';
-        const isSlotLocked =
-          booking.status === 'confirmed' && normalizeBookingPaymentStatus(booking.paymentStatus) === 'paid';
-
-        try {
-          if (
-            wasSlotLocked &&
-            (!isSlotLocked || existingBooking.slotId !== booking.slotId || existingBooking.tutorId !== booking.tutorId)
-          ) {
-            await Tutor.updateOne(
-              { id: existingBooking.tutorId, "availability.id": existingBooking.slotId },
-              { $set: { "availability.$.isBooked": false } }
-            );
-          }
-
-          if (isSlotLocked) {
-            await Tutor.updateOne(
-              { id: booking.tutorId, "availability.id": booking.slotId },
-              { $set: { "availability.$.isBooked": true } }
-            );
-          }
-        } catch (availabilitySyncError) {
-          console.warn('Booking slot sync warning (update):', availabilitySyncError);
+        if (req.body?.sessionResources !== undefined) {
+          const persistedResources = Array.isArray((booking as any).sessionResources)
+            ? (booking as any).sessionResources
+            : [];
+          console.info('Booking session resource update saved', {
+            bookingId: booking.id,
+            resourceCount: persistedResources.length,
+          });
         }
+
+        await syncBookingSlotLockState(existingBooking, booking, 'update');
 
         const previousStatus = normalizeBookingStatus(existingBooking.status);
         const nextStatus = normalizeBookingStatus(booking.status);
@@ -5048,6 +6214,29 @@ async function startServer() {
               type: 'payment_success',
               title: 'Session payment received',
               message: `Payment was received for ${studentDisplayName}'s ${nextSessionLabel}.`,
+              targetTab: 'tutorSessions',
+              link: '/tutorSessions',
+              relatedEntityId: booking.id,
+            }
+          );
+        }
+
+        if (nextPaymentStatus === 'refunded' && previousPaymentStatus !== 'refunded') {
+          notifications.push(
+            {
+              userId: booking.studentId,
+              type: 'payment_refunded',
+              title: 'Payment refunded',
+              message: `Your payment for ${previousSessionLabel} has been refunded.`,
+              targetTab: 'studentSessions',
+              link: '/studentSessions',
+              relatedEntityId: booking.id,
+            },
+            {
+              userId: booking.tutorId,
+              type: 'payment_refunded',
+              title: 'Session payment refunded',
+              message: `Payment for ${studentDisplayName}'s ${previousSessionLabel} has been refunded.`,
               targetTab: 'tutorSessions',
               link: '/tutorSessions',
               relatedEntityId: booking.id,
@@ -5153,13 +6342,14 @@ async function startServer() {
   app.delete("/api/bookings/:id", requireAnySession, async (req, res) => {
     try {
       const sessionContext = getSessionAuthContext(req);
+      const resolvedRole = await resolveSessionRoleForRequest(req, sessionContext);
       const existingBooking = await Booking.findOne({ id: req.params.id });
       if (!existingBooking) {
         return res.status(404).json({ error: 'Booking not found' });
       }
 
-      const isTutorActor = sessionContext.role === 'tutor' && existingBooking.tutorId === sessionContext.userId;
-      const isStudentActor = sessionContext.role === 'student' && existingBooking.studentId === sessionContext.userId;
+      const isTutorActor = resolvedRole === 'tutor' && existingBooking.tutorId === sessionContext.userId;
+      const isStudentActor = resolvedRole === 'student' && existingBooking.studentId === sessionContext.userId;
       if (!isTutorActor && !isStudentActor) {
         return res.status(403).json({ error: 'You can only delete your own bookings.' });
       }

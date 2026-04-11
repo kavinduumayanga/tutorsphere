@@ -3147,11 +3147,11 @@ export default function App() {
         }
 
         await apiService.updateTutor(tutorId, {
-          qualifications: profileData.education,
+          qualifications: profileData.education.trim(),
           subjects: profileData.subjects,
           teachingLevel: profileData.teachingLevel as any,
           pricePerHour: profileData.pricePerHour,
-          bio: profileData.bio
+          bio: profileData.bio.trim()
         });
 
         const tutorsData = await apiService.getTutors();
@@ -6279,7 +6279,6 @@ export default function App() {
                   <div className="space-y-3">
                     <label className="text-sm font-bold text-slate-700">Professional Bio</label>
                     <textarea
-                      required
                       value={profileData.bio}
                       onChange={e => setProfileData({ ...profileData, bio: e.target.value })}
                       className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all resize-none min-h-[140px]"
@@ -6875,7 +6874,6 @@ export default function App() {
                     <div className="space-y-3 mt-6">
                       <label className="text-sm font-bold text-slate-700">Professional Bio</label>
                       <textarea
-                        required
                         value={profileData.bio}
                         onChange={e => setProfileData({ ...profileData, bio: e.target.value })}
                         className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium bg-slate-50/50 focus:bg-white transition-all resize-none min-h-[140px]"

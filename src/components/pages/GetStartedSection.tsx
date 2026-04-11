@@ -82,27 +82,35 @@ export const GetStartedSection: React.FC<GetStartedSectionProps> = ({
         }
       }
 
+      const signupOptions = role === 'tutor'
+        ? {
+            autoLogin: true,
+            tutorProfile: {
+              qualifications: formData.education,
+              education: formData.education,
+              subjects: formData.subjects,
+              teachingLevel: formData.teachingLevel,
+              pricePerHour: formData.hourlyRate,
+              hourlyRate: formData.hourlyRate,
+              bio: '',
+            },
+          }
+        : { autoLogin: true };
+
       // Real auth submission
-      const user = await apiService.signup(formData.firstName, formData.lastName, formData.email, formData.password, role);
+      const user = await apiService.signup(
+        formData.firstName,
+        formData.lastName,
+        formData.email,
+        formData.password,
+        role,
+        signupOptions
+      );
       
       let createdTutorProfile: Tutor | undefined;
 
       if (role === 'tutor') {
-        createdTutorProfile = await apiService.createTutor({
-          id: user.id,
-          name: `${user.firstName} ${user.lastName}`,
-          email: user.email,
-          role: 'tutor',
-          qualifications: formData.education,
-          subjects: formData.subjects,
-          teachingLevel: formData.teachingLevel as any,
-          pricePerHour: formData.hourlyRate,
-          rating: 0,
-          reviewCount: 0,
-          bio: 'New tutor on TutorSphere',
-          availability: [],
-          isVerified: false
-        } as any);
+        createdTutorProfile = await apiService.getTutor(user.id);
       }
 
       onAccountCreated(user, createdTutorProfile);

@@ -857,6 +857,11 @@ export default function App() {
       return;
     }
 
+    const hasPendingStoredUserHydration = !currentUser && Boolean(loadStoredSession()?.session?.user);
+    if (hasPendingStoredUserHydration) {
+      return;
+    }
+
     const normalizedRoute = normalizeRouteTarget(
       {
         tab: activeTab,
@@ -1654,19 +1659,7 @@ export default function App() {
 
         // Fetch user's bookings (student booking history vs tutor booking management)
         const userBookings = await apiService.getBookings();
-        const normalizedBookings = userBookings.map((booking) => ({
-          ...booking,
-          paymentStatus:
-            booking.paymentStatus ||
-            (booking.status === 'cancelled'
-              ? 'refunded'
-              : booking.status === 'confirmed' || booking.status === 'completed'
-                ? 'paid'
-                : 'pending'),
-          sessionResources: Array.isArray(booking.sessionResources) ? booking.sessionResources : [],
-          hiddenForTutor: Boolean(booking.hiddenForTutor),
-          hiddenForStudent: Boolean(booking.hiddenForStudent),
-        }));
+        const normalizedBookings = userBookings.map((booking) => normalizeBookingForState(booking));
         setBookings(
           currentUser.role === 'tutor'
             ? normalizedBookings.filter((b) => tutorIdentityIds.includes(b.tutorId))
@@ -1827,19 +1820,7 @@ export default function App() {
       });
 
       setBookings((prevBookings) => [
-        {
-          ...booking,
-          paymentStatus:
-            booking.paymentStatus ||
-            (booking.status === 'cancelled'
-              ? 'refunded'
-              : booking.status === 'confirmed' || booking.status === 'completed'
-                ? 'paid'
-                : 'pending'),
-          sessionResources: Array.isArray(booking.sessionResources) ? booking.sessionResources : [],
-          hiddenForTutor: Boolean(booking.hiddenForTutor),
-          hiddenForStudent: Boolean(booking.hiddenForStudent),
-        },
+        normalizeBookingForState(booking),
         ...prevBookings,
       ]);
       return { ok: true, bookingId: booking.id };
@@ -3241,6 +3222,105 @@ export default function App() {
     });
   };
 
+  const normalizePendingRescheduleRequest = (
+    requestCandidate: unknown,
+    bookingStatusCandidate: unknown,
+    currentSchedule: { date?: unknown; timeSlot?: unknown }
+  ): Booking['rescheduleRequest'] | undefined => {
+    if (!requestCandidate || typeof requestCandidate !== 'object') {
+      return undefined;
+    }
+
+    const bookingStatus = String(bookingStatusCandidate || '').trim().toLowerCase();
+    if (bookingStatus === 'cancelled' || bookingStatus === 'completed') {
+      return undefined;
+    }
+
+    const request = requestCandidate as Record<string, unknown>;
+    const requestStatus = String(request.status || '').trim().toLowerCase();
+    if (requestStatus !== 'pending') {
+      return undefined;
+    }
+
+    const requestedDate = String(request.requestedDate || '').trim();
+    const requestedTimeSlot = String(request.requestedTimeSlot || '').trim();
+    const requestedAt = String(request.requestedAt || '').trim();
+    const requestedByTutorId = String(request.requestedByTutorId || '').trim();
+    const requestedSlotId = String(request.requestedSlotId || '').trim();
+    const requestedNote = String(request.note || '').trim();
+
+    if (!requestedDate || !requestedTimeSlot || !requestedAt || !requestedByTutorId) {
+      return undefined;
+    }
+
+    const normalizedCurrentDate = String(currentSchedule.date || '').trim();
+    const normalizedCurrentTimeSlot = String(currentSchedule.timeSlot || '').trim();
+    if (
+      normalizedCurrentDate &&
+      normalizedCurrentTimeSlot &&
+      requestedDate === normalizedCurrentDate &&
+      requestedTimeSlot === normalizedCurrentTimeSlot
+    ) {
+      return undefined;
+    }
+
+    return {
+      requestedDate,
+      requestedTimeSlot,
+      requestedSlotId: requestedSlotId || undefined,
+      note: requestedNote || undefined,
+      requestedAt,
+      requestedByTutorId,
+      status: 'pending',
+    };
+  };
+
+  const normalizeBookingForState = (incomingBooking: Booking, existingBooking?: Booking): Booking => {
+    const nextStatus = (incomingBooking.status || existingBooking?.status || 'pending') as Booking['status'];
+    const nextDate = incomingBooking.date ?? existingBooking?.date;
+    const nextTimeSlot = incomingBooking.timeSlot ?? existingBooking?.timeSlot;
+
+    const nextPaymentStatus =
+      incomingBooking.paymentStatus ||
+      (nextStatus === 'cancelled'
+        ? 'refunded'
+        : nextStatus === 'confirmed' || nextStatus === 'completed'
+          ? 'paid'
+          : 'pending');
+
+    const nextSessionResources = Array.isArray(incomingBooking.sessionResources)
+      ? incomingBooking.sessionResources
+      : Array.isArray(existingBooking?.sessionResources)
+        ? existingBooking.sessionResources
+        : [];
+
+    const requestSource = Object.prototype.hasOwnProperty.call(incomingBooking, 'rescheduleRequest')
+      ? (incomingBooking as any).rescheduleRequest
+      : existingBooking?.rescheduleRequest;
+
+    const nextRescheduleRequest = normalizePendingRescheduleRequest(requestSource, nextStatus, {
+      date: nextDate,
+      timeSlot: nextTimeSlot,
+    });
+
+    return {
+      ...existingBooking,
+      ...incomingBooking,
+      status: nextStatus,
+      paymentStatus: nextPaymentStatus,
+      sessionResources: nextSessionResources,
+      rescheduleRequest: nextRescheduleRequest,
+      hiddenForTutor:
+        incomingBooking.hiddenForTutor !== undefined
+          ? Boolean(incomingBooking.hiddenForTutor)
+          : Boolean(existingBooking?.hiddenForTutor),
+      hiddenForStudent:
+        incomingBooking.hiddenForStudent !== undefined
+          ? Boolean(incomingBooking.hiddenForStudent)
+          : Boolean(existingBooking?.hiddenForStudent),
+    };
+  };
+
   const updateTutorBooking = async (bookingId: string, updates: Partial<Booking>) => {
     if (!currentUser || currentUser.role !== 'tutor') {
       alert('Only tutor accounts can update bookings.');
@@ -3253,22 +3333,7 @@ export default function App() {
       setBookings((prevBookings) =>
         prevBookings.map((booking) =>
           booking.id === bookingId
-            ? {
-                ...booking,
-                ...updatedBooking,
-                paymentStatus:
-                  updatedBooking.paymentStatus ||
-                  (updatedBooking.status === 'cancelled'
-                    ? 'refunded'
-                    : updatedBooking.status === 'confirmed' || updatedBooking.status === 'completed'
-                      ? 'paid'
-                      : 'pending'),
-                sessionResources: Array.isArray(updatedBooking.sessionResources)
-                  ? updatedBooking.sessionResources
-                  : Array.isArray(booking.sessionResources)
-                    ? booking.sessionResources
-                    : [],
-              }
+            ? normalizeBookingForState(updatedBooking, booking)
             : booking
         )
       );
@@ -3515,22 +3580,7 @@ export default function App() {
     setBookings((prevBookings) =>
       prevBookings.map((booking) =>
         booking.id === updatedBooking.id
-          ? {
-              ...booking,
-              ...updatedBooking,
-              paymentStatus:
-                updatedBooking.paymentStatus ||
-                (updatedBooking.status === 'cancelled'
-                  ? 'refunded'
-                  : updatedBooking.status === 'confirmed' || updatedBooking.status === 'completed'
-                    ? 'paid'
-                    : 'pending'),
-              sessionResources: Array.isArray(updatedBooking.sessionResources)
-                ? updatedBooking.sessionResources
-                : Array.isArray(booking.sessionResources)
-                  ? booking.sessionResources
-                  : [],
-            }
+          ? normalizeBookingForState(updatedBooking, booking)
           : booking
       )
     );

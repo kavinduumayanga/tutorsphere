@@ -5127,7 +5127,73 @@ async function startServer() {
           ? { tutorId: sessionContext.userId }
           : { studentId: sessionContext.userId }
       );
-      res.json(bookings);
+
+      const now = Date.now();
+      const staleRescheduleBookingIds = new Set<string>();
+      const normalizedBookings = bookings.map((bookingDoc) => {
+        const booking =
+          typeof (bookingDoc as any)?.toObject === 'function'
+            ? (bookingDoc as any).toObject()
+            : bookingDoc;
+
+        const currentStatus = normalizeBookingStatus((booking as any)?.status);
+        const request = (booking as any)?.rescheduleRequest;
+
+        if (!request || typeof request !== 'object') {
+          return booking;
+        }
+
+        const requestStatus = String((request as any)?.status || '').trim().toLowerCase();
+        const requestedDate = String((request as any)?.requestedDate || '').trim();
+        const requestedTimeSlot = String((request as any)?.requestedTimeSlot || '').trim();
+        const requestedByTutorId = String((request as any)?.requestedByTutorId || '').trim();
+        const requestedAt = String((request as any)?.requestedAt || '').trim();
+        const currentDate = String((booking as any)?.date || '').trim();
+        const currentTimeSlot = String((booking as any)?.timeSlot || '').trim();
+        const requestedStart = parseSessionStartDateTime(requestedDate, requestedTimeSlot);
+
+        const isValidPendingRequest =
+          requestStatus === 'pending' &&
+          currentStatus !== 'cancelled' &&
+          currentStatus !== 'completed' &&
+          Boolean(requestedDate) &&
+          Boolean(requestedTimeSlot) &&
+          Boolean(requestedByTutorId) &&
+          Boolean(requestedAt) &&
+          !(requestedDate === currentDate && requestedTimeSlot === currentTimeSlot) &&
+          (!requestedStart || requestedStart.getTime() > now);
+
+        if (!isValidPendingRequest) {
+          delete (booking as any).rescheduleRequest;
+          const bookingId = String((booking as any)?.id || '').trim();
+          if (bookingId) {
+            staleRescheduleBookingIds.add(bookingId);
+          }
+          return booking;
+        }
+
+        (booking as any).rescheduleRequest = {
+          ...request,
+          requestedDate,
+          requestedTimeSlot,
+          requestedByTutorId,
+          requestedAt,
+          requestedSlotId: String((request as any)?.requestedSlotId || '').trim() || undefined,
+          note: String((request as any)?.note || '').trim() || undefined,
+          status: 'pending',
+        };
+
+        return booking;
+      });
+
+      if (staleRescheduleBookingIds.size > 0) {
+        await Booking.updateMany(
+          { id: { $in: Array.from(staleRescheduleBookingIds) } },
+          { $unset: { rescheduleRequest: '' } }
+        );
+      }
+
+      res.json(normalizedBookings);
     } catch (error) {
       console.error("Get bookings error:", error);
       res.status(500).json({ error: "Internal server error" });

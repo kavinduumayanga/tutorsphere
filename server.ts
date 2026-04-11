@@ -43,7 +43,9 @@ import {
 import { loadSecurityConfig } from "./src/server/config/securityConfig.js";
 import { ALLOWED_TUTOR_SUBJECTS, normalizeTutorSubjects } from "./src/data/tutorSubjects.js";
 import {
+  blobExists,
   deleteFile as deleteBlobFile,
+  downloadBlobToBuffer,
   extractBlobNameFromUrl,
   getLargeUploadTuning,
   optimizeImageBuffer,
@@ -70,6 +72,7 @@ const AZURE_BLOB_CONTAINER_PROFILE_IMAGES = String(process.env.AZURE_BLOB_CONTAI
 const AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS = String(process.env.AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS || '').trim();
 const AZURE_BLOB_CONTAINER_VIDEOS = String(process.env.AZURE_BLOB_CONTAINER_VIDEOS || '').trim();
 const AZURE_BLOB_CONTAINER_RESOURCES = String(process.env.AZURE_BLOB_CONTAINER_RESOURCES || '').trim();
+const AZURE_BLOB_CONTAINER_SESSION_RESOURCES = String(process.env.AZURE_BLOB_CONTAINER_SESSION_RESOURCES || '').trim();
 const AZURE_BLOB_CONTAINER_RECORDED_LESSONS = String(process.env.AZURE_BLOB_CONTAINER_RECORDED_LESSONS || '').trim();
 const AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES = String(process.env.AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES || '').trim();
 
@@ -130,12 +133,14 @@ type UploadResponseFileMeta = {
 
 const toUploadedAssetResponse = (
   uploaded: { blobUrl: string; blobName: string },
-  file: UploadResponseFileMeta
+  file: UploadResponseFileMeta,
+  containerName?: string
 ) => ({
   path: uploaded.blobUrl,
   url: uploaded.blobUrl,
   blobUrl: uploaded.blobUrl,
   blobName: uploaded.blobName,
+  containerName: String(containerName || '').trim() || undefined,
   originalName: file.originalname,
   size: file.size,
   mimeType: file.mimetype,
@@ -697,6 +702,22 @@ type CertificatePdfInput = {
   tutorLabel: string;
 };
 
+type BookingReceiptPdfInput = {
+  platformName: string;
+  bookingId: string;
+  studentName: string;
+  tutorName: string;
+  sessionTitle: string;
+  sessionDate: string;
+  sessionTime: string;
+  durationLabel: string;
+  hourlyRateLabel: string;
+  totalPaidLabel: string;
+  paymentStatusLabel: string;
+  transactionReference: string;
+  generatedDateLabel: string;
+};
+
 const buildBrandedCertificatePdf = (input: CertificatePdfInput): Buffer => {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -787,6 +808,125 @@ const buildBrandedCertificatePdf = (input: CertificatePdfInput): Buffer => {
   doc.setFontSize(10);
   doc.setTextColor(148, 163, 184);
   doc.text('Issued by TutorSphere Learning Platform', pageWidth / 2, pageHeight - 40, { align: 'center' });
+
+  return Buffer.from(doc.output('arraybuffer'));
+};
+
+const formatLkrCurrency = (value: number): string => {
+  const normalized = roundCurrency(Math.max(0, Number.isFinite(value) ? value : 0));
+
+  try {
+    return new Intl.NumberFormat('en-LK', {
+      style: 'currency',
+      currency: 'LKR',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(normalized);
+  } catch {
+    return `LKR ${normalized.toFixed(2)}`;
+  }
+};
+
+const toTitleCase = (value: string): string => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) {
+    return '';
+  }
+
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+};
+
+const buildBookingReceiptPdf = (input: BookingReceiptPdfInput): Buffer => {
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const cardLeft = 34;
+  const cardTop = 122;
+  const cardWidth = pageWidth - (cardLeft * 2);
+  const cardHeight = pageHeight - cardTop - 40;
+  const cardRight = cardLeft + cardWidth;
+
+  doc.setFillColor(248, 250, 252);
+  doc.rect(0, 0, pageWidth, pageHeight, 'F');
+
+  doc.setFillColor(15, 23, 42);
+  doc.rect(0, 0, pageWidth, 104, 'F');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(24);
+  doc.setTextColor(255, 255, 255);
+  doc.text(input.platformName, 40, 50);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(12);
+  doc.setTextColor(203, 213, 225);
+  doc.text('Booking Payment Receipt', 40, 74);
+  doc.text(`Generated: ${input.generatedDateLabel}`, pageWidth - 40, 50, { align: 'right' });
+  doc.text(`Receipt ID: ${input.bookingId}`, pageWidth - 40, 74, { align: 'right' });
+
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(226, 232, 240);
+  doc.setLineWidth(1);
+  doc.roundedRect(cardLeft, cardTop, cardWidth, cardHeight, 12, 12, 'FD');
+
+  let y = cardTop + 34;
+  const valueColumnX = cardLeft + 196;
+  const valueColumnWidth = cardRight - valueColumnX - 24;
+
+  const drawSectionHeader = (title: string) => {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(71, 85, 105);
+    doc.text(title.toUpperCase(), cardLeft + 20, y);
+
+    y += 10;
+    doc.setDrawColor(148, 163, 184);
+    doc.setLineWidth(0.8);
+    doc.line(cardLeft + 20, y, cardRight - 20, y);
+    y += 16;
+  };
+
+  const drawField = (label: string, value: string) => {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(100, 116, 139);
+    doc.text(label.toUpperCase(), cardLeft + 20, y);
+
+    const safeValue = String(value || 'N/A').trim() || 'N/A';
+    const valueLines = doc.splitTextToSize(safeValue, valueColumnWidth);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(12);
+    doc.setTextColor(15, 23, 42);
+    doc.text(valueLines, valueColumnX, y);
+
+    const rowHeight = Math.max(20, valueLines.length * 14);
+    y += rowHeight;
+
+    doc.setDrawColor(241, 245, 249);
+    doc.setLineWidth(0.6);
+    doc.line(cardLeft + 20, y + 2, cardRight - 20, y + 2);
+    y += 16;
+  };
+
+  drawSectionHeader('Session Details');
+  drawField('Student Name', input.studentName);
+  drawField('Tutor Name', input.tutorName);
+  drawField('Session Title', input.sessionTitle);
+  drawField('Date', input.sessionDate);
+  drawField('Time', input.sessionTime);
+  drawField('Duration', input.durationLabel);
+  drawField('Hourly Rate', input.hourlyRateLabel);
+
+  drawSectionHeader('Payment Details');
+  drawField('Total Paid Amount', input.totalPaidLabel);
+  drawField('Payment Status', input.paymentStatusLabel);
+  drawField('Transaction Reference ID', input.transactionReference);
+  drawField('Generated Date', input.generatedDateLabel);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.setTextColor(100, 116, 139);
+  doc.text('This is a system-generated receipt from TutorSphere.', pageWidth / 2, pageHeight - 16, { align: 'center' });
 
   return Buffer.from(doc.output('arraybuffer'));
 };
@@ -1833,7 +1973,7 @@ async function startServer() {
         optimizedThumbnail.mimetype
       );
 
-      res.json(toUploadedAssetResponse(uploaded, optimizedThumbnail));
+      res.json(toUploadedAssetResponse(uploaded, optimizedThumbnail, containerName));
     } catch (error) {
       console.error('Course thumbnail upload error:', error);
       res.status(500).json({ error: 'Failed to upload course thumbnail.' });
@@ -1859,7 +1999,7 @@ async function startServer() {
         req.file.mimetype
       );
 
-      res.json(toUploadedAssetResponse(uploaded, req.file));
+      res.json(toUploadedAssetResponse(uploaded, req.file, containerName));
     } catch (error) {
       console.error('Course resource upload error:', error);
       res.status(500).json({ error: 'Failed to upload course resource file.' });
@@ -1883,10 +2023,57 @@ async function startServer() {
         req.file.mimetype
       );
 
-      res.json(toUploadedAssetResponse(uploaded, req.file));
+      res.json(toUploadedAssetResponse(uploaded, req.file, containerName));
     } catch (error) {
       console.error('Tutor resource upload error:', error);
       res.status(500).json({ error: 'Failed to upload tutor resource file.' });
+    }
+  });
+
+  app.post('/api/uploads/session-resource', requireTutorSession, handleTutorResourceUpload, async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No resource file was uploaded.' });
+      }
+
+      const containerName = getRequiredContainerName(
+        AZURE_BLOB_CONTAINER_SESSION_RESOURCES,
+        'AZURE_BLOB_CONTAINER_SESSION_RESOURCES'
+      );
+      console.info('Session resource upload started', {
+        containerName,
+        originalName: req.file.originalname,
+        mimeType: req.file.mimetype,
+        size: req.file.size,
+      });
+
+      const uploaded = await uploadSmallFile(
+        req.file.buffer,
+        req.file.originalname || 'session-resource',
+        containerName,
+        req.file.mimetype
+      );
+
+      const uploadedBlobExists = await blobExists(uploaded.blobName, containerName);
+      if (!uploadedBlobExists) {
+        console.error('Session resource upload verification failed', {
+          containerName,
+          blobName: uploaded.blobName,
+          blobUrl: uploaded.blobUrl,
+        });
+        return res.status(500).json({ error: 'Uploaded session resource could not be verified in Azure Blob Storage.' });
+      }
+
+      console.info('Session resource upload success', {
+        containerName,
+        blobName: uploaded.blobName,
+        blobUrl: uploaded.blobUrl,
+      });
+
+      res.json(toUploadedAssetResponse(uploaded, req.file, containerName));
+    } catch (error) {
+      console.error('Session resource upload error:', error);
+      res.status(500).json({ error: 'Failed to upload booking session resource file.' });
     }
   });
 
@@ -1907,7 +2094,7 @@ async function startServer() {
         req.file.mimetype
       );
 
-      res.json(toUploadedAssetResponse(uploaded, req.file));
+      res.json(toUploadedAssetResponse(uploaded, req.file, containerName));
     } catch (error) {
       console.error('Tutor certificate upload error:', error);
       res.status(500).json({ error: 'Failed to upload tutor certificate file.' });
@@ -4769,38 +4956,126 @@ async function startServer() {
     return false;
   };
 
-  const normalizeBookingSessionResources = (value: unknown): Array<Record<string, unknown>> => {
+  const getBookingSessionResourceContainerCandidates = (resource: unknown): string[] => {
+    const explicitContainerName = String((resource as any)?.containerName || '').trim();
+
+    const candidates = [
+      explicitContainerName,
+      String(AZURE_BLOB_CONTAINER_SESSION_RESOURCES || '').trim(),
+      String(AZURE_BLOB_CONTAINER_RESOURCES || '').trim(),
+    ].filter(Boolean);
+
+    return Array.from(new Set(candidates));
+  };
+
+  const resolveBookingSessionResourceLocation = async (
+    resource: unknown
+  ): Promise<{ url: string; blobName?: string; containerName?: string; blobExistsInAzure: boolean } | null> => {
+    const resourceUrl = String((resource as any)?.url || '').trim();
+    const explicitBlobName = String((resource as any)?.blobName || '').trim();
+    const containerCandidates = getBookingSessionResourceContainerCandidates(resource);
+
+    for (const containerName of containerCandidates) {
+      const inferredBlobName = explicitBlobName || extractBlobNameFromUrl(resourceUrl, containerName) || '';
+      if (!inferredBlobName) {
+        continue;
+      }
+
+      try {
+        if (await blobExists(inferredBlobName, containerName)) {
+          return {
+            url: resourceUrl,
+            blobName: inferredBlobName,
+            containerName,
+            blobExistsInAzure: true,
+          };
+        }
+      } catch (error) {
+        console.warn('Session resource blob URL resolution warning:', error);
+      }
+    }
+
+    if (isHttpUrl(resourceUrl)) {
+      for (const containerName of containerCandidates) {
+        const inferredBlobName = explicitBlobName || extractBlobNameFromUrl(resourceUrl, containerName) || '';
+        if (inferredBlobName) {
+          return {
+            url: resourceUrl,
+            blobName: inferredBlobName,
+            containerName,
+            blobExistsInAzure: false,
+          };
+        }
+      }
+
+      return {
+        url: resourceUrl,
+        blobName: explicitBlobName || undefined,
+        containerName: containerCandidates[0] || undefined,
+        blobExistsInAzure: false,
+      };
+    }
+
+    return null;
+  };
+
+  const normalizeBookingSessionResources = async (value: unknown): Promise<Array<Record<string, unknown>>> => {
     if (!Array.isArray(value)) {
       return [];
     }
 
-    return value
-      .map((resource) => {
+    const normalized = await Promise.all(
+      value.map(async (resource) => {
         const name = String((resource as any)?.name || '').trim();
         const url = String((resource as any)?.url || '').trim();
-        if (!name || !url) {
-          return null;
-        }
-
         const normalizedId = String((resource as any)?.id || '').trim() || createEntityId();
         const blobName = String((resource as any)?.blobName || '').trim();
+        const containerName = String((resource as any)?.containerName || '').trim();
         const mimeType = String((resource as any)?.mimeType || '').trim();
         const uploadedByTutorId = String((resource as any)?.uploadedByTutorId || '').trim();
         const uploadedAt = String((resource as any)?.uploadedAt || '').trim();
         const parsedSize = Number((resource as any)?.size);
 
+        const resolvedLocation = await resolveBookingSessionResourceLocation({
+          url,
+          blobName,
+          containerName,
+        });
+
+        const effectiveUrl = resolvedLocation?.url || url;
+
+        if (!name || !effectiveUrl) {
+          return null;
+        }
+
+        const normalizedBlobName = resolvedLocation?.blobName || blobName || undefined;
+        const normalizedContainerName = resolvedLocation?.containerName || containerName || undefined;
+        const blobExistsInAzure = Boolean(resolvedLocation?.blobExistsInAzure);
+
+        if (normalizedBlobName && normalizedContainerName && !blobExistsInAzure) {
+          console.warn('Session resource normalization detected missing blob in Azure', {
+            bookingResourceId: normalizedId,
+            containerName: normalizedContainerName,
+            blobName: normalizedBlobName,
+            url: effectiveUrl,
+          });
+        }
+
         return {
           id: normalizedId,
           name,
-          url,
-          blobName: blobName || undefined,
+          url: effectiveUrl,
+          blobName: normalizedBlobName,
+          containerName: normalizedContainerName,
           mimeType: mimeType || undefined,
           size: Number.isFinite(parsedSize) && parsedSize >= 0 ? parsedSize : undefined,
           uploadedByTutorId: uploadedByTutorId || undefined,
           uploadedAt: uploadedAt || undefined,
         };
-        })
-        .filter(Boolean) as Array<Record<string, unknown>>;
+      })
+    );
+
+    return normalized.filter(Boolean) as Array<Record<string, unknown>>;
   };
 
   const syncBookingSlotLockState = async (
@@ -4856,6 +5131,295 @@ async function startServer() {
     } catch (error) {
       console.error("Get bookings error:", error);
       res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get("/api/bookings/:id/resources/:resourceRef/download", requireAnySession, async (req, res) => {
+    try {
+      const sessionContext = getSessionAuthContext(req);
+      const resolvedRole = await resolveSessionRoleForRequest(req, sessionContext);
+      const requestedBookingId = String(req.params.id || '').trim();
+      const requestedResourceRef = decodeURIComponent(String(req.params.resourceRef || '').trim());
+
+      if (!requestedBookingId || !requestedResourceRef) {
+        return res.status(400).json({ error: 'Booking id and resource reference are required.' });
+      }
+
+      const canMatchObjectId = /^[a-fA-F0-9]{24}$/.test(requestedBookingId);
+      const booking = await Booking.findOne(
+        canMatchObjectId
+          ? { $or: [{ id: requestedBookingId }, { _id: requestedBookingId }] }
+          : { id: requestedBookingId }
+      );
+
+      if (!booking) {
+        return res.status(404).json({ error: 'Booking not found.' });
+      }
+
+      const isOwner = booking.studentId === sessionContext.userId || booking.tutorId === sessionContext.userId;
+      const isAdmin = resolvedRole === 'admin';
+      if (!isOwner && !isAdmin) {
+        return res.status(403).json({ error: 'You can only access resources for your own bookings.' });
+      }
+
+      const sessionResources = Array.isArray((booking as any).sessionResources)
+        ? (booking as any).sessionResources
+        : [];
+
+      const matchedResource = sessionResources.find((resource: any) => {
+        const id = String(resource?.id || '').trim();
+        const blobName = String(resource?.blobName || '').trim();
+        const url = String(resource?.url || '').trim();
+
+        return (
+          (id && id === requestedResourceRef) ||
+          (blobName && blobName === requestedResourceRef) ||
+          (url && url === requestedResourceRef)
+        );
+      });
+
+      if (!matchedResource) {
+        return res.status(404).json({ error: 'Session resource not found.' });
+      }
+
+      const resolvedLocation = await resolveBookingSessionResourceLocation(matchedResource);
+      if (!resolvedLocation || !resolvedLocation.blobName || !resolvedLocation.containerName) {
+        return res.status(404).json({ error: 'Session resource is unavailable for download.' });
+      }
+
+      console.info('Booking session resource download lookup', {
+        bookingId: (booking as any).id,
+        resourceRef: requestedResourceRef,
+        resolvedContainerName: resolvedLocation.containerName,
+        resolvedBlobName: resolvedLocation.blobName,
+        blobExistsInAzure: resolvedLocation.blobExistsInAzure,
+      });
+
+      if (!resolvedLocation.blobExistsInAzure) {
+        return res.status(404).json({ error: 'Session resource blob is missing in Azure Blob Storage.' });
+      }
+
+      const downloaded = await downloadBlobToBuffer(resolvedLocation.blobName, resolvedLocation.containerName);
+      const fileNameRaw = String((matchedResource as any)?.name || 'session-resource').trim() || 'session-resource';
+      const safeFileName = fileNameRaw.replace(/[\r\n]/g, '').replace(/"/g, '');
+
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Content-Type', downloaded.mimeType || String((matchedResource as any)?.mimeType || '').trim() || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeFileName}"`);
+      res.setHeader('Content-Length', String(downloaded.buffer.length));
+      return res.send(downloaded.buffer);
+    } catch (error) {
+      console.error('Download booking session resource error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.delete("/api/bookings/:id/resources/:resourceRef", requireTutorSession, async (req, res) => {
+    try {
+      const sessionContext = getSessionAuthContext(req);
+      const requestedBookingId = String(req.params.id || '').trim();
+      const requestedResourceRef = decodeURIComponent(String(req.params.resourceRef || '').trim());
+
+      if (!requestedBookingId || !requestedResourceRef) {
+        return res.status(400).json({ error: 'Booking id and resource reference are required.' });
+      }
+
+      const canMatchObjectId = /^[a-fA-F0-9]{24}$/.test(requestedBookingId);
+      const booking = await Booking.findOne(
+        canMatchObjectId
+          ? { $or: [{ id: requestedBookingId }, { _id: requestedBookingId }] }
+          : { id: requestedBookingId }
+      );
+
+      if (!booking) {
+        return res.status(404).json({ error: 'Booking not found.' });
+      }
+
+      if (booking.tutorId !== sessionContext.userId) {
+        return res.status(403).json({ error: 'You can only remove resources from your own sessions.' });
+      }
+
+      const existingResources = Array.isArray((booking as any).sessionResources)
+        ? (booking as any).sessionResources
+        : [];
+
+      const matchedResource = existingResources.find((resource: any) => {
+        const id = String(resource?.id || '').trim();
+        const blobName = String(resource?.blobName || '').trim();
+        const url = String(resource?.url || '').trim();
+
+        return (
+          (id && id === requestedResourceRef) ||
+          (blobName && blobName === requestedResourceRef) ||
+          (url && url === requestedResourceRef)
+        );
+      });
+
+      if (!matchedResource) {
+        return res.status(404).json({ error: 'Session resource not found.' });
+      }
+
+      const resolvedLocation = await resolveBookingSessionResourceLocation(matchedResource);
+      console.info('Booking session resource delete requested', {
+        bookingId: (booking as any).id,
+        tutorId: sessionContext.userId,
+        resourceRef: requestedResourceRef,
+        resolvedContainerName: resolvedLocation?.containerName,
+        resolvedBlobName: resolvedLocation?.blobName,
+        blobExistsInAzure: resolvedLocation?.blobExistsInAzure,
+      });
+
+      if (resolvedLocation?.blobName && resolvedLocation?.containerName && resolvedLocation.blobExistsInAzure) {
+        await deleteBlobFile(resolvedLocation.blobName, resolvedLocation.containerName);
+      }
+
+      const filteredResources = existingResources.filter((resource: any) => {
+        const id = String(resource?.id || '').trim();
+        const blobName = String(resource?.blobName || '').trim();
+        const url = String(resource?.url || '').trim();
+
+        return !(
+          (id && id === requestedResourceRef) ||
+          (blobName && blobName === requestedResourceRef) ||
+          (url && url === requestedResourceRef)
+        );
+      });
+
+      const updatedBooking = await Booking.findOneAndUpdate(
+        { id: String((booking as any).id || '').trim() },
+        { $set: { sessionResources: filteredResources } },
+        { new: true }
+      );
+
+      if (!updatedBooking) {
+        return res.status(404).json({ error: 'Booking not found.' });
+      }
+
+      console.info('Booking session resource delete saved', {
+        bookingId: updatedBooking.id,
+        resourceCount: Array.isArray((updatedBooking as any).sessionResources)
+          ? (updatedBooking as any).sessionResources.length
+          : 0,
+      });
+
+      return res.json(updatedBooking);
+    } catch (error) {
+      console.error('Delete booking session resource error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.get("/api/bookings/:id/receipt", requireAnySession, async (req, res) => {
+    try {
+      const sessionContext = getSessionAuthContext(req);
+      const resolvedRole = await resolveSessionRoleForRequest(req, sessionContext);
+      const requestedBookingId = String(req.params.id || '').trim();
+
+      if (!requestedBookingId) {
+        return res.status(400).json({ error: 'Booking id is required.' });
+      }
+
+      const canMatchObjectId = /^[a-fA-F0-9]{24}$/.test(requestedBookingId);
+      const booking = await Booking.findOne(
+        canMatchObjectId
+          ? { $or: [{ id: requestedBookingId }, { _id: requestedBookingId }] }
+          : { id: requestedBookingId }
+      );
+
+      if (!booking) {
+        return res.status(404).json({ error: 'Booking not found.' });
+      }
+
+      const isOwner = booking.studentId === sessionContext.userId || booking.tutorId === sessionContext.userId;
+      const isAdmin = resolvedRole === 'admin';
+      if (!isOwner && !isAdmin) {
+        return res.status(403).json({ error: 'You can only download receipts for your own bookings.' });
+      }
+
+      const paymentStatus = normalizeBookingPaymentStatus((booking as any).paymentStatus);
+      if (paymentStatus !== 'paid' && paymentStatus !== 'refunded') {
+        return res.status(400).json({ error: 'A receipt is available only for paid bookings.' });
+      }
+
+      const [studentUser, tutorUser, tutorProfile] = await Promise.all([
+        User.findOne({ id: booking.studentId }, { firstName: 1, lastName: 1 }),
+        User.findOne({ id: booking.tutorId }, { firstName: 1, lastName: 1 }),
+        Tutor.findOne({ id: booking.tutorId }, { pricePerHour: 1 }),
+      ]);
+
+      const studentName =
+        toNotificationText((booking as any).studentName) ||
+        getDisplayNameFromParts(studentUser?.firstName, studentUser?.lastName, 'Student');
+      const tutorName = getDisplayNameFromParts(tutorUser?.firstName, tutorUser?.lastName, 'Tutor');
+      const sessionTitle = `${toNotificationText((booking as any).subject, 'Tutoring')} Session`;
+      const sessionDate = toNotificationText((booking as any).date, 'N/A');
+      const sessionTime = toNotificationText((booking as any).timeSlot, 'N/A');
+
+      const parsedStoredDuration = Number((booking as any).sessionDurationHours);
+      const parsedRange = parseBookingTimeRange((booking as any).timeSlot);
+      const durationHours =
+        Number.isFinite(parsedStoredDuration) && parsedStoredDuration > 0
+          ? roundCurrency(parsedStoredDuration)
+          : parsedRange
+            ? roundCurrency((parsedRange.endMinutes - parsedRange.startMinutes) / 60)
+            : 0;
+
+      const durationLabel = durationHours > 0 ? `${durationHours.toFixed(2)} hour(s)` : 'N/A';
+
+      const parsedSessionAmount = Number((booking as any).sessionAmount);
+      const parsedTutorRate = Number((tutorProfile as any)?.pricePerHour);
+      const totalPaidAmount =
+        Number.isFinite(parsedSessionAmount) && parsedSessionAmount >= 0
+          ? roundCurrency(parsedSessionAmount)
+          : Number.isFinite(parsedTutorRate) && parsedTutorRate >= 0 && durationHours > 0
+            ? roundCurrency(parsedTutorRate * durationHours)
+            : 0;
+
+      const hourlyRateAmount =
+        Number.isFinite(parsedTutorRate) && parsedTutorRate >= 0
+          ? roundCurrency(parsedTutorRate)
+          : totalPaidAmount > 0 && durationHours > 0
+            ? roundCurrency(totalPaidAmount / durationHours)
+            : 0;
+
+      const receiptBookingId = toNotificationText((booking as any).id, requestedBookingId);
+      const receiptTransactionReference = toNotificationText((booking as any).paymentReference, receiptBookingId);
+      const generatedDateLabel = new Date().toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      const pdfBuffer = buildBookingReceiptPdf({
+        platformName: String(process.env.APP_NAME || 'TutorSphere').trim() || 'TutorSphere',
+        bookingId: receiptBookingId,
+        studentName,
+        tutorName,
+        sessionTitle,
+        sessionDate,
+        sessionTime,
+        durationLabel,
+        hourlyRateLabel: durationHours > 0 || hourlyRateAmount > 0 ? formatLkrCurrency(hourlyRateAmount) : 'N/A',
+        totalPaidLabel: formatLkrCurrency(totalPaidAmount),
+        paymentStatusLabel: toTitleCase(paymentStatus),
+        transactionReference: receiptTransactionReference,
+        generatedDateLabel,
+      });
+
+      if (!pdfBuffer || pdfBuffer.length < 8 || pdfBuffer.subarray(0, 5).toString() !== '%PDF-') {
+        throw new Error('Generated receipt content is not a valid PDF buffer.');
+      }
+
+      const safeBookingId = sanitizeFileSegment(receiptBookingId) || 'booking';
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="booking-receipt-${safeBookingId}.pdf"`);
+      res.setHeader('Content-Length', String(pdfBuffer.length));
+      return res.send(pdfBuffer);
+    } catch (error) {
+      console.error('Download booking receipt error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -5110,6 +5674,7 @@ async function startServer() {
         const requestedDate = String(incomingRescheduleRequest?.requestedDate || '').trim();
         const requestedTimeSlot = String(incomingRescheduleRequest?.requestedTimeSlot || '').trim();
         const requestedSlotId = String(incomingRescheduleRequest?.requestedSlotId || existingBooking.slotId || '').trim();
+        const requestedNote = String(incomingRescheduleRequest?.note || '').trim();
 
         if (!requestedDate || !requestedTimeSlot || !requestedSlotId) {
           return res.status(400).json({ error: 'requestedDate, requestedTimeSlot, and requestedSlotId are required.' });
@@ -5136,6 +5701,7 @@ async function startServer() {
           requestedDate,
           requestedTimeSlot,
           requestedSlotId,
+          note: requestedNote || undefined,
           requestedAt: new Date().toISOString(),
           requestedByTutorId: sessionContext.userId,
           status: 'pending',
@@ -5172,7 +5738,7 @@ async function startServer() {
             userId: booking.studentId,
             type: 'session_reschedule_request',
             title: 'Reschedule request',
-            message: `${tutorDisplayName} requested to move your ${currentSessionLabel} to ${requestedSessionLabel}. Please accept or decline this request.`,
+            message: `${tutorDisplayName} requested to move your ${currentSessionLabel} to ${requestedSessionLabel}.${requestedNote ? ` Note: ${requestedNote}` : ''} Please accept or decline this request.`,
             targetTab: 'studentSessions',
             link: '/studentSessions',
             relatedEntityId: booking.id,
@@ -5508,7 +6074,19 @@ async function startServer() {
           return res.status(403).json({ error: 'Only tutors can upload session resources.' });
         }
 
-        updateSet.sessionResources = normalizeBookingSessionResources(req.body.sessionResources);
+        const normalizedSessionResources = await normalizeBookingSessionResources(req.body.sessionResources);
+        updateSet.sessionResources = normalizedSessionResources;
+        console.info('Booking session resource update requested', {
+          bookingId: existingBooking.id,
+          tutorId: existingBooking.tutorId,
+          resourceCount: normalizedSessionResources.length,
+          resources: normalizedSessionResources.map((resource) => ({
+            id: String((resource as any)?.id || '').trim(),
+            containerName: String((resource as any)?.containerName || '').trim() || undefined,
+            blobName: String((resource as any)?.blobName || '').trim() || undefined,
+            url: String((resource as any)?.url || '').trim() || undefined,
+          })),
+        });
       }
 
       if (status === 'cancelled' || status === 'completed') {
@@ -5555,6 +6133,16 @@ async function startServer() {
       );
 
       if (booking) {
+        if (req.body?.sessionResources !== undefined) {
+          const persistedResources = Array.isArray((booking as any).sessionResources)
+            ? (booking as any).sessionResources
+            : [];
+          console.info('Booking session resource update saved', {
+            bookingId: booking.id,
+            resourceCount: persistedResources.length,
+          });
+        }
+
         await syncBookingSlotLockState(existingBooking, booking, 'update');
 
         const previousStatus = normalizeBookingStatus(existingBooking.status);

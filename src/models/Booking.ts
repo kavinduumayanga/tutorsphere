@@ -24,6 +24,7 @@ export interface IBooking extends Document {
     requestedDate: string;
     requestedTimeSlot: string;
     requestedSlotId?: string;
+    note?: string;
     requestedAt: string;
     requestedByTutorId: string;
     status: 'pending';
@@ -33,6 +34,7 @@ export interface IBooking extends Document {
     name: string;
     url: string;
     blobName?: string;
+    containerName?: string;
     mimeType?: string;
     size?: number;
     uploadedByTutorId?: string;
@@ -47,6 +49,7 @@ const BookingRescheduleRequestSchema = new Schema(
     requestedDate: { type: String, required: true },
     requestedTimeSlot: { type: String, required: true },
     requestedSlotId: { type: String },
+    note: { type: String },
     requestedAt: { type: String, required: true },
     requestedByTutorId: { type: String, required: true },
     status: { type: String, enum: ['pending'], default: 'pending' },
@@ -60,6 +63,7 @@ const BookingSessionResourceSchema = new Schema(
     name: { type: String, required: true },
     url: { type: String, required: true },
     blobName: { type: String },
+    containerName: { type: String },
     mimeType: { type: String },
     size: { type: Number },
     uploadedByTutorId: { type: String },

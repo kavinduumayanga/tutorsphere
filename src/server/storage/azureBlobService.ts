@@ -9,6 +9,12 @@ export type AzureUploadedFile = {
   blobName: string;
 };
 
+export type AzureDownloadedFile = {
+  buffer: Buffer;
+  mimeType?: string;
+  contentLength?: number;
+};
+
 export type EnsureSmallUploadOptions = {
   skipIfExists?: boolean;
 };
@@ -268,6 +274,39 @@ export const getBlobUrl = async (blobName: string, containerName: string): Promi
 
   const blockBlobClient = await getBlockBlobClient(containerName, normalizedBlobName);
   return blockBlobClient.url;
+};
+
+const readableStreamToBuffer = async (stream: NodeJS.ReadableStream): Promise<Buffer> => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+};
+
+export const downloadBlobToBuffer = async (
+  blobName: string,
+  containerName: string
+): Promise<AzureDownloadedFile> => {
+  const normalizedBlobName = String(blobName || '').trim();
+  if (!normalizedBlobName) {
+    throw new Error('Blob name is required to download a blob.');
+  }
+
+  const blockBlobClient = await getBlockBlobClient(containerName, normalizedBlobName);
+  const response = await blockBlobClient.download();
+
+  if (!response.readableStreamBody) {
+    throw new Error('Blob download stream is unavailable.');
+  }
+
+  const buffer = await readableStreamToBuffer(response.readableStreamBody);
+
+  return {
+    buffer,
+    mimeType: String(response.contentType || '').trim() || undefined,
+    contentLength: Number.isFinite(Number(response.contentLength)) ? Number(response.contentLength) : undefined,
+  };
 };
 
 export const ensureSmallFileUploaded = async (

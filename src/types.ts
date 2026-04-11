@@ -116,6 +116,7 @@ export interface BookingSessionResource {
   name: string;
   url: string;
   blobName?: string;
+  containerName?: string;
   mimeType?: string;
   size?: number;
   uploadedByTutorId?: string;
@@ -126,6 +127,7 @@ export interface BookingRescheduleRequest {
   requestedDate: string;
   requestedTimeSlot: string;
   requestedSlotId?: string;
+  note?: string;
   requestedAt: string;
   requestedByTutorId: string;
   status: 'pending';

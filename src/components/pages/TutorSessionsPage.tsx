@@ -10,6 +10,7 @@ import {
   CheckCircle,
   Star,
   Upload,
+  Trash2,
 } from 'lucide-react';
 
 export interface TutorSessionsPageProps {
@@ -28,12 +29,16 @@ export interface TutorSessionsPageProps {
   canStudentManageBeforeStart: (booking: any) => boolean;
   isSessionJoinEnabled: (booking: any) => boolean;
   activeResourceUploadBookingId: string | null;
+  activeResourceDeleteKey: string | null;
+  activeResourceDownloadKey: string | null;
 
   handleHideBookingForCurrentUser: (booking: any) => void;
   handleTutorMeetingLinkUpdate: (booking: any) => void;
   handleTutorBookingStatusChange: (booking: any, newStatus: string) => void;
   handleTutorRescheduleBooking: (booking: any) => void;
   handleTutorUploadSessionResource: (booking: any, file: File) => void | Promise<void>;
+  handleTutorRemoveSessionResource: (booking: any, resource: any) => void | Promise<void>;
+  handleDownloadSessionResource: (booking: any, resource: any) => void | Promise<void>;
 }
 
 const fadeUp = {
@@ -109,6 +114,20 @@ const getPaymentBadgeClassName = (paymentStatus: string, fallbackClassName: stri
   return fallbackClassName;
 };
 
+const resolveSessionResourceRef = (resource: any): string => {
+  return String(resource?.id || resource?.blobName || resource?.url || '').trim();
+};
+
+const buildSessionResourceDownloadHref = (booking: any, resource: any): string => {
+  const bookingId = String(booking?.id || '').trim();
+  const resourceRef = resolveSessionResourceRef(resource);
+  if (!bookingId || !resourceRef) {
+    return String(resource?.url || '#').trim() || '#';
+  }
+
+  return `/api/bookings/${encodeURIComponent(bookingId)}/resources/${encodeURIComponent(resourceRef)}/download`;
+};
+
 type InfoTileProps = {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
@@ -141,11 +160,15 @@ export const TutorSessionsPage: React.FC<TutorSessionsPageProps> = ({
   canStudentManageBeforeStart,
   isSessionJoinEnabled,
   activeResourceUploadBookingId,
+  activeResourceDeleteKey,
+  activeResourceDownloadKey,
   handleHideBookingForCurrentUser,
   handleTutorMeetingLinkUpdate,
   handleTutorBookingStatusChange,
   handleTutorRescheduleBooking,
   handleTutorUploadSessionResource,
+  handleTutorRemoveSessionResource,
+  handleDownloadSessionResource,
 }) => {
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-8 py-8 md:py-12">
@@ -295,6 +318,9 @@ export const TutorSessionsPage: React.FC<TutorSessionsPageProps> = ({
                         <p className="mt-1 font-semibold text-indigo-900">
                           Requested: {booking.rescheduleRequest.requestedDate} at {booking.rescheduleRequest.requestedTimeSlot}
                         </p>
+                        {booking.rescheduleRequest.note && (
+                          <p className="mt-1 text-xs font-medium text-indigo-700">Note: {booking.rescheduleRequest.note}</p>
+                        )}
                       </div>
                     )}
 
@@ -302,23 +328,45 @@ export const TutorSessionsPage: React.FC<TutorSessionsPageProps> = ({
                       <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                         <p className="text-xs font-black uppercase tracking-wider text-slate-500 mb-2">Shared Resources</p>
                         <div className="space-y-2">
-                          {sessionResources.map((resource: any) => (
-                            <div
-                              key={resource.id || `${booking.id}-${resource.url}`}
-                              className="flex items-center justify-between gap-3 rounded-lg bg-white border border-slate-200 px-3 py-2"
-                            >
-                              <p className="text-xs font-semibold text-slate-700 truncate">{resource.name || 'Session Resource'}</p>
-                              <a
-                                href={resource.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                download
-                                className="text-xs font-bold text-indigo-600 hover:text-indigo-700"
+                          {sessionResources.map((resource: any) => {
+                            const resourceRef = resolveSessionResourceRef(resource);
+                            const actionKey = `${booking.id}:${resourceRef}`;
+                            const isRemovingResource = activeResourceDeleteKey === actionKey;
+                            const isDownloadingResource = activeResourceDownloadKey === actionKey;
+
+                            return (
+                              <div
+                                key={resource.id || `${booking.id}-${resource.url}`}
+                                className="flex items-center justify-between gap-3 rounded-lg bg-white border border-slate-200 px-3 py-2"
                               >
-                                Download
-                              </a>
-                            </div>
-                          ))}
+                                <p className="text-xs font-semibold text-slate-700 truncate">{resource.name || 'Session Resource'}</p>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={!resourceRef || isDownloadingResource || isRemovingResource}
+                                    onClick={() => {
+                                      void Promise.resolve(handleDownloadSessionResource(booking, resource));
+                                    }}
+                                    className="text-xs font-bold text-indigo-600 hover:text-indigo-700 disabled:text-slate-400"
+                                    title={buildSessionResourceDownloadHref(booking, resource)}
+                                  >
+                                    {isDownloadingResource ? 'Downloading...' : 'Download'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={!resourceRef || isRemovingResource || isDownloadingResource}
+                                    onClick={() => {
+                                      void Promise.resolve(handleTutorRemoveSessionResource(booking, resource));
+                                    }}
+                                    className="inline-flex items-center gap-1 text-xs font-bold text-rose-600 hover:text-rose-700 disabled:text-slate-400"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    {isRemovingResource ? 'Removing...' : 'Remove'}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     )}

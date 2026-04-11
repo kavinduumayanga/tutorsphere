@@ -23,6 +23,7 @@ import {
   Download,
 } from "lucide-react";
 import { formatLkr } from "../../utils/currency";
+import { apiService } from "../../services/apiService";
 
 type BookingCheckoutPayload = {
   slotId: string;
@@ -38,6 +39,7 @@ type BookingCheckoutPayload = {
 type BookingCheckoutResponse = {
   ok: boolean;
   error?: string;
+  bookingId?: string;
 };
 
 interface TutorBookingPageProps {
@@ -341,17 +343,10 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
     title: string;
     message: string;
     paymentReference?: string;
+    bookingId?: string;
   } | null>(null);
-  const [receiptModalOpen, setReceiptModalOpen] = useState(false);
-  const [lastSuccessfulReceipt, setLastSuccessfulReceipt] = useState<{
-    tutorName: string;
-    dateLabel: string;
-    timeLabel: string;
-    durationHours: number;
-    totalAmount: number;
-    paymentReference: string;
-    issuedAtIso: string;
-  } | null>(null);
+  const [isDownloadingReceipt, setIsDownloadingReceipt] = useState(false);
+  const [receiptDownloadError, setReceiptDownloadError] = useState<string | null>(null);
 
   if (!tutor) {
     return (
@@ -451,41 +446,13 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
     setTouchedPaymentFields((prev) => ({ ...prev, [field]: true }));
   };
 
-  const downloadReceipt = (receipt: NonNullable<typeof lastSuccessfulReceipt>) => {
-    const issuedDate = new Date(receipt.issuedAtIso);
-    const issuedAt = Number.isNaN(issuedDate.getTime())
-      ? receipt.issuedAtIso
-      : issuedDate.toLocaleString('en-US');
-
-    const content = [
-      'TutorSphere Payment Receipt',
-      '---------------------------',
-      `Tutor: ${receipt.tutorName}`,
-      `Session Date: ${receipt.dateLabel}`,
-      `Session Time: ${receipt.timeLabel}`,
-      `Duration: ${receipt.durationHours.toFixed(2)} hour(s)`,
-      `Total Paid: ${formatLkr(receipt.totalAmount)}`,
-      `Payment Reference: ${receipt.paymentReference}`,
-      `Issued At: ${issuedAt}`,
-    ].join('\n');
-
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `tutorsphere-receipt-${receipt.paymentReference}.txt`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    URL.revokeObjectURL(url);
-  };
-
   const handleContinueToCheckout = () => {
     if (!selectedSlot) {
       return;
     }
 
     setCheckoutError(null);
+    setReceiptDownloadError(null);
     setTouchedPaymentFields({
       cardholderName: false,
       cardNumber: false,
@@ -519,6 +486,7 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
 
     setIsProcessingPayment(true);
     setCheckoutError(null);
+    setReceiptDownloadError(null);
 
     try {
       await new Promise((resolve) => setTimeout(resolve, 1200));
@@ -573,21 +541,31 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
         title: 'Booking Confirmed!',
         message: 'Payment was successful and your session is now confirmed.',
         paymentReference,
+        bookingId: response.bookingId,
       });
-      setLastSuccessfulReceipt({
-        tutorName: displayName,
-        dateLabel: sessionDateLabel,
-        timeLabel: selectedSlot.label,
-        durationHours: selectedSessionDurationHours,
-        totalAmount: sessionTotalAmount,
-        paymentReference,
-        issuedAtIso: new Date().toISOString(),
-      });
-      setReceiptModalOpen(true);
     } catch (error) {
       setCheckoutError(error instanceof Error ? error.message : 'Failed to complete checkout. Please try again.');
     } finally {
       setIsProcessingPayment(false);
+    }
+  };
+
+  const handleDownloadReceipt = async () => {
+    const bookingId = String(bookingResult?.bookingId || '').trim();
+    if (!bookingId) {
+      setReceiptDownloadError('Receipt is not ready yet. Please refresh your sessions and try again.');
+      return;
+    }
+
+    setIsDownloadingReceipt(true);
+    setReceiptDownloadError(null);
+
+    try {
+      await apiService.downloadBookingReceipt(bookingId);
+    } catch (error) {
+      setReceiptDownloadError(error instanceof Error ? error.message : 'Failed to download receipt. Please try again.');
+    } finally {
+      setIsDownloadingReceipt(false);
     }
   };
 
@@ -711,12 +689,16 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
                 {isSuccess ? (
                   <>
                     <button
-                      onClick={() => setReceiptModalOpen(true)}
-                      className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-200 flex items-center justify-center gap-2"
+                      onClick={handleDownloadReceipt}
+                      disabled={isDownloadingReceipt || !bookingResult.bookingId}
+                      className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-200 flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-70"
                     >
                       <Download className="w-5 h-5" />
-                      View Receipt
+                      {isDownloadingReceipt ? 'Downloading Receipt...' : 'Download Receipt'}
                     </button>
+                    {receiptDownloadError && (
+                      <p className="text-sm font-semibold text-rose-600">{receiptDownloadError}</p>
+                    )}
                     <button
                       onClick={onBackToDashboard}
                       className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200 flex items-center justify-center gap-2"
@@ -748,75 +730,6 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
             </div>
           </motion.div>
         </main>
-
-        <AnimatePresence>
-          {isSuccess && receiptModalOpen && lastSuccessfulReceipt && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4 py-6"
-              onClick={() => setReceiptModalOpen(false)}
-            >
-              <motion.div
-                initial={{ opacity: 0, scale: 0.96, y: 12 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.96, y: 12 }}
-                transition={{ type: 'spring', damping: 24, stiffness: 300 }}
-                className="w-full max-w-lg rounded-3xl border border-emerald-200 bg-white shadow-2xl overflow-hidden"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-emerald-50 to-teal-50">
-                  <h3 className="text-xl font-extrabold text-slate-900">Payment Receipt</h3>
-                  <p className="mt-1 text-sm font-medium text-slate-600">Your payment was completed successfully.</p>
-                </div>
-
-                <div className="p-6 space-y-3 text-sm">
-                  <div className="flex justify-between gap-4">
-                    <span className="font-semibold text-slate-500">Tutor</span>
-                    <span className="font-bold text-slate-900 text-right">{lastSuccessfulReceipt.tutorName}</span>
-                  </div>
-                  <div className="flex justify-between gap-4">
-                    <span className="font-semibold text-slate-500">Date</span>
-                    <span className="font-bold text-slate-900 text-right">{lastSuccessfulReceipt.dateLabel}</span>
-                  </div>
-                  <div className="flex justify-between gap-4">
-                    <span className="font-semibold text-slate-500">Time</span>
-                    <span className="font-bold text-slate-900 text-right">{lastSuccessfulReceipt.timeLabel}</span>
-                  </div>
-                  <div className="flex justify-between gap-4">
-                    <span className="font-semibold text-slate-500">Duration</span>
-                    <span className="font-bold text-slate-900 text-right">{lastSuccessfulReceipt.durationHours.toFixed(2)} hour(s)</span>
-                  </div>
-                  <div className="flex justify-between gap-4">
-                    <span className="font-semibold text-slate-500">Total Paid</span>
-                    <span className="font-black text-emerald-700 text-right">{formatLkr(lastSuccessfulReceipt.totalAmount)}</span>
-                  </div>
-                  <div className="flex justify-between gap-4">
-                    <span className="font-semibold text-slate-500">Payment Ref</span>
-                    <span className="font-bold text-slate-900 text-right break-all">{lastSuccessfulReceipt.paymentReference}</span>
-                  </div>
-                </div>
-
-                <div className="px-6 pb-6 flex flex-col sm:flex-row gap-3">
-                  <button
-                    onClick={() => downloadReceipt(lastSuccessfulReceipt)}
-                    className="flex-1 py-3 rounded-2xl bg-emerald-600 text-white font-bold hover:bg-emerald-700 transition-colors flex items-center justify-center gap-2"
-                  >
-                    <Download className="w-4 h-4" />
-                    Download Receipt
-                  </button>
-                  <button
-                    onClick={() => setReceiptModalOpen(false)}
-                    className="sm:w-36 py-3 rounded-2xl border border-slate-200 bg-white text-slate-700 font-bold hover:bg-slate-50 transition-colors"
-                  >
-                    Close
-                  </button>
-                </div>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
       </div>
     );
   }

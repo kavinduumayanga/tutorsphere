@@ -36,11 +36,13 @@ export interface StudentSessionsPageProps {
   isValidMeetingLink: (link: string | undefined) => boolean;
   canStudentManageBeforeStart: (booking: any) => boolean;
   isSessionJoinEnabled: (booking: any) => boolean;
+  activeResourceDownloadKey: string | null;
 
   handleHideBookingForCurrentUser: (booking: any) => void;
   handleStudentCancelBooking: (booking: any) => void;
   handleStudentRescheduleDecision: (booking: any, decision: 'accept' | 'decline') => void;
   handleSubmitSessionRating: (booking: any) => void;
+  handleDownloadSessionResource: (booking: any, resource: any) => void | Promise<void>;
 }
 
 const fadeUp = {
@@ -124,6 +126,20 @@ const getPaymentBadgeClassName = (paymentStatus: string, fallbackClassName: stri
   return fallbackClassName;
 };
 
+const resolveSessionResourceRef = (resource: any): string => {
+  return String(resource?.id || resource?.blobName || resource?.url || '').trim();
+};
+
+const buildSessionResourceDownloadHref = (booking: any, resource: any): string => {
+  const bookingId = String(booking?.id || '').trim();
+  const resourceRef = String(resource?.id || resource?.blobName || resource?.url || '').trim();
+  if (!bookingId || !resourceRef) {
+    return String(resource?.url || '#').trim() || '#';
+  }
+
+  return `/api/bookings/${encodeURIComponent(bookingId)}/resources/${encodeURIComponent(resourceRef)}/download`;
+};
+
 type InfoTileProps = {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
@@ -159,10 +175,12 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
   isValidMeetingLink,
   canStudentManageBeforeStart,
   isSessionJoinEnabled,
+  activeResourceDownloadKey,
   handleHideBookingForCurrentUser,
   handleStudentCancelBooking,
   handleStudentRescheduleDecision,
-  handleSubmitSessionRating
+  handleSubmitSessionRating,
+  handleDownloadSessionResource,
 }) => {
   const [reviewModalBooking, setReviewModalBooking] = useState<any>(null);
 
@@ -311,6 +329,9 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
                         <p className="mt-1 text-sm font-semibold text-indigo-900">
                           Tutor proposed: {booking.rescheduleRequest.requestedDate} at {booking.rescheduleRequest.requestedTimeSlot}
                         </p>
+                        {booking.rescheduleRequest.note && (
+                          <p className="mt-1 text-xs font-medium text-indigo-700">Note: {booking.rescheduleRequest.note}</p>
+                        )}
                         <div className="mt-3 flex flex-col sm:flex-row gap-2">
                           <button
                             type="button"
@@ -336,23 +357,31 @@ export const StudentSessionsPage: React.FC<StudentSessionsPageProps> = ({
                       <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                         <p className="text-xs font-black uppercase tracking-wider text-slate-500 mb-2">Shared Resources</p>
                         <div className="space-y-2">
-                          {sessionResources.map((resource: any) => (
-                            <div
-                              key={resource.id || `${booking.id}-${resource.url}`}
-                              className="flex items-center justify-between gap-3 rounded-lg bg-white border border-slate-200 px-3 py-2"
-                            >
-                              <p className="text-xs font-semibold text-slate-700 truncate">{resource.name || 'Session Resource'}</p>
-                              <a
-                                href={resource.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                download
-                                className="text-xs font-bold text-indigo-600 hover:text-indigo-700"
+                          {sessionResources.map((resource: any) => {
+                            const resourceRef = resolveSessionResourceRef(resource);
+                            const actionKey = `${booking.id}:${resourceRef}`;
+                            const isDownloadingResource = activeResourceDownloadKey === actionKey;
+
+                            return (
+                              <div
+                                key={resource.id || `${booking.id}-${resource.url}`}
+                                className="flex items-center justify-between gap-3 rounded-lg bg-white border border-slate-200 px-3 py-2"
                               >
-                                Download
-                              </a>
-                            </div>
-                          ))}
+                                <p className="text-xs font-semibold text-slate-700 truncate">{resource.name || 'Session Resource'}</p>
+                                <button
+                                  type="button"
+                                  disabled={!resourceRef || isDownloadingResource}
+                                  onClick={() => {
+                                    void Promise.resolve(handleDownloadSessionResource(booking, resource));
+                                  }}
+                                  className="text-xs font-bold text-indigo-600 hover:text-indigo-700 disabled:text-slate-400"
+                                  title={buildSessionResourceDownloadHref(booking, resource)}
+                                >
+                                  {isDownloadingResource ? 'Downloading...' : 'Download'}
+                                </button>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     )}

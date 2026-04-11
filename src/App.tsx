@@ -73,6 +73,7 @@ import { QuizChatbotPage } from './components/pages/QuizChatbotPage';
 import { FindTutorsPage } from './components/pages/FindTutorsPage';
 import { CertificateModal } from './components/common/CertificateModal';
 import { ConfirmDialog } from './components/common/ConfirmDialog';
+import { RescheduleSessionModal, RescheduleSessionPayload } from './components/common/RescheduleSessionModal';
 import { ForgotPasswordPage } from './components/pages/ForgotPasswordPage';
 import { TutorDashboardPage } from './components/pages/TutorDashboardPage';
 import { StudentDashboardPage } from './components/pages/StudentDashboardPage';
@@ -244,6 +245,41 @@ const parseRouteFromLocation = (
   const mappedTab = staticRouteMap[staticPath];
   if (mappedTab) {
     return { tab: mappedTab };
+  }
+
+  const prefixedRouteMap: Array<{ prefix: string; tab: Tab }> = [
+    { prefix: '/home/', tab: 'home' },
+    { prefix: '/tutors/', tab: 'tutors' },
+    { prefix: '/questions/', tab: 'questions' },
+    { prefix: '/qa/', tab: 'questions' },
+    { prefix: '/availability/', tab: 'manageAvailability' },
+    { prefix: '/manage-availability/', tab: 'manageAvailability' },
+    { prefix: '/courses/', tab: 'courses' },
+    { prefix: '/resources/', tab: 'resources' },
+    { prefix: '/aiassistant/', tab: 'quizzes' },
+    { prefix: '/assistant/', tab: 'quizzes' },
+    { prefix: '/quizzes/', tab: 'quizzes' },
+    { prefix: '/register/student/', tab: 'registerStudent' },
+    { prefix: '/register/tutor/', tab: 'registerTutor' },
+    { prefix: '/register/', tab: 'registerSelect' },
+    { prefix: '/forgot-password/', tab: 'forgotPassword' },
+    { prefix: '/dashboard/', tab: 'dashboard' },
+    { prefix: '/sessions/tutor/', tab: 'tutorSessions' },
+    { prefix: '/sessions/student/', tab: 'studentSessions' },
+    { prefix: '/messages/', tab: 'messages' },
+    { prefix: '/earnings/', tab: 'earnings' },
+    { prefix: '/settings/', tab: 'settings' },
+    { prefix: '/notifications/', tab: 'notifications' },
+    { prefix: '/about/', tab: 'about' },
+  ];
+
+  if (staticPath.startsWith('/profile/')) {
+    return { tab: resolveProfileTabForUser(user) };
+  }
+
+  const matchedPrefixedRoute = prefixedRouteMap.find((entry) => staticPath.startsWith(entry.prefix));
+  if (matchedPrefixedRoute) {
+    return { tab: matchedPrefixedRoute.tab };
   }
 
   if (search) {
@@ -693,10 +729,14 @@ export default function App() {
   const [sessionRatingDrafts, setSessionRatingDrafts] = useState<Record<string, SessionRatingDraft>>({});
   const [activeRatingActionBookingId, setActiveRatingActionBookingId] = useState<string | null>(null);
   const [activeResourceUploadBookingId, setActiveResourceUploadBookingId] = useState<string | null>(null);
+  const [activeResourceDeleteKey, setActiveResourceDeleteKey] = useState<string | null>(null);
+  const [activeResourceDownloadKey, setActiveResourceDownloadKey] = useState<string | null>(null);
   const [tutorTransactionFilter, setTutorTransactionFilter] = useState<TutorTransactionFilter>('all');
   const [tutorTransactionSortOrder, setTutorTransactionSortOrder] = useState<TutorTransactionSortOrder>('newest');
   const [bookingCancelNotice, setBookingCancelNotice] = useState<string | null>(null);
   const [pendingCancelBooking, setPendingCancelBooking] = useState<{ booking: Booking; actorRole: 'student' | 'tutor' } | null>(null);
+  const [rescheduleModalBooking, setRescheduleModalBooking] = useState<Booking | null>(null);
+  const [isSubmittingRescheduleRequest, setIsSubmittingRescheduleRequest] = useState(false);
   const [withdrawalRequests, setWithdrawalRequests] = useState<WithdrawalRequest[]>([]);
   const [withdrawalSummary, setWithdrawalSummary] = useState<WithdrawalSummary>({
     totalEarnings: 0,
@@ -833,6 +873,18 @@ export default function App() {
       (normalizedRoute.bookingTutorId || null) !== bookingTutorId ||
       (normalizedRoute.courseId || null) !== activeLearningCourseId;
 
+    const nextPath = routeTargetToPath(normalizedRoute);
+    const currentPath = `${normalizePathname(window.location.pathname)}${window.location.search}`;
+    const historyMode: HistoryMode = needsStateCorrection ? 'replace' : pendingHistoryModeRef.current;
+
+    if (currentPath !== nextPath) {
+      if (historyMode === 'replace') {
+        window.history.replaceState(null, '', nextPath);
+      } else {
+        window.history.pushState(null, '', nextPath);
+      }
+    }
+
     if (needsStateCorrection) {
       pendingHistoryModeRef.current = 'replace';
       setViewingTutorId(normalizedRoute.tutorId || null);
@@ -841,17 +893,6 @@ export default function App() {
       setActiveVideoModuleId(null);
       setActiveTabState(normalizedRoute.tab);
       return;
-    }
-
-    const nextPath = routeTargetToPath(normalizedRoute);
-    const currentPath = `${normalizePathname(window.location.pathname)}${window.location.search}`;
-
-    if (currentPath !== nextPath) {
-      if (pendingHistoryModeRef.current === 'replace') {
-        window.history.replaceState(null, '', nextPath);
-      } else {
-        window.history.pushState(null, '', nextPath);
-      }
     }
 
     pendingHistoryModeRef.current = 'push';
@@ -879,6 +920,15 @@ export default function App() {
   }, [currentUser, activeTab, sessionPersistence, hasLoadedSession]);
 
   useEffect(() => {
+    if (!hasLoadedSession) {
+      return;
+    }
+
+    const hasPendingStoredUserHydration = !currentUser && Boolean(loadStoredSession()?.session?.user);
+    if (hasPendingStoredUserHydration) {
+      return;
+    }
+
     if (activeTab === 'tutorProfile' && !viewingTutorId) {
       setActiveTab('tutors', { replace: true });
       return;
@@ -899,7 +949,14 @@ export default function App() {
       return;
     }
     setActiveTab(currentUser ? 'dashboard' : 'home', { replace: true });
-  }, [activeTab, currentUser, viewingTutorId, bookingTutorId]);
+  }, [
+    activeTab,
+    currentUser,
+    viewingTutorId,
+    bookingTutorId,
+    hasLoadedSession,
+    setActiveTab,
+  ]);
 
   useEffect(() => {
     if (activeTab === 'registerSelect' || activeTab === 'registerStudent' || activeTab === 'registerTutor' || activeTab === 'forgotPassword') {
@@ -1126,6 +1183,11 @@ export default function App() {
       return;
     }
 
+    const hasPendingStoredUserHydration = !currentUser && Boolean(loadStoredSession()?.session?.user);
+    if (hasPendingStoredUserHydration) {
+      return;
+    }
+
     if (!activeLearningCourseId) {
       setActiveTab('courses', { replace: true });
       return;
@@ -1304,6 +1366,20 @@ export default function App() {
   const primaryNavTabs: Tab[] = ['home', 'tutors', 'courses', 'resources', 'quizzes'];
   const navTabs = currentUser ? availableTabs.filter(tab => primaryNavTabs.includes(tab)) : primaryNavTabs;
   const canUseChatbot = (!currentUser || isStudent) && activeTab === 'home';
+  const profileTabForCurrentUser = resolveProfileTabForUser(currentUser);
+
+  const handleUserMenuNavigate = useCallback(
+    (tab: Tab) => {
+      setIsNotificationPanelOpen(false);
+      setIsUserMenuOpen(false);
+      setActiveTab(tab);
+    },
+    [setActiveTab]
+  );
+
+  const handleMyProfileMenuClick = useCallback(() => {
+    handleUserMenuNavigate(profileTabForCurrentUser);
+  }, [handleUserMenuNavigate, profileTabForCurrentUser]);
 
   const resolveNotificationTargetTab = (notification: AppNotification): Tab => {
     const candidate = String(notification.targetTab || '').trim() as Tab;
@@ -1717,7 +1793,7 @@ export default function App() {
       paymentReference?: string;
       paymentFailureReason?: string;
     }
-  ): Promise<{ ok: boolean; error?: string }> => {
+  ): Promise<{ ok: boolean; error?: string; bookingId?: string }> => {
     if (!currentUser) {
       setShowAuthModal(true);
       return { ok: false, error: 'Please sign in to continue.' };
@@ -1766,7 +1842,7 @@ export default function App() {
         },
         ...prevBookings,
       ]);
-      return { ok: true };
+      return { ok: true, bookingId: booking.id };
     } catch (error: any) {
       return { ok: false, error: error?.message || 'Failed to save booking.' };
     }
@@ -3435,13 +3511,6 @@ export default function App() {
     return `${hour12}:${String(minutesRaw).padStart(2, '0')} ${meridiem}`;
   };
 
-  const toIsoDateString = (date: Date): string => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-
   const applyBookingUpdateToState = (updatedBooking: Booking) => {
     setBookings((prevBookings) =>
       prevBookings.map((booking) =>
@@ -3622,81 +3691,60 @@ export default function App() {
     }
   };
 
-  const handleTutorRescheduleBooking = async (booking: Booking) => {
+  const handleTutorRescheduleBooking = (booking: Booking) => {
     if (!currentUser || currentUser.role !== 'tutor') {
-      alert('Only tutor accounts can reschedule sessions.');
       return;
     }
 
     if (booking.status === 'cancelled' || booking.status === 'completed') {
-      alert('Only active sessions can be rescheduled.');
       return;
     }
 
     if (!canStudentManageBeforeStart(booking)) {
-      alert('You can only reschedule sessions before the session start time.');
       return;
     }
 
     if ((booking.paymentStatus || 'pending') !== 'paid') {
-      alert('Only paid sessions can be rescheduled.');
       return;
     }
 
     if (String((booking as any)?.rescheduleRequest?.status || '').trim().toLowerCase() === 'pending') {
-      alert('A reschedule request is already pending student approval for this session.');
       return;
     }
 
-    const currentStartDate = parseBookingStartDate(booking) || new Date(Date.now() + 24 * 60 * 60 * 1000);
-    const dateInput = prompt('Enter new session date (YYYY-MM-DD):', toIsoDateString(currentStartDate))?.trim();
-    if (!dateInput) {
-      return;
-    }
+    setRescheduleModalBooking(booking);
+  };
 
-    const nextDateCandidate = new Date(`${dateInput}T00:00:00`);
-    if (Number.isNaN(nextDateCandidate.getTime())) {
-      alert('Invalid date format. Use YYYY-MM-DD.');
-      return;
-    }
-
-    const defaultTime = String(booking.timeSlot || '').split('-')[0]?.trim();
-    const defaultTime24Match = defaultTime?.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-    let defaultTime24 = '09:00';
-    if (defaultTime24Match) {
-      let hours = Number(defaultTime24Match[1]);
-      const minutes = Number(defaultTime24Match[2]);
-      const meridiem = defaultTime24Match[3].toUpperCase();
-      if (hours === 12) {
-        hours = meridiem === 'AM' ? 0 : 12;
-      } else if (meridiem === 'PM') {
-        hours += 12;
-      }
-      defaultTime24 = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-    }
-
-    const timeInput = prompt('Enter new start time (HH:MM in 24-hour format):', defaultTime24)?.trim();
-    if (!timeInput) {
-      return;
+  const handleTutorRescheduleRequestSubmit = async ({
+    dateInput,
+    timeInput,
+    note,
+  }: RescheduleSessionPayload) => {
+    const booking = rescheduleModalBooking;
+    if (!booking) {
+      throw new Error('Booking details are unavailable for rescheduling.');
     }
 
     const startLabel = formatTimeLabelFrom24Hour(timeInput);
     if (!startLabel) {
-      alert('Invalid time format. Use HH:MM in 24-hour format.');
-      return;
+      throw new Error('Invalid time format. Please use a valid start time.');
     }
 
-    const [hoursPart, minutesPart] = timeInput.split(':');
-    const nextSessionStart = new Date(nextDateCandidate);
-    nextSessionStart.setHours(Number(hoursPart), Number(minutesPart), 0, 0);
+    const nextSessionStart = new Date(`${dateInput}T${timeInput}:00`);
+    if (Number.isNaN(nextSessionStart.getTime())) {
+      throw new Error('Selected date and time are invalid.');
+    }
 
     if (nextSessionStart.getTime() <= Date.now()) {
-      alert('Rescheduled session must be in the future.');
-      return;
+      throw new Error('Rescheduled session must be in the future.');
     }
 
     const nextSessionEnd = new Date(nextSessionStart.getTime() + 60 * 60 * 1000);
-    const nextEndLabel = formatTimeLabelFrom24Hour(`${String(nextSessionEnd.getHours()).padStart(2, '0')}:${String(nextSessionEnd.getMinutes()).padStart(2, '0')}`) || startLabel;
+    const nextEndLabel =
+      formatTimeLabelFrom24Hour(
+        `${String(nextSessionEnd.getHours()).padStart(2, '0')}:${String(nextSessionEnd.getMinutes()).padStart(2, '0')}`
+      ) || startLabel;
+
     const formattedDate = nextSessionStart.toLocaleDateString('en-US', {
       weekday: 'long',
       year: 'numeric',
@@ -3706,6 +3754,7 @@ export default function App() {
 
     const requestedTimeSlot = `${startLabel} - ${nextEndLabel}`;
 
+    setIsSubmittingRescheduleRequest(true);
     setActiveBookingActionId(booking.id);
     try {
       const updatedBooking = await apiService.updateBooking(booking.id, {
@@ -3713,15 +3762,17 @@ export default function App() {
           requestedDate: formattedDate,
           requestedTimeSlot,
           requestedSlotId: booking.slotId,
+          note: note || undefined,
         },
       } as any);
 
       applyBookingUpdateToState(updatedBooking);
-      alert('Reschedule request sent to the student for approval.');
+      setRescheduleModalBooking(null);
     } catch (error) {
       console.error('Failed to request reschedule:', error);
-      alert('Failed to send reschedule request. Please try again.');
+      throw new Error(error instanceof Error ? error.message : 'Failed to send reschedule request. Please try again.');
     } finally {
+      setIsSubmittingRescheduleRequest(false);
       setActiveBookingActionId(null);
     }
   };
@@ -3762,7 +3813,7 @@ export default function App() {
 
     setActiveResourceUploadBookingId(booking.id);
     try {
-      const uploaded = await apiService.uploadTutorResource(file);
+      const uploaded = await apiService.uploadBookingSessionResource(file);
       const resourceUrl = String(uploaded.blobUrl || uploaded.url || uploaded.path || '').trim();
       if (!resourceUrl) {
         throw new Error('Resource upload completed but no file URL was returned.');
@@ -3774,6 +3825,7 @@ export default function App() {
         name: String(file.name || uploaded.originalName || 'Session Resource').trim() || 'Session Resource',
         url: resourceUrl,
         blobName: String(uploaded.blobName || '').trim() || undefined,
+        containerName: String(uploaded.containerName || '').trim() || undefined,
         mimeType: String(uploaded.mimeType || file.type || '').trim() || undefined,
         size: Number.isFinite(Number(uploaded.size)) ? Number(uploaded.size) : file.size,
         uploadedByTutorId: currentUser.id,
@@ -3791,6 +3843,59 @@ export default function App() {
       alert(error instanceof Error ? error.message : 'Failed to upload session resource.');
     } finally {
       setActiveResourceUploadBookingId(null);
+    }
+  };
+
+  const getBookingSessionResourceRef = (resource: any): string => {
+    return String(resource?.id || resource?.blobName || resource?.url || '').trim();
+  };
+
+  const handleDownloadSessionResource = async (booking: Booking, resource: any) => {
+    const resourceRef = getBookingSessionResourceRef(resource);
+    if (!resourceRef) {
+      alert('This resource reference is invalid and cannot be downloaded.');
+      return;
+    }
+
+    const actionKey = `${booking.id}:${resourceRef}`;
+    setActiveResourceDownloadKey(actionKey);
+    try {
+      await apiService.downloadBookingSessionResource(
+        booking.id,
+        resourceRef,
+        String(resource?.name || 'session-resource').trim() || 'session-resource'
+      );
+    } catch (error) {
+      console.error('Failed to download session resource:', error);
+      alert(error instanceof Error ? error.message : 'Failed to download session resource.');
+    } finally {
+      setActiveResourceDownloadKey(null);
+    }
+  };
+
+  const handleTutorRemoveSessionResource = async (booking: Booking, resource: any) => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      alert('Only tutor accounts can remove session resources.');
+      return;
+    }
+
+    const resourceRef = getBookingSessionResourceRef(resource);
+    if (!resourceRef) {
+      alert('This resource reference is invalid and cannot be removed.');
+      return;
+    }
+
+    const actionKey = `${booking.id}:${resourceRef}`;
+    setActiveResourceDeleteKey(actionKey);
+    try {
+      const updatedBooking = await apiService.deleteBookingSessionResource(booking.id, resourceRef);
+      applyBookingUpdateToState(updatedBooking);
+      alert('Session resource removed successfully.');
+    } catch (error) {
+      console.error('Failed to remove session resource:', error);
+      alert(error instanceof Error ? error.message : 'Failed to remove session resource.');
+    } finally {
+      setActiveResourceDeleteKey(null);
     }
   };
 
@@ -4505,18 +4610,23 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16 flex-nowrap">
             {/* Left: Logo */}
-            <div className="flex items-center gap-2 cursor-pointer shrink-0" onClick={() => setActiveTab('home')}>
+            <button
+              type="button"
+              onClick={() => setActiveTab('home')}
+              className="flex items-center gap-2 cursor-pointer shrink-0"
+            >
               <div className="bg-indigo-600 p-2 rounded-lg">
                 <GraduationCap className="text-white w-6 h-6" />
               </div>
               <span className="text-xl font-bold tracking-tight text-indigo-900 whitespace-nowrap">TutorSphere</span>
-            </div>
+            </button>
 
             {/* Center: Nav Links */}
             <div className="flex items-center justify-center gap-4 flex-1 flex-nowrap">
               {navTabs.map(tab => (
                 <div key={tab} className="relative group">
                   <button
+                    type="button"
                     onClick={() => setActiveTab(tab)}
                     className={`text-base font-semibold whitespace-nowrap px-1 py-2 transition-colors ${activeTab === tab ? 'text-indigo-600' : 'text-slate-500 hover:text-indigo-500'}`}
                   >
@@ -4538,12 +4648,14 @@ export default function App() {
               {!currentUser ? (
                 <>
                   <button
+                    type="button"
                     onClick={() => { setAuthMode('login'); setShowAuthModal(true) }}
                     className="w-[100px] border border-indigo-200 text-indigo-600 hover:bg-indigo-50 py-2 rounded-full text-sm font-bold transition-all whitespace-nowrap text-center"
                   >
                     Login
                   </button>
                   <button
+                    type="button"
                     onClick={() => setActiveTab('registerSelect')}
                     className="w-[100px] bg-indigo-600 text-white py-2 rounded-full text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 whitespace-nowrap text-center"
                   >
@@ -4587,6 +4699,7 @@ export default function App() {
 
                   <div className="relative user-menu">
                     <button
+                      type="button"
                       onClick={() => {
                         setIsUserMenuOpen(!isUserMenuOpen);
                         setIsNotificationPanelOpen(false);
@@ -4604,14 +4717,16 @@ export default function App() {
                     {isUserMenuOpen && (
                       <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-lg border border-slate-200 py-2 z-50">
                         <button
-                          onClick={() => { setActiveTab('dashboard'); setIsUserMenuOpen(false) }}
+                          type="button"
+                          onClick={() => handleUserMenuNavigate('dashboard')}
                           className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
                         >
                           <User className="w-4 h-4" />
                           Dashboard
                         </button>
                         <button
-                          onClick={() => { setActiveTab('messages'); setIsUserMenuOpen(false) }}
+                          type="button"
+                          onClick={() => handleUserMenuNavigate('messages')}
                           className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center justify-between gap-2"
                         >
                           <span className="inline-flex items-center gap-2">
@@ -4624,23 +4739,17 @@ export default function App() {
                             </span>
                           )}
                         </button>
-                        {isTutor && currentTutor && (
-                          <button
-                            onClick={() => {
-                              setViewingTutorId(currentTutor.id);
-                              setActiveTab('tutorProfile');
-                              setIsUserMenuOpen(false);
-                            }}
-                            className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                            </svg>
-                            My Profile
-                          </button>
-                        )}
                         <button
-                          onClick={() => { setActiveTab('settings'); setIsUserMenuOpen(false) }}
+                          type="button"
+                          onClick={handleMyProfileMenuClick}
+                          className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                        >
+                          <User className="w-4 h-4" />
+                          My Profile
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleUserMenuNavigate('settings')}
                           className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
                         >
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -4650,7 +4759,11 @@ export default function App() {
                           Settings
                         </button>
                         <button
-                          onClick={handleSignOut}
+                          type="button"
+                          onClick={() => {
+                            setIsUserMenuOpen(false);
+                            void handleSignOut();
+                          }}
                           className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-red-50 hover:text-red-600 flex items-center gap-2"
                         >
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -6384,7 +6497,11 @@ export default function App() {
               canStudentManageBeforeStart={canStudentManageBeforeStart}
               isSessionJoinEnabled={isSessionJoinEnabled}
               activeResourceUploadBookingId={activeResourceUploadBookingId}
+              activeResourceDeleteKey={activeResourceDeleteKey}
+              activeResourceDownloadKey={activeResourceDownloadKey}
               handleTutorUploadSessionResource={handleTutorUploadSessionResource}
+              handleTutorRemoveSessionResource={handleTutorRemoveSessionResource}
+              handleDownloadSessionResource={handleDownloadSessionResource}
             />
           )}
 
@@ -6407,10 +6524,12 @@ export default function App() {
               canStudentManageBeforeStart={canStudentManageBeforeStart}
               isValidMeetingLink={isValidMeetingLink}
               isSessionJoinEnabled={isSessionJoinEnabled}
+              activeResourceDownloadKey={activeResourceDownloadKey}
               handleHideBookingForCurrentUser={handleHideBookingForCurrentUser}
               handleStudentCancelBooking={handleStudentCancelBooking}
               handleStudentRescheduleDecision={handleStudentRescheduleDecision}
               handleSubmitSessionRating={handleSubmitSessionRating}
+              handleDownloadSessionResource={handleDownloadSessionResource}
             />
           )}
 
@@ -7662,6 +7781,18 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <RescheduleSessionModal
+        isOpen={Boolean(rescheduleModalBooking)}
+        booking={rescheduleModalBooking}
+        isSubmitting={isSubmittingRescheduleRequest}
+        onCancel={() => {
+          if (!isSubmittingRescheduleRequest) {
+            setRescheduleModalBooking(null);
+          }
+        }}
+        onSubmit={handleTutorRescheduleRequestSubmit}
+      />
 
       <ConfirmDialog
         isOpen={Boolean(pendingCancelBooking)}

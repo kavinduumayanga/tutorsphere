@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle, Calendar, MessageCircle, Star, GraduationCap, ArrowRight, User } from 'lucide-react';
 import { User as UserType, Tutor } from '../../types';
 import { DEFAULT_AVATAR_PLACEHOLDER } from '../../utils/defaultAvatar';
+import { FAQSection } from '../common/FAQSection';
 
 type Tab =
   | 'home'
@@ -330,6 +331,46 @@ export const HomePage: React.FC<HomePageProps> = ({ setActiveTab, currentUser, t
           </button>
         </div>
       </section>
+
+      {/* FAQ Section */}
+      <FAQSection 
+        title="Frequently Asked Questions"
+        subtitle="Everything you need to know about the TutorSphere platform."
+        faqs={[
+          {
+            question: "What is TutorSphere?",
+            answer: "TutorSphere is an online platform connecting students with top-rated, expert tutors in STEM and ICT subjects for personalized, live, and recorded learning sessions."
+          },
+          {
+            question: "How do I find a tutor?",
+            answer: "You can browse our 'Find Tutors' page to filter educators by subject, rating, or availability, and view detailed tutor profiles to find the perfect match for your learning style."
+          },
+          {
+            question: "How do I book a session?",
+            answer: "Once you found a tutor, go to their profile, select an available time slot from their integrated calendar, and securely confirm your booking."
+          },
+          {
+            question: "Can I reschedule a session?",
+            answer: "Yes, you can easily reschedule a session up to 24 hours in advance directly through your Student Dashboard without incurring any additional charges."
+          },
+          {
+            question: "Are payments secure?",
+            answer: "Absolutely. We use industry-standard encryption to process all transactions securely, ensuring your payment information and privacy are always protected."
+          },
+          {
+            question: "How do tutors share study materials?",
+            answer: "Tutors can directly upload and share resources through the platform's secure Resource Library or send study materials via our direct messaging system."
+          },
+          {
+            question: "Can I get a refund if I cancel?",
+            answer: "Refunds are available for sessions canceled at least 24 hours prior to the scheduled time. Please review our full refund policy for detailed terms."
+          },
+          {
+            question: "Do tutors offer recorded sessions or resources?",
+            answer: "Yes, many of our expert tutors provide access to recorded sessions and comprehensive study materials as part of their structured courses."
+          }
+        ]}
+      />
     </div>
   );
 };

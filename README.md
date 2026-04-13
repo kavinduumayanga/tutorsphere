@@ -33,7 +33,7 @@ TutorSphere supports both student and tutor workflows inside one codebase.
 - Course creation, enrollment, coupon support, progress tracking, and certificate generation
 - Resource publishing and download tracking
 - Direct messaging with unread counts and presence pinging
-- In-app notifications
+- Real time In-app notifications
 - OTP-based forgot-password and password reset flow
 - Avatar, course thumbnail, course video, and resource uploads
 - AI-powered quiz/skill assessment and platform assistant features

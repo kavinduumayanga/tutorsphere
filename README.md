@@ -1,187 +1,99 @@
 # TutorSphere
 
-TutorSphere is a full-stack tutoring and learning platform built with React, TypeScript, Express, and MongoDB. It combines tutor discovery, session booking, course delivery, study resources, direct messaging, notifications, password-reset email flows, and AI-assisted learning tools in a single application.
+TutorSphere is a full-stack tutoring platform that connects students and tutors for live sessions, structured courses, resource sharing, and AI-assisted learning.
 
-## Table of Contents
+It combines a React + TypeScript frontend with an Express + MongoDB backend in one repository, with Azure Blob Storage for media uploads.
 
-- [Overview](#overview)
-- [Core Capabilities](#core-capabilities)
-- [Architecture Overview](#architecture-overview)
-- [Tech Stack](#tech-stack)
-- [Repository Structure](#repository-structure)
-- [Backend Domains](#backend-domains)
-- [AI Modules](#ai-modules)
-- [Getting Started](#getting-started)
-- [Environment Variables](#environment-variables)
-- [Available Scripts](#available-scripts)
-- [Runtime Notes](#runtime-notes)
-- [Troubleshooting](#troubleshooting)
+## Highlights
 
-## Overview
-
-TutorSphere supports both student and tutor workflows inside one codebase.
-
-- Students can browse tutors, enroll in courses, access learning resources, book sessions, chat with tutors, track study progress, and use AI-driven learning tools.
-- Tutors can manage profiles, availability, courses, learning materials, sessions, earnings, and learner communication.
-- The platform persists core entities in MongoDB and stores uploaded assets (avatars, thumbnails, videos, downloadable files) in Azure Blob Storage, while keeping only URLs and metadata in MongoDB.
-
-## Core Capabilities
-
-- Role-based student and tutor experience
-- Tutor directory with profiles, subjects, ratings, and reviews
-- Session booking lifecycle with status and payment-related fields
-- Course creation, enrollment, coupon support, progress tracking, and certificate generation
-- Resource publishing and download tracking
-- Direct messaging with unread counts and presence pinging
-- Real time In-app notifications
-- OTP-based forgot-password and password reset flow
-- Avatar, course thumbnail, course video, and resource uploads
-- AI-powered quiz/skill assessment and platform assistant features
-
-## Architecture Overview
-
-TutorSphere runs as a single full-stack TypeScript application.
-
-- `server.ts` is the main runtime entry point. It loads environment variables, connects to MongoDB, runs startup data migration/normalization tasks, mounts Express routes, manages Azure Blob-backed uploads, and enables Vite middleware in development.
-- `src/App.tsx` is the main SPA shell. It handles app state, tab navigation, and URL synchronization directly instead of using a dedicated frontend route tree.
-- `src/services/apiService.ts` is the frontend API client used across the UI.
-- `src/services/localService.ts` provides local/mock helper implementations for selected AI-like features and fallback behavior.
-- `src/models/` contains Mongoose models for the platform's persisted domain entities.
-- `src/server/` contains backend feature modules for auth, messaging, security config, and the AI assistants.
-- `src/server/storage/azureBlobService.ts` centralizes Azure Blob upload/delete/replace operations used by all file-upload flows.
+- Dual user roles: student and tutor
+- Tutor discovery, profiles, reviews, and ratings
+- Session booking and schedule management
+- Course publishing, enrollment, progress, and certificates
+- Resource library and downloadable study materials
+- Direct messaging and in-app notifications
+- OTP-based password reset via email
+- AI-powered assistants (quiz, FAQ, roadmap, and learning help)
 
 ## Tech Stack
 
 | Layer | Technologies |
 | --- | --- |
-| Frontend | React 19, TypeScript, Vite, Tailwind CSS v4, Motion, Lucide React |
-| Backend | Express, TypeScript, `tsx`, Multer (memory storage), Express Session |
-| Database | MongoDB, Mongoose, `connect-mongo` |
-| Auth and Email | JWT utilities, OTP workflow, Nodemailer with Gmail SMTP |
-| AI | Azure OpenAI-backed assistant modules plus local/mock service fallbacks |
-| Documents and Media | jsPDF, Azure Blob Storage uploads for avatars, videos, thumbnails, resources, tutor certificates, and recorded lessons |
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS v4 |
+| Backend | Express, TypeScript, tsx |
+| Database | MongoDB, Mongoose |
+| Auth and Sessions | JWT, express-session, connect-mongo |
+| Storage | Azure Blob Storage |
+| Email | Nodemailer (Gmail SMTP) |
+| AI | Azure OpenAI integrations + local fallback services |
 
-## Repository Structure
+## Project Structure
 
 ```text
 tutorsphere/
-|- server.ts                     # Main Express server and API surface
-|- package.json                  # Scripts and dependencies
-|- vite.config.ts                # Vite frontend configuration
-|- tsconfig.json                 # Frontend TypeScript config
-|- tsconfig.server.json          # Server build config
-|- .env.example                  # Example environment variables
+|- server.ts
+|- package.json
+|- .env.example
 |- src/
-|  |- App.tsx                    # Main SPA shell and navigation logic
-|  |- main.tsx                   # React bootstrap
-|  |- index.css                  # Global styles
-|  |- types.ts                   # Shared frontend data contracts
-|  |- database.ts                # MongoDB connection setup
+|  |- App.tsx
+|  |- main.tsx
+|  |- database.ts
+|  |- models/
 |  |- components/
-|  |  |- common/                 # Shared UI elements
-|  |  |- pages/                  # Page-level UI modules
-|  |- data/
-|  |  |- tutorSubjects.ts        # Canonical tutor subject helpers
-|  |- models/                    # Mongoose schemas and persistence models
+|  |  |- common/
+|  |  |- pages/
 |  |- services/
-|  |  |- apiService.ts           # Frontend REST client
-|  |  |- localService.ts         # Local/mock learning helpers
-|  |  |- geminiService.ts        # Placeholder Gemini-style mock service
 |  |- server/
-|  |  |- auth/                   # Password, OTP, JWT, and auth route logic
-|  |  |- config/                 # Runtime security config
-|  |  |- storage/                # Azure Blob Storage service utilities
-|  |  |- messages/               # Direct messaging API
-|  |  |- faq-chatbot/            # Platform assistant router and orchestration
-|  |  |- quiz-chatbot/           # Quiz chatbot compatibility layer
-|  |  |- skill-assessment-ai/    # Quiz/assessment implementation
-|  |  |- ask-and-learn-ai/       # General learning assistant service
-|  |  |- roadmap-finder/         # Career roadmap assistant service
-|  |  |- tutorsphere-assistant/  # TutorSphere platform-aware assistant
+|  |  |- auth/
+|  |  |- messages/
+|  |  |- faq-chatbot/
+|  |  |- quiz-chatbot/
+|  |  |- ask-and-learn-ai/
+|  |  |- roadmap-finder/
+|  |  |- skill-assessment-ai/
+|  |  |- tutorsphere-assistant/
+|  |  |- storage/
 |  |- utils/
-|     |- currency.ts             # Currency formatting helpers
-|- dist/                         # Production build output
+|- scripts/
 ```
 
-### Notable repository notes
+## Quick Start
 
-- `src/context/` and `src/pages/` currently exist but are empty.
-- The root also contains several one-off patch or maintenance scripts such as `patch*.cjs`, `patch*.ts`, `patch.py`, and `fix_app.js`. These do not appear to be part of the normal application runtime.
-- Files such as `server_out.log` and `current_tutor_prof.txt` look like local development artifacts rather than core source files.
+### 1. Prerequisites
 
-## Backend Domains
-
-Most backend endpoints live directly in `server.ts`, with a few route groups split into feature modules.
-
-| Domain | Purpose |
-| --- | --- |
-| `/api/auth` | Signup, login, user profile updates, avatar access, change password, forgot-password OTP flow |
-| `/api/tutors` | Tutor CRUD and tutor profile management |
-| `/api/reviews` | Tutor review creation and maintenance |
-| `/api/courses` | Course CRUD, coupons, enrollments, and payment-aware enrollment flow |
-| `/api/course-enrollments` | Enrollment listing, progress updates, and certificate download |
-| `/api/resources` | Resource CRUD and download counting |
-| `/api/bookings` | Session booking lifecycle management |
-| `/api/questions` | Student question and answer records |
-| `/api/quizzes` | Stored quiz entities |
-| `/api/study-plans` | Generated study plan persistence |
-| `/api/skill-levels` | Subject skill progression tracking |
-| `/api/notifications` | Notification listing and read state updates |
-| `/api/messages` | Conversations, direct messages, read status, delete flows, and presence ping |
-| `/api/withdrawals` | Tutor withdrawal requests and earnings summary |
-| `/api/uploads/*` | Azure Blob upload endpoints for thumbnails, videos, resources, tutor certificates, and recorded lessons |
-
-## AI Modules
-
-TutorSphere includes several AI-oriented modules under `src/server/`.
-
-- `skill-assessment-ai/` powers the quiz chat flow that is exposed through `/api/quiz-chatbot`.
-- `faq-chatbot/` exposes `/api/faq-chatbot/chat` and routes requests into different assistant modes.
-- `tutorsphere-assistant/` focuses on platform-aware answers about tutors, courses, bookings, resources, and platform usage.
-- `ask-and-learn-ai/` handles broader STEM, programming, and technology learning questions.
-- `roadmap-finder/` generates future-tech or IT career roadmap guidance.
-- `quiz-chatbot/azureOpenAiClient.ts` provides the Azure OpenAI chat client used by the AI services.
-
-The frontend also includes `src/services/localService.ts`, which supplies local/mock behavior for selected learning features, and `src/services/geminiService.ts`, which looks like an older placeholder mock integration.
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js 20 or newer
+- Node.js 20+
 - npm
-- A MongoDB instance
-- Azure Blob Storage with a connection string and containers for profile images, thumbnails, videos, resources, tutor certificates, and recorded lessons
-- Gmail SMTP credentials if you want password-reset emails to work
-- Azure OpenAI credentials if you want AI assistant features enabled
+- MongoDB instance
+- Azure Storage account (for uploads)
+- Azure OpenAI credentials (for AI features)
 
-### 1. Install dependencies
+### 2. Install dependencies
 
 ```bash
 npm install
 ```
 
-### 2. Create your local environment file
+### 3. Configure environment variables
+
+Create a .env file from .env.example, then set required values.
+
+macOS/Linux:
 
 ```bash
 cp .env.example .env
 ```
 
-### 3. Fill in the required values
+Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
 
 At minimum, configure:
 
 - `MONGODB_URI`
 - `JWT_SECRET`
 - `SESSION_SECRET`
-- `GMAIL_USER`
-- `GMAIL_APP_PASSWORD`
-- `EMAIL_FROM`
-- `OTP_EXPIRY_MINUTES`
-- `AZURE_OPENAI_ENDPOINT`
-- `AZURE_OPENAI_API_KEY`
-- `AZURE_OPENAI_DEPLOYMENT`
-- `AZURE_OPENAI_API_VERSION`
 - `AZURE_STORAGE_CONNECTION_STRING`
 - `AZURE_BLOB_CONTAINER_PROFILE_IMAGES`
 - `AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS`
@@ -190,124 +102,76 @@ At minimum, configure:
 - `AZURE_BLOB_CONTAINER_RECORDED_LESSONS`
 - `AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES`
 
-Optional upload-performance tuning variables:
+For email and AI features, also configure:
 
-- `AZURE_BLOB_LARGE_UPLOAD_BLOCK_SIZE_MB`
-- `AZURE_BLOB_LARGE_UPLOAD_CONCURRENCY`
-- `AZURE_IMAGE_AVATAR_MAX_WIDTH`
-- `AZURE_IMAGE_AVATAR_MAX_HEIGHT`
-- `AZURE_IMAGE_THUMBNAIL_MAX_WIDTH`
-- `AZURE_IMAGE_THUMBNAIL_MAX_HEIGHT`
-- `AZURE_IMAGE_QUALITY`
+- `GMAIL_USER`
+- `GMAIL_APP_PASSWORD`
+- `EMAIL_FROM`
+- `AZURE_OPENAI_ENDPOINT`
+- `AZURE_OPENAI_API_KEY`
+- `AZURE_OPENAI_DEPLOYMENT`
+- `AZURE_OPENAI_API_VERSION`
 
-### 4. Start the development server
+### 4. Start development server
 
 ```bash
 npm run dev
 ```
 
-This runs `server.ts` with `tsx`. In development, the Express server attempts to attach Vite in middleware mode, so the full stack is served from one process.
-
-### 5. Open the app
+Default app URL:
 
 ```text
 http://localhost:3000
 ```
 
-## Environment Variables
+## Scripts
 
-Use `.env.example` as the starting point.
-
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `NODE_ENV` | Recommended | Runtime mode. Defaults to development-style behavior when unset. |
-| `PORT` | Optional | HTTP port for the Express server. Defaults to `3000`. |
-| `MONGODB_URI` | Yes | MongoDB connection string. |
-| `JWT_SECRET` | Yes in production | JWT signing secret. Development fallback exists, but setting it explicitly is recommended. |
-| `SESSION_SECRET` | Yes in production | Express session secret. Development fallback exists, but setting it explicitly is recommended. |
-| `ALLOWED_ORIGINS` | Yes in production | Comma-separated browser origins allowed to call the API with credentials (CORS allowlist). |
-| `GMAIL_USER` | Required for email flow | Gmail account used for OTP email delivery. |
-| `GMAIL_APP_PASSWORD` | Required for email flow | Gmail app password used by Nodemailer. |
-| `EMAIL_FROM` | Required for email flow | Sender address for TutorSphere security emails. |
-| `OTP_EXPIRY_MINUTES` | Optional | OTP validity window. The code clamps this between 1 and 30 minutes. |
-| `PASSWORD_RESET_FRONTEND_URL` | Recommended | Frontend reset-password URL used in password-reset flows (set this to your production frontend domain in production). |
-| `PASSWORD_RESET_TOKEN_EXPIRY_MINUTES` | Optional | Legacy token-expiry setting included in `.env.example`. |
-| `AZURE_OPENAI_ENDPOINT` | Required for AI features | Azure OpenAI endpoint. |
-| `AZURE_OPENAI_API_KEY` | Required for AI features | Azure OpenAI API key. |
-| `AZURE_OPENAI_DEPLOYMENT` | Required for AI features | Azure OpenAI deployment name. |
-| `AZURE_OPENAI_API_VERSION` | Required for AI features | Azure OpenAI API version string. |
-| `AZURE_STORAGE_CONNECTION_STRING` | Required for file uploads | Azure Blob Storage connection string. |
-| `AZURE_BLOB_CONTAINER_PROFILE_IMAGES` | Required for file uploads | Container for profile images. |
-| `AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS` | Required for file uploads | Container for course thumbnails. |
-| `AZURE_BLOB_CONTAINER_VIDEOS` | Required for file uploads | Container for course and lesson videos. |
-| `AZURE_BLOB_CONTAINER_RESOURCES` | Required for file uploads | Container for course and tutor resource files. |
-| `AZURE_BLOB_CONTAINER_RECORDED_LESSONS` | Required for file uploads | Container for recorded lesson uploads. |
-| `AZURE_BLOB_CONTAINER_TUTOR_CERTIFICATES` | Required for file uploads | Container for tutor certificate uploads. |
-| `AZURE_BLOB_LARGE_UPLOAD_BLOCK_SIZE_MB` | Optional | Block size (MB) for stream-based Azure video uploads. Default `8`. |
-| `AZURE_BLOB_LARGE_UPLOAD_CONCURRENCY` | Optional | Parallel block upload workers for stream uploads. Default `5`. |
-| `AZURE_IMAGE_AVATAR_MAX_WIDTH` | Optional | Maximum avatar image width before upload optimization. Default `512`. |
-| `AZURE_IMAGE_AVATAR_MAX_HEIGHT` | Optional | Maximum avatar image height before upload optimization. Default `512`. |
-| `AZURE_IMAGE_THUMBNAIL_MAX_WIDTH` | Optional | Maximum course thumbnail width before upload optimization. Default `1280`. |
-| `AZURE_IMAGE_THUMBNAIL_MAX_HEIGHT` | Optional | Maximum course thumbnail height before upload optimization. Default `720`. |
-| `AZURE_IMAGE_QUALITY` | Optional | Compression quality (40-95) for optimized JPEG/WEBP uploads. Default `82`. |
-| `VITE_API_BASE_URL` | Optional | Frontend API override used by `src/services/apiService.ts`. |
-
-## Available Scripts
-
-| Command | Purpose |
+| Command | Description |
 | --- | --- |
-| `npm run dev` | Starts the full stack in development via `npx tsx server.ts`. |
-| `npm run build` | Builds the frontend and compiles the server into `dist/`. |
-| `npm run build:client` | Creates the production frontend bundle with Vite. |
-| `npm run build:server` | Compiles the backend TypeScript with `tsc -p tsconfig.server.json`. |
-| `npm start` | Runs `dist/server.js` in production mode. Build first. |
-| `npm run preview` | Runs `vite preview` for the frontend build only. This is not a full backend runtime. |
-| `npm run lint` | Type-checks the project with TypeScript. |
-| `npm run clean` | Removes the `dist/` directory. |
-| `npm run migrate:uploads` | Runs one-time legacy local uploads migration to Azure Blob Storage (includes DB updates and local cleanup). |
-| `npm run migrate:uploads:dry` | Runs the same migration in dry-run mode without uploads, DB writes, or cleanup deletes. |
+| `npm run dev` | Run full stack in development (`tsx server.ts`) |
+| `npm run build` | Build client and server |
+| `npm run build:client` | Build frontend with Vite |
+| `npm run build:server` | Compile backend TypeScript |
+| `npm start` | Start compiled production server |
+| `npm run preview` | Preview frontend build only |
+| `npm run lint` | Type-check project |
+| `npm run clean` | Remove `dist/` |
+| `npm run migrate:uploads` | Migrate legacy local uploads to Azure Blob |
+| `npm run migrate:uploads:dry` | Dry-run upload migration |
 
-## Legacy Upload Migration
+## Core API Areas
 
-Use this once when moving historical local files in `uploads/` to Azure Blob Storage.
+- `/api/auth` - authentication, profile updates, password reset
+- `/api/tutors` - tutor profiles and management
+- `/api/courses` - courses, coupons, enrollment flow
+- `/api/resources` - resource CRUD and download tracking
+- `/api/bookings` - booking lifecycle
+- `/api/messages` - conversations and direct messages
+- `/api/notifications` - read/unread notification state
+- `/api/quiz-chatbot` and `/api/faq-chatbot` - AI endpoints
 
-1. Run a dry run first:
+## Deployment Notes
 
-```bash
-npm run migrate:uploads:dry
-```
-
-2. Review the output for planned uploads and DB updates.
-
-3. Run the real migration:
-
-```bash
-npm run migrate:uploads
-```
-
-By default, successful migrations enforce cloud-only storage by deleting local files only after:
-
-- Azure upload succeeds (or the deterministic migration blob already exists)
-- MongoDB references are updated successfully
-
-If needed for emergency rollback prep, you can keep local files by running:
+- Build before production start:
 
 ```bash
-npx tsx scripts/migrateUploadsToAzure.ts --keep-local
+npm run build
+npm start
 ```
 
-## Runtime Notes
-
-- On startup, the server runs migration and normalization helpers for legacy users, tutor profile/account sync, course access flags, resource download counts, and booking state fields.
-- In development, sessions are stored in memory. In production, sessions are stored in MongoDB through `connect-mongo`.
-- Uploaded files are sent directly to Azure Blob Storage: memory-buffer uploads for small files and stream-based chunked uploads for large videos. MongoDB stores only file URLs plus blob metadata.
-- Production mode expects a built frontend in `dist/index.html`; `npm start` will fail if the frontend has not been built yet.
-- The frontend uses custom URL parsing and `window.history` synchronization inside `src/App.tsx` rather than a standard route declaration setup.
+- Production should provide explicit values for security and CORS settings:
+  - `JWT_SECRET`
+  - `SESSION_SECRET`
+  - `ALLOWED_ORIGINS`
 
 ## Troubleshooting
 
-- If the server exits on startup, check that `MONGODB_URI` is set and that MongoDB is reachable.
-- If forgot-password emails fail, verify `GMAIL_USER`, `GMAIL_APP_PASSWORD`, and `EMAIL_FROM`.
-- If AI assistant requests fail, verify all Azure OpenAI variables and confirm the configured deployment is active.
-- If `npm start` fails in production mode, run `npm run build` first.
-- If uploaded assets are not loading, verify `AZURE_STORAGE_CONNECTION_STRING` and the configured Azure Blob container names.
+- Server fails at startup: verify `MONGODB_URI` and database connectivity.
+- Uploads fail: verify Azure connection string and container names.
+- Password reset emails fail: verify Gmail SMTP env values.
+- AI endpoints fail: verify Azure OpenAI env values and deployment name.
+- `npm start` fails: ensure build output exists by running `npm run build` first.
+
+## License
+
+No license is currently specified in this repository.

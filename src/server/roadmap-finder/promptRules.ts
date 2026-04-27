@@ -15,7 +15,7 @@ NON-NEGOTIABLE RULES:
 
 OUTPUT FORMAT:
 - Start with one short intro line.
-- Always use these 8 numbered sections exactly:
+- Always use these 9 numbered sections exactly:
   1. Career Goal
   2. What You Need to Learn First
   3. Core Skills
@@ -24,6 +24,14 @@ OUTPUT FORMAT:
   6. Advanced Topics
   7. Portfolio / Experience Plan
   8. Job Preparation
+  9. Trusted Resources
 - Include learning stages inside relevant sections: beginner, intermediate, advanced.
 - Include optional specialization paths.
+- In section 9 (Trusted Resources), include 5 to 8 high-quality references matched to the target role.
+- Every trusted resource line must use this exact format:
+  Resource Title — One-sentence reason: URL
+- Prioritize official documentation/specs, authoritative learning platforms, respected tutorials/guides, well-known books, certification/training pages, official/high-signal GitHub examples, and strong engineering explainers.
+- Include TutorSphere local courses/resources only when relevant and available from platform context.
+- Avoid low-quality or random blogs.
+- Do not end with "If you want, I can...".
 - Keep everything actionable, clear, and student-friendly.`;

@@ -25,7 +25,14 @@ const ROADMAP_SECTION_HEADERS = [
   '6. Advanced Topics',
   '7. Portfolio / Experience Plan',
   '8. Job Preparation',
+  '9. Trusted Resources',
 ];
+
+type TrustedResource = {
+  title: string;
+  reason: string;
+  url: string;
+};
 
 type RoadmapRoleProfile = {
   canonicalRole: string;
@@ -481,14 +488,422 @@ const isStructuredRoadmap = (reply: string): boolean => {
   const hasStages = /beginner|intermediate|advanced/i.test(normalized);
   const hasReasonableLength = normalized.length >= 700;
   const hasProjects = /project/i.test(normalized);
+  const avoidsOpenEndedEnding = !/if you want,\s*i can/i.test(normalized);
+  const trustedResourcesSectionMatch = normalized.match(/9\.\s*Trusted Resources\s*\n([\s\S]*)$/i);
+  const trustedResourcesSection = trustedResourcesSectionMatch?.[1] || '';
+  const trustedResourceLines = trustedResourcesSection
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^[-•\d.)\s]+/, '').trim())
+    .filter((line) => /^[^:\n]+ — [^:\n].*:\s*https?:\/\/\S+$/i.test(line));
+  const hasTrustedResources = trustedResourceLines.length >= 5 && trustedResourceLines.length <= 8;
 
-  return ROADMAP_SECTION_HEADERS.every((header) => normalized.includes(header)) && hasStages && hasReasonableLength && hasProjects;
+  return ROADMAP_SECTION_HEADERS.every((header) => normalized.includes(header))
+    && hasStages
+    && hasReasonableLength
+    && hasProjects
+    && hasTrustedResources
+    && avoidsOpenEndedEnding;
+};
+
+const formatTrustedResourceLine = (resource: TrustedResource): string =>
+  `${resource.title} — ${resource.reason}: ${resource.url}`;
+
+const getTrustedResourcesForRole = (profile: RoadmapRoleProfile, userRole: string): TrustedResource[] => {
+  const normalizedRole = (userRole || profile.canonicalRole).toLowerCase();
+
+  if (/devops|site reliability|sre|platform|cloud/.test(normalizedRole)) {
+    return [
+      {
+        title: 'Kubernetes Documentation',
+        reason: 'Official guide for deploying, operating, and troubleshooting Kubernetes workloads',
+        url: 'https://kubernetes.io/docs/',
+      },
+      {
+        title: 'Docker Docs',
+        reason: 'Authoritative reference for container fundamentals, image builds, and runtime operations',
+        url: 'https://docs.docker.com/',
+      },
+      {
+        title: 'Terraform Documentation',
+        reason: 'Primary source for infrastructure-as-code workflows and reusable provisioning patterns',
+        url: 'https://developer.hashicorp.com/terraform/docs',
+      },
+      {
+        title: 'AWS Training and Certification',
+        reason: 'Role-based cloud operations paths aligned with DevOps and reliability practice',
+        url: 'https://aws.amazon.com/training/',
+      },
+      {
+        title: 'Google SRE Book',
+        reason: 'Long-form engineering guidance on reliability principles and operational excellence',
+        url: 'https://sre.google/books/',
+      },
+      {
+        title: 'Linux Foundation Training',
+        reason: 'Hands-on Linux and cloud-native training suited for production platform engineering',
+        url: 'https://training.linuxfoundation.org/',
+      },
+    ];
+  }
+
+  if (/data scientist|machine learning|ml engineer|ai engineer/.test(normalizedRole)) {
+    return [
+      {
+        title: 'Python Documentation',
+        reason: 'Official language reference for production-quality Python used across data and ML stacks',
+        url: 'https://docs.python.org/3/',
+      },
+      {
+        title: 'scikit-learn User Guide',
+        reason: 'Trusted ML reference for model selection, evaluation, and practical algorithms',
+        url: 'https://scikit-learn.org/stable/user_guide.html',
+      },
+      {
+        title: 'PyTorch Tutorials',
+        reason: 'Official deep learning tutorials with reproducible code and model training workflows',
+        url: 'https://pytorch.org/tutorials/',
+      },
+      {
+        title: 'Coursera Machine Learning Specialization',
+        reason: 'Structured, high-quality pathway for core ML theory and applied implementation',
+        url: 'https://www.coursera.org/specializations/machine-learning-introduction',
+      },
+      {
+        title: "Hands-On Machine Learning (Aurelien Geron)",
+        reason: 'Book plus companion notebooks that bridge theory and practical model development',
+        url: 'https://github.com/ageron/handson-ml3',
+      },
+      {
+        title: 'Google AI Engineering Blog',
+        reason: 'Long-form engineering insights on modern ML systems and research-to-production practices',
+        url: 'https://ai.googleblog.com/',
+      },
+    ];
+  }
+
+  if (/data analyst|analytics/.test(normalizedRole)) {
+    return [
+      {
+        title: 'Microsoft Learn Data Analyst Paths',
+        reason: 'Role-focused analytics learning tracks covering data modeling, dashboards, and reporting',
+        url: 'https://learn.microsoft.com/training/career-paths/data-analyst/',
+      },
+      {
+        title: 'Python Documentation',
+        reason: 'Official reference for reliable scripting and analysis workflows with Python',
+        url: 'https://docs.python.org/3/',
+      },
+      {
+        title: 'Pandas Documentation',
+        reason: 'Authoritative guide for data cleaning, transformation, and analysis pipelines',
+        url: 'https://pandas.pydata.org/docs/',
+      },
+      {
+        title: 'Kaggle Learn',
+        reason: 'Hands-on mini-courses for SQL, data analysis, and practical model-driven insights',
+        url: 'https://www.kaggle.com/learn',
+      },
+      {
+        title: 'Google Data Analytics Certificate',
+        reason: 'Structured entry path for analytics fundamentals, SQL, and dashboard storytelling',
+        url: 'https://www.coursera.org/professional-certificates/google-data-analytics',
+      },
+      {
+        title: 'Designing Data-Intensive Applications',
+        reason: 'Foundational systems thinking that strengthens data modeling and reliability decisions',
+        url: 'https://dataintensive.net/',
+      },
+    ];
+  }
+
+  if (/cyber|security/.test(normalizedRole)) {
+    return [
+      {
+        title: 'OWASP Top 10',
+        reason: 'Industry-standard web application risk reference for secure engineering priorities',
+        url: 'https://owasp.org/www-project-top-ten/',
+      },
+      {
+        title: 'NIST Cybersecurity Framework',
+        reason: 'Authoritative framework for building and maturing security programs and controls',
+        url: 'https://www.nist.gov/cyberframework',
+      },
+      {
+        title: 'MITRE ATT&CK',
+        reason: 'Trusted knowledge base for adversary tactics and defensive detection planning',
+        url: 'https://attack.mitre.org/',
+      },
+      {
+        title: 'CompTIA Security+',
+        reason: 'Widely recognized certification baseline for foundational security competencies',
+        url: 'https://www.comptia.org/certifications/security',
+      },
+      {
+        title: 'Cisco Networking Academy Cybersecurity',
+        reason: 'Structured training content for practical security operations and network defense',
+        url: 'https://www.netacad.com/courses/cybersecurity',
+      },
+      {
+        title: 'Google Cloud Security Best Practices',
+        reason: 'Long-form guidance for securing cloud workloads with modern controls and architecture',
+        url: 'https://cloud.google.com/security/best-practices',
+      },
+    ];
+  }
+
+  if (/qa|quality assurance|test/.test(normalizedRole)) {
+    return [
+      {
+        title: 'Playwright Documentation',
+        reason: 'Official automation reference for robust end-to-end browser testing workflows',
+        url: 'https://playwright.dev/docs/intro',
+      },
+      {
+        title: 'Cypress Documentation',
+        reason: 'Authoritative test framework guide for modern frontend and API testing setups',
+        url: 'https://docs.cypress.io/',
+      },
+      {
+        title: 'Selenium Documentation',
+        reason: 'Core reference for cross-browser UI automation and legacy enterprise test stacks',
+        url: 'https://www.selenium.dev/documentation/',
+      },
+      {
+        title: 'ISTQB Certifications',
+        reason: 'Recognized quality-assurance certification paths for test design and process rigor',
+        url: 'https://www.istqb.org/certifications/',
+      },
+      {
+        title: 'Test Automation University',
+        reason: 'High-quality practical courses for automation frameworks and quality engineering',
+        url: 'https://testautomationu.applitools.com/',
+      },
+      {
+        title: 'k6 Documentation',
+        reason: 'Official guide for performance testing and reproducible load-testing scripts',
+        url: 'https://k6.io/docs/',
+      },
+    ];
+  }
+
+  if (/ux|ui|designer|product designer/.test(normalizedRole)) {
+    return [
+      {
+        title: 'Nielsen Norman Group Articles',
+        reason: 'Respected UX research and design guidance for evidence-based product decisions',
+        url: 'https://www.nngroup.com/articles/',
+      },
+      {
+        title: 'Figma Help Center',
+        reason: 'Official documentation for prototyping, design systems, and collaboration workflows',
+        url: 'https://help.figma.com/',
+      },
+      {
+        title: 'Google UX Design Certificate',
+        reason: 'Structured UX path covering research, wireframing, prototyping, and portfolio work',
+        url: 'https://www.coursera.org/professional-certificates/google-ux-design',
+      },
+      {
+        title: 'Smashing Magazine UX',
+        reason: 'High-quality long-form UX and interface design guides from experienced practitioners',
+        url: 'https://www.smashingmagazine.com/category/uxdesign',
+      },
+      {
+        title: 'WCAG Quick Reference',
+        reason: 'Authoritative accessibility standard to ensure inclusive interaction and interface design',
+        url: 'https://www.w3.org/WAI/WCAG22/quickref/',
+      },
+      {
+        title: 'Material Design Guidelines',
+        reason: 'Comprehensive design system reference for components, patterns, and usability consistency',
+        url: 'https://m3.material.io/',
+      },
+    ];
+  }
+
+  if (/software architect|solution architect|architect/.test(normalizedRole)) {
+    return [
+      {
+        title: 'C4 Model',
+        reason: 'Clear architecture diagramming method for communicating systems at multiple abstraction levels',
+        url: 'https://c4model.com/',
+      },
+      {
+        title: 'AWS Architecture Center',
+        reason: 'Official architecture patterns and reference designs for scalable cloud systems',
+        url: 'https://aws.amazon.com/architecture/',
+      },
+      {
+        title: 'Azure Architecture Center',
+        reason: 'Authoritative Microsoft guidance for cloud architecture decisions and trade-offs',
+        url: 'https://learn.microsoft.com/azure/architecture/',
+      },
+      {
+        title: 'Google Cloud Architecture Framework',
+        reason: 'Best-practice framework for reliability, security, and operational excellence in cloud designs',
+        url: 'https://cloud.google.com/architecture/framework',
+      },
+      {
+        title: 'Designing Data-Intensive Applications',
+        reason: 'Foundational book for distributed systems architecture and data consistency decisions',
+        url: 'https://dataintensive.net/',
+      },
+      {
+        title: 'Martin Fowler Architecture Guides',
+        reason: 'Long-form software architecture insights on patterns, refactoring, and system evolution',
+        url: 'https://martinfowler.com/architecture/',
+      },
+    ];
+  }
+
+  if (/frontend|front end|web frontend|ui developer/.test(normalizedRole)) {
+    return [
+      {
+        title: 'MDN Web Docs',
+        reason: 'Comprehensive, authoritative reference for HTML, CSS, JavaScript, and browser APIs',
+        url: 'https://developer.mozilla.org/',
+      },
+      {
+        title: 'React Documentation',
+        reason: 'Official source for modern component architecture and production frontend patterns',
+        url: 'https://react.dev/',
+      },
+      {
+        title: 'TypeScript Handbook',
+        reason: 'Authoritative guide for safer, scalable frontend codebases and tooling workflows',
+        url: 'https://www.typescriptlang.org/docs/',
+      },
+      {
+        title: 'web.dev Learn Performance',
+        reason: 'Google engineering guidance for improving Core Web Vitals and runtime efficiency',
+        url: 'https://web.dev/learn/performance/',
+      },
+      {
+        title: "You Don't Know JS Yet (Kyle Simpson)",
+        reason: 'Deep JavaScript reference book with free, reproducible source material',
+        url: 'https://github.com/getify/You-Dont-Know-JS',
+      },
+      {
+        title: 'freeCodeCamp Frontend Curriculum',
+        reason: 'Project-based learning path for responsive design, JavaScript, and frontend libraries',
+        url: 'https://www.freecodecamp.org/learn/',
+      },
+    ];
+  }
+
+  if (/backend/.test(normalizedRole)) {
+    return [
+      {
+        title: 'Node.js Documentation',
+        reason: 'Official reference for backend runtime behavior, APIs, and production best practices',
+        url: 'https://nodejs.org/docs/latest/api/',
+      },
+      {
+        title: 'Python Documentation',
+        reason: 'Authoritative language reference useful for backend services and automation',
+        url: 'https://docs.python.org/3/',
+      },
+      {
+        title: 'PostgreSQL Documentation',
+        reason: 'Primary source for relational modeling, performance tuning, and SQL features',
+        url: 'https://www.postgresql.org/docs/',
+      },
+      {
+        title: 'OpenAPI Specification',
+        reason: 'Standard API contract format for designing clear and interoperable backend interfaces',
+        url: 'https://spec.openapis.org/oas/latest.html',
+      },
+      {
+        title: 'Docker Docs',
+        reason: 'Core deployment reference for packaging and running backend services consistently',
+        url: 'https://docs.docker.com/',
+      },
+      {
+        title: 'Designing Data-Intensive Applications',
+        reason: 'High-signal systems book for scalability, consistency, and reliability architecture decisions',
+        url: 'https://dataintensive.net/',
+      },
+    ];
+  }
+
+  if (/full stack/.test(normalizedRole)) {
+    return [
+      {
+        title: 'MDN Web Docs',
+        reason: 'Comprehensive reference for frontend and web platform fundamentals used in full-stack development',
+        url: 'https://developer.mozilla.org/',
+      },
+      {
+        title: 'React Documentation',
+        reason: 'Official source for modern component architecture and frontend application patterns',
+        url: 'https://react.dev/',
+      },
+      {
+        title: 'Node.js Documentation',
+        reason: 'Authoritative backend runtime documentation for API and service implementation',
+        url: 'https://nodejs.org/docs/latest/api/',
+      },
+      {
+        title: 'PostgreSQL Documentation',
+        reason: 'Reliable relational database reference for schema design and query optimization',
+        url: 'https://www.postgresql.org/docs/',
+      },
+      {
+        title: 'freeCodeCamp Full Stack Curriculum',
+        reason: 'Practical project-based learning path spanning frontend, backend, and deployment',
+        url: 'https://www.freecodecamp.org/learn/',
+      },
+      {
+        title: 'AWS Training and Certification',
+        reason: 'Cloud deployment and operations training aligned with end-to-end product ownership',
+        url: 'https://aws.amazon.com/training/',
+      },
+    ];
+  }
+
+  return [
+    {
+      title: 'MDN Web Docs',
+      reason: 'Comprehensive, authoritative reference for core web and JavaScript foundations',
+      url: 'https://developer.mozilla.org/',
+    },
+    {
+      title: 'freeCodeCamp Curriculum',
+      reason: 'Hands-on project-based learning paths for practical engineering skill growth',
+      url: 'https://www.freecodecamp.org/learn/',
+    },
+    {
+      title: 'Microsoft Learn',
+      reason: 'Role-based training modules that map well to real-world technology job pathways',
+      url: 'https://learn.microsoft.com/training/',
+    },
+    {
+      title: 'Coursera Career Certificates',
+      reason: 'Structured university and industry-backed tracks for guided upskilling',
+      url: 'https://www.coursera.org/career-academy',
+    },
+    {
+      title: 'Designing Data-Intensive Applications',
+      reason: 'Deep systems-thinking book for scalable, reliable software design decisions',
+      url: 'https://dataintensive.net/',
+    },
+    {
+      title: 'AWS Training and Certification',
+      reason: 'Trusted cloud training and certification roadmap relevant across many technical roles',
+      url: 'https://aws.amazon.com/training/',
+    },
+  ];
 };
 
 const buildRoadmapFallback = (profile: RoadmapRoleProfile, userRole: string): string => {
   const resolvedRole = userRole || profile.canonicalRole;
 
   const bulletList = (items: string[]) => items.map((item) => `   • ${item}`).join('\n');
+  const trustedResources = getTrustedResourcesForRole(profile, resolvedRole)
+    .slice(0, 8)
+    .map(formatTrustedResourceLine);
 
   return [
     `Great goal. Here is a detailed roadmap to become a ${resolvedRole}.`,
@@ -525,7 +940,8 @@ const buildRoadmapFallback = (profile: RoadmapRoleProfile, userRole: string): st
     '8. Job Preparation',
     bulletList(profile.jobPreparation),
     '',
-    '👉 Start this week by selecting one beginner milestone and one project deliverable, then track progress every 7 days.',
+    '9. Trusted Resources',
+    ...trustedResources.map((resourceLine) => `   ${resourceLine}`),
   ].join('\n');
 };
 
@@ -559,6 +975,11 @@ export class RoadmapFinderService {
       `Use exactly these section headers: ${ROADMAP_SECTION_HEADERS.join(' | ')}`,
       'The response must be detailed, actionable, and include beginner, intermediate, and advanced progression.',
       'Include concrete projects, tools, portfolio/certification suggestions, job preparation, and optional specialization paths.',
+      'Section 9 must be the final section titled exactly "9. Trusted Resources".',
+      'Trusted Resources must contain 5 to 8 lines only, each in this exact format: Resource Title — One-sentence reason: URL',
+      'Use only high-quality and authoritative resources relevant to the requested role; avoid random/low-quality blogs.',
+      'Include TutorSphere local courses/resources only when relevant and available in platform context.',
+      'Do not end with "If you want, I can...".',
     ].join('\n\n');
 
     const rawReply = await azureOpenAiClient.chat(
@@ -588,5 +1009,100 @@ export class RoadmapFinderService {
     }
 
     return safeReply;
+  }
+
+  /**
+   * Returns a structured roadmap reply along with parsed trusted references.
+   * The shape is { reply: string, references: TrustedResource[] }
+   */
+  async getStructuredReply(sanitizedMessage: string, context: FaqChatContext = {}): Promise<{ reply: string; references: TrustedResource[] }> {
+    const safeContext = toSafeContext(context);
+    const targetRole = extractTargetRole(sanitizedMessage);
+    const resolvedRole = resolveRoadmapRoleProfile(sanitizedMessage, targetRole);
+
+    if (!resolvedRole) {
+      if (NON_TECH_ROLE_PATTERN.test(sanitizedMessage)) {
+        return { reply: ROADMAP_OUT_OF_SCOPE_MESSAGE, references: [] };
+      }
+
+      if (!isRoadmapRequest(sanitizedMessage) && !TECH_ROLE_HINT_PATTERN.test(sanitizedMessage)) {
+        return { reply: ROADMAP_OUT_OF_SCOPE_MESSAGE, references: [] };
+      }
+
+      return { reply: ROADMAP_OUT_OF_SCOPE_MESSAGE, references: [] };
+    }
+
+    const { profile: roleProfile, requestedRole } = resolvedRole;
+    const roadmapFallback = buildRoadmapFallback(roleProfile, requestedRole || roleProfile.canonicalRole);
+    const composedUserPrompt = [
+      'You are operating in Roadmap Finder mode.',
+      'Treat this request as a fresh roadmap request. Do not reuse any previous role context.',
+      `UserContext: ${JSON.stringify(safeContext)}`,
+      `TargetRole: ${requestedRole}`,
+      `RoleProfile: ${JSON.stringify(roleProfile)}`,
+      `UserRequest: ${sanitizedMessage}`,
+      `Use exactly these section headers: ${ROADMAP_SECTION_HEADERS.join(' | ')}`,
+      'The response must be detailed, actionable, and include beginner, intermediate, and advanced progression.',
+      'Include concrete projects, tools, portfolio/certification suggestions, job preparation, and optional specialization paths.',
+      'Section 9 must be the final section titled exactly "9. Trusted Resources".',
+      'Trusted Resources must contain 5 to 8 lines only, each in this exact format: Resource Title — One-sentence reason: URL',
+      'Use only high-quality and authoritative resources relevant to the requested role; avoid random/low-quality blogs.',
+      'Include TutorSphere local courses/resources only when relevant and available in platform context.',
+      'Do not end with "If you want, I can...".',
+    ].join('\n\n');
+
+    const rawReply = await azureOpenAiClient.chat(
+      [
+        {
+          role: 'system',
+          content: ROADMAP_SYSTEM_PROMPT,
+        },
+        {
+          role: 'user',
+          content: composedUserPrompt,
+        },
+      ],
+      {
+        temperature: 0.35,
+        maxTokens: 900,
+      }
+    );
+
+    const safeReply = sanitizeAssistantReply(rawReply);
+    if (!safeReply) {
+      const fallbackResources = getTrustedResourcesForRole(roleProfile, requestedRole || roleProfile.canonicalRole).slice(0, 6);
+      return { reply: roadmapFallback, references: fallbackResources };
+    }
+
+    if (!isStructuredRoadmap(safeReply)) {
+      const fallbackResources = getTrustedResourcesForRole(roleProfile, requestedRole || roleProfile.canonicalRole).slice(0, 6);
+      return { reply: roadmapFallback, references: fallbackResources };
+    }
+
+    // Parse the '9. Trusted Resources' section into structured items
+    const trustedSectionMatch = String(safeReply || '').match(/9\.\s*Trusted Resources\s*\n([\s\S]*)$/i);
+    let parsedResources: TrustedResource[] = [];
+    if (trustedSectionMatch?.[1]) {
+      const lines = trustedSectionMatch[1]
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .map((line) => line.replace(/^[-•\d.)\s]+/, '').trim());
+
+      for (const line of lines) {
+        // Expecting format: Title — reason: URL
+        const match = line.match(/^([^—:]+)\s*(?:—|-)\s*([^:]+):\s*(https?:\/\/\S+)$/);
+        if (match) {
+          parsedResources.push({ title: match[1].trim(), reason: match[2].trim(), url: match[3].trim() });
+        }
+      }
+    }
+
+    // If parsing failed, fall back to curated role resources
+    if (parsedResources.length === 0) {
+      parsedResources = getTrustedResourcesForRole(roleProfile, requestedRole || roleProfile.canonicalRole).slice(0, 6);
+    }
+
+    return { reply: safeReply, references: parsedResources };
   }
 }

@@ -246,6 +246,20 @@ export type ExamPreparationImprovementResponse = {
   nextPracticePlan: string;
 };
 
+export type TrustedResourceFinderItem = {
+  title: string;
+  description: string;
+  url: string;
+  source: string;
+  type: string;
+};
+
+export type TrustedResourceFinderResponse = {
+  assistant: string;
+  topic: string;
+  resources: TrustedResourceFinderItem[];
+};
+
 export type ForgotPasswordResponse = {
   message: string;
   cooldownSeconds: number;
@@ -1656,6 +1670,13 @@ class ApiService {
     return this.request('/exam-preparation-ai/improvement-tips', {
       method: 'POST',
       body: JSON.stringify(payload),
+    });
+  }
+
+  async generateTrustedResources(topic: string): Promise<TrustedResourceFinderResponse> {
+    return this.request('/trusted-resources/generate', {
+      method: 'POST',
+      body: JSON.stringify({ topic }),
     });
   }
 }

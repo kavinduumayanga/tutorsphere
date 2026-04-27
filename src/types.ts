@@ -108,6 +108,8 @@ export interface TimeSlot {
   day: string;
   startTime: string;
   endTime: string;
+  dateKey?: string;
+  weekStartKey?: string;
   isBooked: boolean;
 }
 
@@ -125,6 +127,7 @@ export interface BookingSessionResource {
 
 export interface BookingRescheduleRequest {
   requestedDate: string;
+  requestedDateKey?: string;
   requestedTimeSlot: string;
   requestedSlotId?: string;
   note?: string;
@@ -142,6 +145,7 @@ export interface Booking {
   status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
   subject: string;
   date: string;
+  sessionDateKey?: string;
   timeSlot?: string;
   meetingLink?: string;
   expertFeedback?: string;
@@ -152,6 +156,9 @@ export interface Booking {
   refundedAt?: string;
   refundReason?: string;
   sessionDurationHours?: number;
+  baseAmount?: number;
+  platformFee?: number;
+  totalAmount?: number;
   sessionAmount?: number;
   rescheduleRequest?: BookingRescheduleRequest;
   sessionResources?: BookingSessionResource[];

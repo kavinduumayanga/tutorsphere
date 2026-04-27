@@ -159,7 +159,7 @@ export const TutorEarningsPage: React.FC<TutorEarningsPageProps> = (props) => {
                 </span>
               )}
               <span className="text-[10px] font-bold uppercase tracking-widest px-3 py-1 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700">
-                Net after {(PLATFORM_FEE_RATE * 100).toFixed(0)}% fee
+                Course payouts include {(PLATFORM_FEE_RATE * 100).toFixed(0)}% platform fee
               </span>
             </div>
           </div>

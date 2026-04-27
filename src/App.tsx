@@ -1791,9 +1791,9 @@ export default function App() {
     bookingIntent: {
       slotId: string;
       sessionDate: string;
+      sessionDateKey: string;
       sessionTime: string;
       sessionDurationHours: number;
-      sessionAmount: number;
       paymentStatus: 'paid' | 'failed';
       paymentReference?: string;
       paymentFailureReason?: string;
@@ -1818,9 +1818,9 @@ export default function App() {
         status: isPaid ? 'confirmed' : 'pending',
         subject: tutor.subjects?.[0] || 'General',
         date: bookingIntent.sessionDate,
+        sessionDateKey: bookingIntent.sessionDateKey,
         timeSlot: bookingIntent.sessionTime,
         sessionDurationHours: bookingIntent.sessionDurationHours,
-        sessionAmount: bookingIntent.sessionAmount,
         meetingLink: undefined,
         paymentStatus: bookingIntent.paymentStatus,
         paymentReference: bookingIntent.paymentReference,
@@ -1835,6 +1835,9 @@ export default function App() {
         normalizeBookingForState(booking),
         ...prevBookings,
       ]);
+
+      await refreshTutorAvailability(tutor.id);
+
       return { ok: true, bookingId: booking.id };
     } catch (error: any) {
       return { ok: false, error: error?.message || 'Failed to save booking.' };
@@ -3269,6 +3272,7 @@ export default function App() {
     }
 
     const requestedDate = String(request.requestedDate || '').trim();
+    const requestedDateKey = String((request as any).requestedDateKey || '').trim();
     const requestedTimeSlot = String(request.requestedTimeSlot || '').trim();
     const requestedAt = String(request.requestedAt || '').trim();
     const requestedByTutorId = String(request.requestedByTutorId || '').trim();
@@ -3292,6 +3296,7 @@ export default function App() {
 
     return {
       requestedDate,
+      requestedDateKey: requestedDateKey || undefined,
       requestedTimeSlot,
       requestedSlotId: requestedSlotId || undefined,
       note: requestedNote || undefined,
@@ -3409,11 +3414,14 @@ export default function App() {
 
   const parseBookingStartDate = (booking: Booking): Date | null => {
     const rawDate = String(booking.date || '').trim();
-    if (!rawDate) {
+    const rawDateKey = String(booking.sessionDateKey || '').trim();
+    if (!rawDate && !rawDateKey) {
       return null;
     }
 
-    const baseDate = new Date(rawDate);
+    const baseDate = rawDateKey
+      ? new Date(`${rawDateKey}T00:00:00`)
+      : new Date(rawDate);
     if (Number.isNaN(baseDate.getTime())) {
       return null;
     }
@@ -3463,11 +3471,14 @@ export default function App() {
 
   const parseBookingEndDate = (booking: Booking): Date | null => {
     const rawDate = String(booking.date || '').trim();
-    if (!rawDate) {
+    const rawDateKey = String(booking.sessionDateKey || '').trim();
+    if (!rawDate && !rawDateKey) {
       return null;
     }
 
-    const baseDate = new Date(rawDate);
+    const baseDate = rawDateKey
+      ? new Date(`${rawDateKey}T00:00:00`)
+      : new Date(rawDate);
     if (Number.isNaN(baseDate.getTime())) {
       return null;
     }
@@ -3602,6 +3613,22 @@ export default function App() {
     return `${hour12}:${String(minutesRaw).padStart(2, '0')} ${meridiem}`;
   };
 
+  const refreshTutorAvailability = async (tutorId: string): Promise<void> => {
+    const normalizedTutorId = String(tutorId || '').trim();
+    if (!normalizedTutorId) {
+      return;
+    }
+
+    try {
+      const refreshedTutor = await apiService.getTutor(normalizedTutorId);
+      setTutors((prevTutors) =>
+        prevTutors.map((entry) => (entry.id === refreshedTutor.id ? refreshedTutor : entry))
+      );
+    } catch (refreshTutorError) {
+      console.warn('Tutor availability refresh warning:', refreshTutorError);
+    }
+  };
+
   const applyBookingUpdateToState = (updatedBooking: Booking) => {
     setBookings((prevBookings) =>
       prevBookings.map((booking) =>
@@ -3610,6 +3637,8 @@ export default function App() {
           : booking
       )
     );
+
+    void refreshTutorAvailability(updatedBooking.tutorId);
   };
 
   const confirmAndCancelBooking = async () => {
@@ -3815,7 +3844,16 @@ export default function App() {
       throw new Error('Rescheduled session must be in the future.');
     }
 
-    const nextSessionEnd = new Date(nextSessionStart.getTime() + 60 * 60 * 1000);
+    const existingSessionStart = parseBookingStartDate(booking);
+    const existingSessionEnd = parseBookingEndDate(booking);
+    const existingDurationMs =
+      existingSessionStart &&
+      existingSessionEnd &&
+      existingSessionEnd.getTime() > existingSessionStart.getTime()
+        ? existingSessionEnd.getTime() - existingSessionStart.getTime()
+        : 60 * 60 * 1000;
+
+    const nextSessionEnd = new Date(nextSessionStart.getTime() + existingDurationMs);
     const nextEndLabel =
       formatTimeLabelFrom24Hour(
         `${String(nextSessionEnd.getHours()).padStart(2, '0')}:${String(nextSessionEnd.getMinutes()).padStart(2, '0')}`
@@ -3836,6 +3874,7 @@ export default function App() {
       const updatedBooking = await apiService.updateBooking(booking.id, {
         rescheduleRequest: {
           requestedDate: formattedDate,
+          requestedDateKey: dateInput,
           requestedTimeSlot,
           requestedSlotId: booking.slotId,
           note: note || undefined,
@@ -4346,14 +4385,91 @@ export default function App() {
     return fallbackAmount > 0 ? 'paid' : 'pending';
   };
 
-  const tutorSessionEarningAmount = Number(currentTutor?.pricePerHour || 0);
-
   const tutorCompletedPaidBookings = useMemo(
     () => bookings.filter((booking) => booking.status === 'completed' && (booking.paymentStatus || 'pending') === 'paid'),
     [bookings]
   );
 
   const tutorSessionTransactions = useMemo<TutorTransactionItem[]>(() => {
+    const fallbackTutorHourlyRate = Math.max(0, Number(currentTutor?.pricePerHour || 0));
+
+    const resolveSessionDurationHours = (booking: Booking): number => {
+      const explicitDuration = Number(booking.sessionDurationHours);
+      if (Number.isFinite(explicitDuration) && explicitDuration > 0) {
+        return roundMoney(explicitDuration);
+      }
+
+      const start = parseBookingStartDate(booking);
+      const end = parseBookingEndDate(booking);
+      if (!start || !end) {
+        return 1;
+      }
+
+      const durationMs = end.getTime() - start.getTime();
+      if (!Number.isFinite(durationMs) || durationMs <= 0) {
+        return 1;
+      }
+
+      return roundMoney(durationMs / (1000 * 60 * 60));
+    };
+
+    const resolveSessionFinancialBreakdown = (booking: Booking) => {
+      const parsedBaseAmount = Number((booking as any).baseAmount);
+      const parsedPlatformFee = Number((booking as any).platformFee);
+      const parsedTotalAmount = Number((booking as any).totalAmount);
+      const parsedSessionAmount = Number(booking.sessionAmount);
+
+      const hasBaseAmount = Number.isFinite(parsedBaseAmount) && parsedBaseAmount >= 0;
+      const hasPlatformFee = Number.isFinite(parsedPlatformFee) && parsedPlatformFee >= 0;
+      const hasTotalAmount = Number.isFinite(parsedTotalAmount) && parsedTotalAmount >= 0;
+      const hasLegacySessionAmount = Number.isFinite(parsedSessionAmount) && parsedSessionAmount >= 0;
+
+      if (hasBaseAmount) {
+        const baseAmount = roundMoney(parsedBaseAmount);
+        const platformFee = hasPlatformFee
+          ? roundMoney(parsedPlatformFee)
+          : hasTotalAmount
+            ? roundMoney(Math.max(0, parsedTotalAmount - baseAmount))
+            : roundMoney(baseAmount * PLATFORM_FEE_RATE);
+        const totalAmount = hasTotalAmount
+          ? roundMoney(parsedTotalAmount)
+          : roundMoney(baseAmount + platformFee);
+
+        return {
+          baseAmount,
+          platformFee,
+          totalAmount,
+        };
+      }
+
+      if (hasTotalAmount && hasPlatformFee) {
+        const totalAmount = roundMoney(parsedTotalAmount);
+        const platformFee = roundMoney(parsedPlatformFee);
+        return {
+          baseAmount: roundMoney(Math.max(0, totalAmount - platformFee)),
+          platformFee,
+          totalAmount,
+        };
+      }
+
+      if (hasLegacySessionAmount) {
+        const legacyBaseAmount = roundMoney(parsedSessionAmount);
+        return {
+          baseAmount: legacyBaseAmount,
+          platformFee: 0,
+          totalAmount: legacyBaseAmount,
+        };
+      }
+
+      const fallbackDurationHours = resolveSessionDurationHours(booking);
+      const fallbackBaseAmount = roundMoney(fallbackTutorHourlyRate * fallbackDurationHours);
+      return {
+        baseAmount: fallbackBaseAmount,
+        platformFee: 0,
+        totalAmount: fallbackBaseAmount,
+      };
+    };
+
     return bookings.map((booking) => {
       const paymentStatus = getBookingPaymentStatus(booking);
       let status: TutorTransactionStatus;
@@ -4366,9 +4482,10 @@ export default function App() {
         status = 'pending';
       }
 
-      const amount = Math.max(0, tutorSessionEarningAmount);
-      const platformFee = status === 'paid' ? roundMoney(amount * PLATFORM_FEE_RATE) : 0;
-      const netEarning = status === 'paid' ? roundMoney(amount - platformFee) : 0;
+      const bookingFinancials = resolveSessionFinancialBreakdown(booking);
+      const amount = bookingFinancials.baseAmount;
+      const platformFee = status === 'paid' ? bookingFinancials.platformFee : 0;
+      const netEarning = status === 'paid' ? bookingFinancials.baseAmount : 0;
 
       const paidTimestamp = Date.parse(String(booking.paidAt || ''));
       const timestamp = Number.isNaN(paidTimestamp) ? getBookingSortTimestamp(booking) : paidTimestamp;
@@ -4391,7 +4508,7 @@ export default function App() {
         paymentReference: booking.paymentReference,
       };
     });
-  }, [bookings, tutorSessionEarningAmount]);
+  }, [bookings, currentTutor?.pricePerHour]);
 
   const tutorCourseTransactions = useMemo<TutorTransactionItem[]>(() => {
     const enrollmentTransactions: TutorTransactionItem[] = [];

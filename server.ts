@@ -69,6 +69,7 @@ const __dirname = path.dirname(__filename);
 const APP_ROOT = path.basename(__dirname) === 'dist' ? path.resolve(__dirname, '..') : __dirname;
 const REMEMBER_ME_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const WITHDRAWAL_PLATFORM_FEE_RATE = 0.12;
+const BOOKING_PLATFORM_SERVICE_FEE_RATE = 0.12;
 
 const AZURE_BLOB_CONTAINER_PROFILE_IMAGES = String(process.env.AZURE_BLOB_CONTAINER_PROFILE_IMAGES || '').trim();
 const AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS = String(process.env.AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS || '').trim();
@@ -714,7 +715,9 @@ type BookingReceiptPdfInput = {
   sessionTime: string;
   durationLabel: string;
   hourlyRateLabel: string;
-  totalPaidLabel: string;
+  tutorFeeLabel: string;
+  platformFeeLabel: string;
+  totalAmountLabel: string;
   paymentStatusLabel: string;
   transactionReference: string;
   generatedDateLabel: string;
@@ -920,7 +923,9 @@ const buildBookingReceiptPdf = (input: BookingReceiptPdfInput): Buffer => {
   drawField('Hourly Rate', input.hourlyRateLabel);
 
   drawSectionHeader('Payment Details');
-  drawField('Total Paid Amount', input.totalPaidLabel);
+  drawField('Tutor Fee', input.tutorFeeLabel);
+  drawField(`Platform Fee (${Math.round(BOOKING_PLATFORM_SERVICE_FEE_RATE * 100)}%)`, input.platformFeeLabel);
+  drawField('Total Amount', input.totalAmountLabel);
   drawField('Payment Status', input.paymentStatusLabel);
   drawField('Transaction Reference ID', input.transactionReference);
   drawField('Generated Date', input.generatedDateLabel);
@@ -947,6 +952,92 @@ const toFinitePrice = (value: unknown): number => {
 
 const roundCurrency = (value: number): number => {
   return Math.round(value * 100) / 100;
+};
+
+const calculateBookingFeeBreakdown = (baseAmountValue: unknown): {
+  baseAmount: number;
+  platformFee: number;
+  totalAmount: number;
+} => {
+  const baseAmount = roundCurrency(toFinitePrice(baseAmountValue));
+  const platformFee = roundCurrency(baseAmount * BOOKING_PLATFORM_SERVICE_FEE_RATE);
+  const totalAmount = roundCurrency(baseAmount + platformFee);
+
+  return {
+    baseAmount,
+    platformFee,
+    totalAmount,
+  };
+};
+
+const resolveBookingFinancialBreakdown = (booking: Record<string, unknown>, fallbackBaseAmount = 0): {
+  baseAmount: number;
+  platformFee: number;
+  totalAmount: number;
+} => {
+  const parsedBaseAmount = Number(booking?.baseAmount);
+  const parsedPlatformFee = Number(booking?.platformFee);
+  const parsedTotalAmount = Number(booking?.totalAmount);
+  const parsedLegacySessionAmount = Number(booking?.sessionAmount);
+
+  const hasBaseAmount = Number.isFinite(parsedBaseAmount) && parsedBaseAmount >= 0;
+  const hasPlatformFee = Number.isFinite(parsedPlatformFee) && parsedPlatformFee >= 0;
+  const hasTotalAmount = Number.isFinite(parsedTotalAmount) && parsedTotalAmount >= 0;
+  const hasLegacySessionAmount = Number.isFinite(parsedLegacySessionAmount) && parsedLegacySessionAmount >= 0;
+
+  if (hasBaseAmount) {
+    const baseAmount = roundCurrency(parsedBaseAmount);
+    if (hasPlatformFee && hasTotalAmount) {
+      return {
+        baseAmount,
+        platformFee: roundCurrency(parsedPlatformFee),
+        totalAmount: roundCurrency(parsedTotalAmount),
+      };
+    }
+
+    if (hasTotalAmount && !hasPlatformFee) {
+      const totalAmount = roundCurrency(parsedTotalAmount);
+      return {
+        baseAmount,
+        platformFee: roundCurrency(Math.max(0, totalAmount - baseAmount)),
+        totalAmount,
+      };
+    }
+
+    if (!hasTotalAmount && hasPlatformFee) {
+      const platformFee = roundCurrency(parsedPlatformFee);
+      return {
+        baseAmount,
+        platformFee,
+        totalAmount: roundCurrency(baseAmount + platformFee),
+      };
+    }
+
+    return calculateBookingFeeBreakdown(baseAmount);
+  }
+
+  if (hasTotalAmount && hasPlatformFee) {
+    const totalAmount = roundCurrency(parsedTotalAmount);
+    const platformFee = roundCurrency(parsedPlatformFee);
+    const baseAmount = roundCurrency(Math.max(0, totalAmount - platformFee));
+    return {
+      baseAmount,
+      platformFee,
+      totalAmount,
+    };
+  }
+
+  if (hasLegacySessionAmount) {
+    // Legacy bookings saved the tutor amount in sessionAmount with no platform surcharge.
+    const legacyBaseAmount = roundCurrency(parsedLegacySessionAmount);
+    return {
+      baseAmount: legacyBaseAmount,
+      platformFee: 0,
+      totalAmount: legacyBaseAmount,
+    };
+  }
+
+  return calculateBookingFeeBreakdown(fallbackBaseAmount);
 };
 
 const resolveCourseIsFree = (value: unknown, fallbackPrice: number): boolean => {
@@ -1073,19 +1164,35 @@ const resolveEffectiveWithdrawalStatus = (request: { status?: unknown; payoutMet
 const calculateTutorSessionNetEarningsForWithdrawal = async (tutorId: string): Promise<number> => {
   const tutor = await Tutor.findOne({ id: tutorId });
   const hourlyRate = toFinitePrice((tutor as any)?.pricePerHour);
-  if (hourlyRate <= 0) {
-    return 0;
-  }
-
-  const completedPaidSessions = await Booking.countDocuments({
+  const completedPaidSessions = await Booking.find({
     tutorId,
     status: 'completed',
     paymentStatus: 'paid',
+  }, {
+    baseAmount: 1,
+    platformFee: 1,
+    totalAmount: 1,
+    sessionAmount: 1,
+    sessionDurationHours: 1,
   });
 
-  const gross = completedPaidSessions * hourlyRate;
-  const net = gross - gross * WITHDRAWAL_PLATFORM_FEE_RATE;
-  return roundCurrency(Math.max(0, net));
+  let totalTutorSessionEarnings = 0;
+
+  for (const bookingDoc of completedPaidSessions) {
+    const booking = typeof (bookingDoc as any)?.toObject === 'function'
+      ? (bookingDoc as any).toObject()
+      : (bookingDoc as any);
+    const parsedDurationHours = Number((booking as any)?.sessionDurationHours);
+    const fallbackBaseAmount =
+      Number.isFinite(parsedDurationHours) && parsedDurationHours > 0
+        ? roundCurrency(hourlyRate * parsedDurationHours)
+        : hourlyRate;
+
+    const breakdown = resolveBookingFinancialBreakdown(booking, fallbackBaseAmount);
+    totalTutorSessionEarnings += breakdown.baseAmount;
+  }
+
+  return roundCurrency(Math.max(0, totalTutorSessionEarnings));
 };
 
 const calculateTutorCourseNetEarningsForWithdrawal = async (tutorId: string): Promise<number> => {
@@ -1725,6 +1832,93 @@ async function normalizeBookingPaymentStates() {
   }
 }
 
+async function normalizeBookingFinancialBreakdowns() {
+  try {
+    const bookingsNeedingNormalization = await Booking.find({
+      $or: [
+        { baseAmount: { $exists: false } },
+        { platformFee: { $exists: false } },
+        { totalAmount: { $exists: false } },
+      ],
+    }, {
+      id: 1,
+      tutorId: 1,
+      sessionDurationHours: 1,
+      sessionAmount: 1,
+      baseAmount: 1,
+      platformFee: 1,
+      totalAmount: 1,
+    });
+
+    if (!bookingsNeedingNormalization.length) {
+      return;
+    }
+
+    const tutorIds = Array.from(
+      new Set(
+        bookingsNeedingNormalization
+          .map((booking) => String((booking as any)?.tutorId || '').trim())
+          .filter(Boolean)
+      )
+    );
+
+    const tutors = tutorIds.length > 0
+      ? await Tutor.find({ id: { $in: tutorIds } }, { id: 1, pricePerHour: 1 })
+      : [];
+    const tutorRateById = new Map<string, number>(
+      tutors.map((tutor) => [String((tutor as any)?.id || '').trim(), toFinitePrice((tutor as any)?.pricePerHour)])
+    );
+
+    let updatedCount = 0;
+    for (const bookingDoc of bookingsNeedingNormalization) {
+      const booking = typeof (bookingDoc as any)?.toObject === 'function'
+        ? (bookingDoc as any).toObject()
+        : (bookingDoc as any);
+      const tutorId = String((booking as any)?.tutorId || '').trim();
+      const tutorRate = tutorRateById.get(tutorId) || 0;
+      const parsedDurationHours = Number((booking as any)?.sessionDurationHours);
+      const fallbackBaseAmount =
+        Number.isFinite(parsedDurationHours) && parsedDurationHours > 0 && tutorRate > 0
+          ? roundCurrency(tutorRate * parsedDurationHours)
+          : 0;
+      const breakdown = resolveBookingFinancialBreakdown(booking, fallbackBaseAmount);
+
+      const updateSet = {
+        baseAmount: breakdown.baseAmount,
+        platformFee: breakdown.platformFee,
+        totalAmount: breakdown.totalAmount,
+      } as Record<string, number>;
+
+      const currentBaseAmount = Number((booking as any)?.baseAmount);
+      const currentPlatformFee = Number((booking as any)?.platformFee);
+      const currentTotalAmount = Number((booking as any)?.totalAmount);
+      const hasMatchingAmounts =
+        Number.isFinite(currentBaseAmount) &&
+        roundCurrency(currentBaseAmount) === updateSet.baseAmount &&
+        Number.isFinite(currentPlatformFee) &&
+        roundCurrency(currentPlatformFee) === updateSet.platformFee &&
+        Number.isFinite(currentTotalAmount) &&
+        roundCurrency(currentTotalAmount) === updateSet.totalAmount;
+
+      if (hasMatchingAmounts) {
+        continue;
+      }
+
+      await Booking.updateOne(
+        { _id: (bookingDoc as any)._id },
+        { $set: updateSet }
+      );
+      updatedCount += 1;
+    }
+
+    if (updatedCount > 0) {
+      console.log(`Normalized booking financial breakdowns for ${updatedCount} records`);
+    }
+  } catch (error) {
+    console.log('Booking financial breakdown normalization skipped or failed:', (error as Error).message);
+  }
+}
+
 async function normalizeBookingVisibilityFlags() {
   try {
     await Booking.updateMany(
@@ -1865,6 +2059,9 @@ async function startServer() {
 
   // Keep legacy bookings compatible with payment-aware booking workflows.
   await normalizeBookingPaymentStates();
+
+  // Keep legacy bookings compatible with the booking fee breakdown model.
+  await normalizeBookingFinancialBreakdowns();
 
   // Ensure booking visibility flags exist for soft-hide session cards.
   await normalizeBookingVisibilityFlags();
@@ -2937,6 +3134,46 @@ async function startServer() {
         .map((tutor) => String((tutor as any).id || '').trim())
         .filter(Boolean);
 
+      const blockingBookings = tutorIds.length > 0
+        ? await Booking.find(
+            {
+              tutorId: { $in: tutorIds },
+              paymentStatus: { $nin: ['failed', 'refunded'] },
+              $or: [
+                { status: { $in: ['pending', 'confirmed'] } },
+                { 'rescheduleRequest.status': 'pending' },
+              ],
+            },
+            {
+              id: 1,
+              tutorId: 1,
+              slotId: 1,
+              date: 1,
+              sessionDateKey: 1,
+              timeSlot: 1,
+              status: 1,
+              paymentStatus: 1,
+              rescheduleRequest: 1,
+            }
+          )
+        : [];
+
+      const bookingsByTutorId = new Map<string, Array<Record<string, unknown>>>();
+      for (const bookingDoc of blockingBookings) {
+        const booking =
+          typeof (bookingDoc as any)?.toObject === 'function'
+            ? (bookingDoc as any).toObject()
+            : (bookingDoc as any);
+        const bookingTutorId = String((booking as any)?.tutorId || '').trim();
+        if (!bookingTutorId) {
+          continue;
+        }
+        if (!bookingsByTutorId.has(bookingTutorId)) {
+          bookingsByTutorId.set(bookingTutorId, []);
+        }
+        bookingsByTutorId.get(bookingTutorId)?.push(booking);
+      }
+
       const linkedUsers = tutorIds.length > 0
         ? await User.find({ id: { $in: tutorIds } }, { id: 1, avatar: 1 })
         : [];
@@ -2959,6 +3196,24 @@ async function startServer() {
               : { ...(tutorSource as any) };
 
           const tutorId = String((tutor as any)?.id || '').trim();
+          const tutorBookings = tutorId ? (bookingsByTutorId.get(tutorId) || []) : [];
+          const availabilityWithLocks = applyBookingLocksToTutorAvailability(
+            (tutor as any)?.availability,
+            tutorBookings
+          );
+          (tutor as any).availability = availabilityWithLocks.slotsForCurrentWeek;
+
+          if (availabilityWithLocks.hasLegacyChanges && tutorId) {
+            try {
+              await Tutor.updateOne(
+                { id: tutorId },
+                { $set: { availability: availabilityWithLocks.normalizedAllSlots } }
+              );
+            } catch (legacySlotUpdateError) {
+              console.warn('Legacy availability normalization writeback warning:', legacySlotUpdateError);
+            }
+          }
+
           const linkedUser = tutorId ? userById.get(tutorId) : undefined;
           const resolvedAvatar = await resolveTutorAvatarResponseUrl(req, tutor as any, linkedUser);
 
@@ -2984,11 +3239,53 @@ async function startServer() {
       const tutor = await Tutor.findOne({ id: req.params.id });
 
       if (tutor) {
+        const tutorBookings = await Booking.find(
+          {
+            tutorId: req.params.id,
+            paymentStatus: { $nin: ['failed', 'refunded'] },
+            $or: [
+              { status: { $in: ['pending', 'confirmed'] } },
+              { 'rescheduleRequest.status': 'pending' },
+            ],
+          },
+          {
+            id: 1,
+            tutorId: 1,
+            slotId: 1,
+            date: 1,
+            sessionDateKey: 1,
+            timeSlot: 1,
+            status: 1,
+            paymentStatus: 1,
+            rescheduleRequest: 1,
+          }
+        );
         const linkedUser = await User.findOne({ id: req.params.id }, { id: 1, avatar: 1, role: 1 });
         const tutorResponse =
           typeof (tutor as any).toObject === 'function'
             ? (tutor as any).toObject()
             : tutor;
+
+        const availabilityWithLocks = applyBookingLocksToTutorAvailability(
+          (tutorResponse as any)?.availability,
+          tutorBookings.map((bookingDoc) =>
+            typeof (bookingDoc as any)?.toObject === 'function'
+              ? (bookingDoc as any).toObject()
+              : (bookingDoc as any)
+          )
+        );
+        (tutorResponse as any).availability = availabilityWithLocks.slotsForCurrentWeek;
+
+        if (availabilityWithLocks.hasLegacyChanges) {
+          try {
+            await Tutor.updateOne(
+              { id: req.params.id },
+              { $set: { availability: availabilityWithLocks.normalizedAllSlots } }
+            );
+          } catch (legacySlotUpdateError) {
+            console.warn('Legacy availability normalization writeback warning:', legacySlotUpdateError);
+          }
+        }
 
         const resolvedAvatar = await resolveTutorAvatarResponseUrl(
           req,
@@ -3091,6 +3388,12 @@ async function startServer() {
         tutorData.qualifications ?? tutorData.education ?? ''
       ).trim();
       const normalizedTutorBio = String(tutorData.bio ?? '').trim();
+      const availabilityInput = normalizeAndValidateWeeklyAvailabilityInput(
+        Array.isArray(tutorData.availability) ? tutorData.availability : []
+      );
+      if (availabilityInput.error) {
+        return res.status(400).json({ error: availabilityInput.error });
+      }
 
       const tutor = new Tutor({
         id: tutorId,
@@ -3104,7 +3407,7 @@ async function startServer() {
         rating: Number.isFinite(parsedTutorRating) ? Math.max(0, Math.min(5, parsedTutorRating)) : 0,
         reviewCount: Number.isFinite(parsedTutorReviewCount) ? Math.max(0, Math.round(parsedTutorReviewCount)) : 0,
         bio: normalizedTutorBio,
-        availability: Array.isArray(tutorData.availability) ? tutorData.availability : [],
+        availability: availabilityInput.slots,
         isVerified: Boolean(tutorData.isVerified),
       });
       await tutor.save();
@@ -3180,6 +3483,14 @@ async function startServer() {
         incomingTutorData.bio = String(incomingTutorData.bio ?? '').trim();
       }
 
+      if (Object.prototype.hasOwnProperty.call(incomingTutorData, 'availability')) {
+        const availabilityInput = normalizeAndValidateWeeklyAvailabilityInput(incomingTutorData.availability);
+        if (availabilityInput.error) {
+          return res.status(400).json({ error: availabilityInput.error });
+        }
+        incomingTutorData.availability = availabilityInput.slots;
+      }
+
       if (tutor) {
         const nextTutorPayload: Record<string, unknown> = {
           ...incomingTutorData,
@@ -3221,6 +3532,12 @@ async function startServer() {
         );
         const tutorQualifications = String(incomingTutorData.qualifications ?? '').trim();
         const tutorBio = String(incomingTutorData.bio ?? '').trim();
+        const availabilityInput = normalizeAndValidateWeeklyAvailabilityInput(
+          Array.isArray(incomingTutorData.availability) ? incomingTutorData.availability : []
+        );
+        if (availabilityInput.error) {
+          return res.status(400).json({ error: availabilityInput.error });
+        }
 
         tutor = new Tutor({
           id: user.id,
@@ -3234,7 +3551,7 @@ async function startServer() {
           rating: Number.isFinite(parsedTutorRating) ? Math.max(0, Math.min(5, parsedTutorRating)) : 0,
           reviewCount: Number.isFinite(parsedTutorReviewCount) ? Math.max(0, Math.round(parsedTutorReviewCount)) : 0,
           bio: tutorBio,
-          availability: Array.isArray(incomingTutorData.availability) ? incomingTutorData.availability : [],
+          availability: availabilityInput.slots,
           isVerified: Boolean(incomingTutorData.isVerified),
         });
 
@@ -5144,14 +5461,152 @@ async function startServer() {
     return { startMinutes, endMinutes };
   };
 
-  const parseSessionStartDateTime = (dateValue: unknown, timeSlotValue: unknown): Date | null => {
-    const rawDate = String(dateValue || '').trim();
-    if (!rawDate) {
+  const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+  const CONFLICT_ERROR_MESSAGE = 'This time slot is already booked. Please choose another time.';
+
+  const normalizeWeekdayKey = (value: unknown): 'Sun' | 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat' | null => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized) {
       return null;
     }
 
-    const date = new Date(rawDate);
-    if (Number.isNaN(date.getTime())) {
+    if (normalized.startsWith('sun')) return 'Sun';
+    if (normalized.startsWith('mon')) return 'Mon';
+    if (normalized.startsWith('tue')) return 'Tue';
+    if (normalized.startsWith('wed')) return 'Wed';
+    if (normalized.startsWith('thu')) return 'Thu';
+    if (normalized.startsWith('fri')) return 'Fri';
+    if (normalized.startsWith('sat')) return 'Sat';
+    return null;
+  };
+
+  const toDateKey = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const parseDateKeyToDate = (value: unknown): Date | null => {
+    const dateKey = String(value || '').trim();
+    const match = dateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) {
+      return null;
+    }
+
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+      return null;
+    }
+
+    const date = new Date(year, month - 1, day, 0, 0, 0, 0);
+    if (
+      date.getFullYear() !== year ||
+      date.getMonth() !== month - 1 ||
+      date.getDate() !== day
+    ) {
+      return null;
+    }
+
+    return date;
+  };
+
+  const normalizeDateKey = (value: unknown): string | null => {
+    const raw = String(value || '').trim();
+    if (!raw) {
+      return null;
+    }
+
+    if (DATE_KEY_PATTERN.test(raw)) {
+      return raw;
+    }
+
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) {
+      return null;
+    }
+
+    return toDateKey(parsed);
+  };
+
+  const getWeekStartDate = (anchor: Date): Date => {
+    const date = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate(), 0, 0, 0, 0);
+    const day = date.getDay();
+    const mondayOffset = day === 0 ? -6 : 1 - day;
+    date.setDate(date.getDate() + mondayOffset);
+    return date;
+  };
+
+  const getCurrentWeekBounds = (anchor: Date = new Date()): {
+    weekStartDate: Date;
+    weekEndDate: Date;
+    weekStartKey: string;
+    weekEndKey: string;
+  } => {
+    const weekStartDate = getWeekStartDate(anchor);
+    const weekEndDate = new Date(weekStartDate);
+    weekEndDate.setDate(weekEndDate.getDate() + 6);
+    weekEndDate.setHours(23, 59, 59, 999);
+    return {
+      weekStartDate,
+      weekEndDate,
+      weekStartKey: toDateKey(weekStartDate),
+      weekEndKey: toDateKey(weekEndDate),
+    };
+  };
+
+  const getDateKeyForWeekday = (weekStartDate: Date, dayKey: 'Sun' | 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat'): string => {
+    const dayOffsetByKey: Record<'Sun' | 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat', number> = {
+      Mon: 0,
+      Tue: 1,
+      Wed: 2,
+      Thu: 3,
+      Fri: 4,
+      Sat: 5,
+      Sun: 6,
+    };
+    const slotDate = new Date(weekStartDate);
+    slotDate.setDate(slotDate.getDate() + dayOffsetByKey[dayKey]);
+    slotDate.setHours(0, 0, 0, 0);
+    return toDateKey(slotDate);
+  };
+
+  const formatDateLabelFromDateKey = (dateKey: string): string => {
+    const parsed = parseDateKeyToDate(dateKey);
+    if (!parsed) {
+      return dateKey;
+    }
+
+    return parsed.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+  };
+
+  const resolveSessionDateKey = (dateValue: unknown, dateKeyValue?: unknown): string | null => {
+    const fromDateKey = normalizeDateKey(dateKeyValue);
+    if (fromDateKey) {
+      return fromDateKey;
+    }
+    return normalizeDateKey(dateValue);
+  };
+
+  const parseSessionStartDateTime = (
+    dateValue: unknown,
+    timeSlotValue: unknown,
+    dateKeyValue?: unknown
+  ): Date | null => {
+    const dateKey = resolveSessionDateKey(dateValue, dateKeyValue);
+    if (!dateKey) {
+      return null;
+    }
+
+    const date = parseDateKeyToDate(dateKey);
+    if (!date) {
       return null;
     }
 
@@ -5172,6 +5627,228 @@ async function startServer() {
     b: { startMinutes: number; endMinutes: number }
   ): boolean => {
     return a.startMinutes < b.endMinutes && b.startMinutes < a.endMinutes;
+  };
+
+  const parseTutorSlotTimeRange = (startValue: unknown, endValue: unknown): { startMinutes: number; endMinutes: number } | null => {
+    const startMinutes = parseBookingTimeTokenToMinutes(startValue);
+    const endMinutes = parseBookingTimeTokenToMinutes(endValue);
+    if (startMinutes === null || endMinutes === null || endMinutes <= startMinutes) {
+      return null;
+    }
+    return { startMinutes, endMinutes };
+  };
+
+  const normalizeTutorAvailabilitySlots = (
+    availabilityValue: unknown,
+    anchorDate: Date = new Date()
+  ): { slots: Array<Record<string, unknown>>; hasChanges: boolean } => {
+    if (!Array.isArray(availabilityValue)) {
+      return { slots: [], hasChanges: false };
+    }
+
+    const { weekStartDate, weekStartKey } = getCurrentWeekBounds(anchorDate);
+    let hasChanges = false;
+    const normalizedSlots: Array<Record<string, unknown>> = [];
+
+    for (const rawSlot of availabilityValue) {
+      const id = String((rawSlot as any)?.id || '').trim();
+      const dayKey = normalizeWeekdayKey((rawSlot as any)?.day);
+      const startTime = String((rawSlot as any)?.startTime || '').trim();
+      const endTime = String((rawSlot as any)?.endTime || '').trim();
+      const parsedRange = parseTutorSlotTimeRange(startTime, endTime);
+
+      if (!id || !dayKey || !parsedRange) {
+        hasChanges = true;
+        continue;
+      }
+
+      let dateKey =
+        normalizeDateKey((rawSlot as any)?.dateKey) ||
+        normalizeDateKey((rawSlot as any)?.date) ||
+        '';
+      if (!dateKey) {
+        dateKey = getDateKeyForWeekday(weekStartDate, dayKey);
+        hasChanges = true;
+      }
+
+      let weekStartKeyForSlot =
+        normalizeDateKey((rawSlot as any)?.weekStartKey) ||
+        normalizeDateKey((rawSlot as any)?.weekStart) ||
+        '';
+      if (!weekStartKeyForSlot) {
+        const slotDate = parseDateKeyToDate(dateKey);
+        weekStartKeyForSlot = slotDate ? toDateKey(getWeekStartDate(slotDate)) : weekStartKey;
+        hasChanges = true;
+      }
+
+      const normalizedSlot = {
+        ...(typeof rawSlot === 'object' && rawSlot ? (rawSlot as Record<string, unknown>) : {}),
+        id,
+        day: dayKey,
+        startTime: `${String(Math.floor(parsedRange.startMinutes / 60)).padStart(2, '0')}:${String(parsedRange.startMinutes % 60).padStart(2, '0')}`,
+        endTime: `${String(Math.floor(parsedRange.endMinutes / 60)).padStart(2, '0')}:${String(parsedRange.endMinutes % 60).padStart(2, '0')}`,
+        dateKey,
+        weekStartKey: weekStartKeyForSlot,
+        isBooked: Boolean((rawSlot as any)?.isBooked),
+      };
+
+      normalizedSlots.push(normalizedSlot);
+    }
+
+    return { slots: normalizedSlots, hasChanges };
+  };
+
+  const collectBlockingBookingRanges = (bookings: Array<Record<string, unknown>>): Array<{
+    bookingId: string;
+    slotId: string;
+    dateKey: string;
+    startMinutes: number;
+    endMinutes: number;
+  }> => {
+    const ranges: Array<{
+      bookingId: string;
+      slotId: string;
+      dateKey: string;
+      startMinutes: number;
+      endMinutes: number;
+    }> = [];
+
+    for (const booking of bookings) {
+      const bookingId = String((booking as any)?.id || '').trim();
+      const slotId = String((booking as any)?.slotId || '').trim();
+      const status = normalizeBookingStatus((booking as any)?.status);
+      const paymentStatus = normalizeBookingPaymentStatus((booking as any)?.paymentStatus);
+
+      if ((status !== 'pending' && status !== 'confirmed') || paymentStatus === 'failed' || paymentStatus === 'refunded') {
+        continue;
+      }
+
+      const dateKey = resolveSessionDateKey((booking as any)?.date, (booking as any)?.sessionDateKey);
+      const timeRange = parseBookingTimeRange((booking as any)?.timeSlot);
+      if (dateKey && timeRange) {
+        ranges.push({
+          bookingId,
+          slotId,
+          dateKey,
+          startMinutes: timeRange.startMinutes,
+          endMinutes: timeRange.endMinutes,
+        });
+      }
+
+      const request = (booking as any)?.rescheduleRequest;
+      const requestStatus = String(request?.status || '').trim().toLowerCase();
+      if (requestStatus === 'pending') {
+        const requestedDateKey = resolveSessionDateKey(request?.requestedDate, request?.requestedDateKey);
+        const requestedRange = parseBookingTimeRange(request?.requestedTimeSlot);
+        const requestedSlotId = String(request?.requestedSlotId || slotId).trim();
+        if (requestedDateKey && requestedRange) {
+          ranges.push({
+            bookingId,
+            slotId: requestedSlotId,
+            dateKey: requestedDateKey,
+            startMinutes: requestedRange.startMinutes,
+            endMinutes: requestedRange.endMinutes,
+          });
+        }
+      }
+    }
+
+    return ranges;
+  };
+
+  const applyBookingLocksToTutorAvailability = (
+    availabilityValue: unknown,
+    bookings: Array<Record<string, unknown>>,
+    anchorDate: Date = new Date()
+  ): { slotsForCurrentWeek: Array<Record<string, unknown>>; normalizedAllSlots: Array<Record<string, unknown>>; hasLegacyChanges: boolean } => {
+    const normalizedAvailability = normalizeTutorAvailabilitySlots(availabilityValue, anchorDate);
+    const { weekStartKey, weekEndKey } = getCurrentWeekBounds(anchorDate);
+    const blockedRanges = collectBlockingBookingRanges(bookings);
+
+    const slotsForCurrentWeek = normalizedAvailability.slots
+      .filter((slot) => {
+        const dateKey = String((slot as any)?.dateKey || '').trim();
+        if (!dateKey) {
+          return false;
+        }
+        return dateKey >= weekStartKey && dateKey <= weekEndKey;
+      })
+      .map((slot) => {
+        const dateKey = String((slot as any)?.dateKey || '').trim();
+        const slotRange = parseTutorSlotTimeRange((slot as any)?.startTime, (slot as any)?.endTime);
+        const isBooked = Boolean(
+          slotRange &&
+            blockedRanges.some((range) =>
+              range.dateKey === dateKey &&
+              bookingTimeRangesOverlap(slotRange, {
+                startMinutes: range.startMinutes,
+                endMinutes: range.endMinutes,
+              })
+            )
+        );
+
+        return {
+          ...slot,
+          weekStartKey,
+          isBooked,
+        };
+      });
+
+    return {
+      slotsForCurrentWeek,
+      normalizedAllSlots: normalizedAvailability.slots,
+      hasLegacyChanges: normalizedAvailability.hasChanges,
+    };
+  };
+
+  const normalizeAndValidateWeeklyAvailabilityInput = (
+    availabilityValue: unknown,
+    anchorDate: Date = new Date()
+  ): { slots: Array<Record<string, unknown>>; error?: string } => {
+    const normalized = normalizeTutorAvailabilitySlots(availabilityValue, anchorDate);
+    const { weekStartKey, weekEndKey } = getCurrentWeekBounds(anchorDate);
+
+    const weeklySlots = normalized.slots.filter((slot) => {
+      const dateKey = String((slot as any)?.dateKey || '').trim();
+      return Boolean(dateKey) && dateKey >= weekStartKey && dateKey <= weekEndKey;
+    });
+
+    if (weeklySlots.length !== normalized.slots.length) {
+      return {
+        slots: [],
+        error: 'Availability slots must be configured within the current week.',
+      };
+    }
+
+    const slotsByDateKey = new Map<string, Array<{ startMinutes: number; endMinutes: number }>>();
+    for (const slot of weeklySlots) {
+      const dateKey = String((slot as any)?.dateKey || '').trim();
+      const slotRange = parseTutorSlotTimeRange((slot as any)?.startTime, (slot as any)?.endTime);
+      if (!dateKey || !slotRange) {
+        return { slots: [], error: 'Each availability slot must have a valid date and time range.' };
+      }
+
+      if (!slotsByDateKey.has(dateKey)) {
+        slotsByDateKey.set(dateKey, []);
+      }
+
+      const existingForDate = slotsByDateKey.get(dateKey) || [];
+      const overlaps = existingForDate.some((existingRange) => bookingTimeRangesOverlap(existingRange, slotRange));
+      if (overlaps) {
+        return { slots: [], error: `Time slots overlap on ${formatDateLabelFromDateKey(dateKey)}.` };
+      }
+
+      existingForDate.push(slotRange);
+      slotsByDateKey.set(dateKey, existingForDate);
+    }
+
+    return {
+      slots: weeklySlots.map((slot) => ({
+        ...slot,
+        weekStartKey,
+        isBooked: false,
+      })),
+    };
   };
 
   const resolveSessionRoleForRequest = async (
@@ -5203,64 +5880,77 @@ async function startServer() {
   const hasTutorBookingConflict = async (input: {
     tutorId: string;
     date: string;
+    sessionDateKey?: string;
     slotId?: string;
     timeSlot?: string;
     excludeBookingId?: string;
   }): Promise<boolean> => {
     const tutorId = String(input.tutorId || '').trim();
     const date = String(input.date || '').trim();
+    const sessionDateKey = String(input.sessionDateKey || '').trim();
     const slotId = String(input.slotId || '').trim();
     const timeSlot = String(input.timeSlot || '').trim();
     const excludeBookingId = String(input.excludeBookingId || '').trim();
 
-    if (!tutorId || !date) {
+    const targetDateKey = resolveSessionDateKey(date, sessionDateKey);
+    if (!tutorId || !targetDateKey) {
       return false;
     }
 
+    const targetRange = parseBookingTimeRange(timeSlot);
+
     const baseQuery: Record<string, any> = {
       tutorId,
-      date,
-      status: { $in: ['pending', 'confirmed'] },
       paymentStatus: { $nin: ['failed', 'refunded'] },
+      $or: [
+        { status: { $in: ['pending', 'confirmed'] } },
+        { 'rescheduleRequest.status': 'pending' },
+      ],
     };
 
     if (excludeBookingId) {
       baseQuery.id = { $ne: excludeBookingId };
     }
 
-    if (slotId) {
-      const slotConflict = await Booking.findOne({
-        ...baseQuery,
-        slotId,
-      });
+    const existingBookings = await Booking.find(baseQuery, {
+      id: 1,
+      slotId: 1,
+      date: 1,
+      sessionDateKey: 1,
+      timeSlot: 1,
+      status: 1,
+      paymentStatus: 1,
+      rescheduleRequest: 1,
+    });
 
-      if (slotConflict) {
-        return true;
-      }
-    }
+    const blockingRanges = collectBlockingBookingRanges(
+      existingBookings.map((bookingDoc) =>
+        typeof (bookingDoc as any)?.toObject === 'function'
+          ? (bookingDoc as any).toObject()
+          : (bookingDoc as any)
+      )
+    );
 
-    const targetRange = parseBookingTimeRange(timeSlot);
     if (!targetRange) {
-      return false;
+      if (!slotId) {
+        return false;
+      }
+
+      return blockingRanges.some((range) => range.slotId === slotId && range.dateKey === targetDateKey);
     }
 
-    const existingBookings = await Booking.find(baseQuery, { id: 1, timeSlot: 1 });
-    for (const booking of existingBookings) {
-      if (excludeBookingId && String((booking as any).id || '').trim() === excludeBookingId) {
-        continue;
-      }
+    const targetSlotRange = {
+      startMinutes: targetRange.startMinutes,
+      endMinutes: targetRange.endMinutes,
+    };
 
-      const existingRange = parseBookingTimeRange((booking as any).timeSlot);
-      if (!existingRange) {
-        continue;
-      }
-
-      if (bookingTimeRangesOverlap(targetRange, existingRange)) {
-        return true;
-      }
-    }
-
-    return false;
+    return blockingRanges.some((range) =>
+      range.dateKey === targetDateKey &&
+      bookingTimeRangesOverlap(targetSlotRange, {
+        startMinutes: range.startMinutes,
+        endMinutes: range.endMinutes,
+      })
+    );
   };
 
   const getBookingSessionResourceContainerCandidates = (resource: unknown): string[] => {
@@ -5452,22 +6142,31 @@ async function startServer() {
 
         const requestStatus = String((request as any)?.status || '').trim().toLowerCase();
         const requestedDate = String((request as any)?.requestedDate || '').trim();
+        const requestedDateKey = resolveSessionDateKey(
+          requestedDate,
+          (request as any)?.requestedDateKey
+        );
+        const requestedDateLabel = requestedDate || (requestedDateKey ? formatDateLabelFromDateKey(requestedDateKey) : '');
         const requestedTimeSlot = String((request as any)?.requestedTimeSlot || '').trim();
         const requestedByTutorId = String((request as any)?.requestedByTutorId || '').trim();
         const requestedAt = String((request as any)?.requestedAt || '').trim();
         const currentDate = String((booking as any)?.date || '').trim();
+        const currentSessionDateKey = resolveSessionDateKey(currentDate, (booking as any)?.sessionDateKey);
         const currentTimeSlot = String((booking as any)?.timeSlot || '').trim();
-        const requestedStart = parseSessionStartDateTime(requestedDate, requestedTimeSlot);
+        const requestedStart = parseSessionStartDateTime(requestedDateLabel, requestedTimeSlot, requestedDateKey);
 
         const isValidPendingRequest =
           requestStatus === 'pending' &&
           currentStatus !== 'cancelled' &&
           currentStatus !== 'completed' &&
-          Boolean(requestedDate) &&
+          Boolean(requestedDateKey) &&
           Boolean(requestedTimeSlot) &&
           Boolean(requestedByTutorId) &&
           Boolean(requestedAt) &&
-          !(requestedDate === currentDate && requestedTimeSlot === currentTimeSlot) &&
+          !(
+            requestedDateKey === currentSessionDateKey &&
+            requestedTimeSlot === currentTimeSlot
+          ) &&
           (!requestedStart || requestedStart.getTime() > now);
 
         if (!isValidPendingRequest) {
@@ -5481,7 +6180,8 @@ async function startServer() {
 
         (booking as any).rescheduleRequest = {
           ...request,
-          requestedDate,
+          requestedDate: requestedDateLabel,
+          requestedDateKey: requestedDateKey || undefined,
           requestedTimeSlot,
           requestedByTutorId,
           requestedAt,
@@ -5739,20 +6439,26 @@ async function startServer() {
 
       const durationLabel = durationHours > 0 ? `${durationHours.toFixed(2)} hour(s)` : 'N/A';
 
-      const parsedSessionAmount = Number((booking as any).sessionAmount);
       const parsedTutorRate = Number((tutorProfile as any)?.pricePerHour);
-      const totalPaidAmount =
-        Number.isFinite(parsedSessionAmount) && parsedSessionAmount >= 0
-          ? roundCurrency(parsedSessionAmount)
-          : Number.isFinite(parsedTutorRate) && parsedTutorRate >= 0 && durationHours > 0
-            ? roundCurrency(parsedTutorRate * durationHours)
-            : 0;
+      const fallbackBaseAmount =
+        Number.isFinite(parsedTutorRate) && parsedTutorRate >= 0 && durationHours > 0
+          ? roundCurrency(parsedTutorRate * durationHours)
+          : 0;
+
+      const { baseAmount, platformFee, totalAmount } = resolveBookingFinancialBreakdown(
+        typeof (booking as any)?.toObject === 'function'
+          ? (booking as any).toObject()
+          : (booking as any),
+        fallbackBaseAmount
+      );
 
       const hourlyRateAmount =
-        Number.isFinite(parsedTutorRate) && parsedTutorRate >= 0
-          ? roundCurrency(parsedTutorRate)
-          : totalPaidAmount > 0 && durationHours > 0
-            ? roundCurrency(totalPaidAmount / durationHours)
+        baseAmount > 0 && durationHours > 0
+          ? roundCurrency(baseAmount / durationHours)
+          : Number.isFinite(parsedTutorRate) && parsedTutorRate >= 0
+            ? roundCurrency(parsedTutorRate)
+            : totalAmount > 0 && durationHours > 0
+              ? roundCurrency(totalAmount / durationHours)
             : 0;
 
       const receiptBookingId = toNotificationText((booking as any).id, requestedBookingId);
@@ -5775,7 +6481,9 @@ async function startServer() {
         sessionTime,
         durationLabel,
         hourlyRateLabel: durationHours > 0 || hourlyRateAmount > 0 ? formatLkrCurrency(hourlyRateAmount) : 'N/A',
-        totalPaidLabel: formatLkrCurrency(totalPaidAmount),
+        tutorFeeLabel: formatLkrCurrency(baseAmount),
+        platformFeeLabel: formatLkrCurrency(platformFee),
+        totalAmountLabel: formatLkrCurrency(totalAmount),
         paymentStatusLabel: toTitleCase(paymentStatus),
         transactionReference: receiptTransactionReference,
         generatedDateLabel,
@@ -5812,6 +6520,8 @@ async function startServer() {
       const slotId = String(bookingData.slotId || '').trim();
       const subject = String(bookingData.subject || '').trim();
       const date = String(bookingData.date || '').trim();
+      const sessionDateKey = resolveSessionDateKey(date, bookingData.sessionDateKey);
+      const normalizedDateLabel = date || (sessionDateKey ? formatDateLabelFromDateKey(sessionDateKey) : '');
       const timeSlot = String(bookingData.timeSlot || '').trim();
       const paymentStatus = normalizeBookingPaymentStatus(bookingData.paymentStatus);
       const paymentReference = String(bookingData.paymentReference || '').trim();
@@ -5819,14 +6529,9 @@ async function startServer() {
       const paidAt = String(bookingData.paidAt || '').trim();
       const meetingLink = String(bookingData.meetingLink || '').trim();
       const parsedSessionDurationHours = Number(bookingData.sessionDurationHours);
-      const sessionDurationHours =
+      const requestedSessionDurationHours =
         Number.isFinite(parsedSessionDurationHours) && parsedSessionDurationHours > 0
-          ? Math.round(parsedSessionDurationHours * 100) / 100
-          : undefined;
-      const parsedSessionAmount = Number(bookingData.sessionAmount);
-      const sessionAmount =
-        Number.isFinite(parsedSessionAmount) && parsedSessionAmount >= 0
-          ? Math.round(parsedSessionAmount * 100) / 100
+          ? roundCurrency(parsedSessionDurationHours)
           : undefined;
       let status = normalizeBookingStatus(bookingData.status);
 
@@ -5834,8 +6539,8 @@ async function startServer() {
         return;
       }
 
-      if (!studentId || !tutorId || !slotId || !subject || !date) {
-        return res.status(400).json({ error: 'studentId, tutorId, slotId, subject, and date are required.' });
+      if (!studentId || !tutorId || !slotId || !subject || !sessionDateKey) {
+        return res.status(400).json({ error: 'studentId, tutorId, slotId, subject, and a valid session date are required.' });
       }
 
       if ((status === 'confirmed' || status === 'completed') && paymentStatus !== 'paid') {
@@ -5866,15 +6571,45 @@ async function startServer() {
         status = 'confirmed';
       }
 
+      const tutorProfile = await Tutor.findOne({ id: tutorId }, { pricePerHour: 1 });
+      if (!tutorProfile) {
+        return res.status(404).json({ error: 'Tutor not found.' });
+      }
+
+      const tutorHourlyRate = toFinitePrice((tutorProfile as any)?.pricePerHour);
+      if (tutorHourlyRate <= 0) {
+        return res.status(400).json({ error: 'This tutor does not have a valid hourly rate configured.' });
+      }
+
+      const parsedSelectedTimeRange = parseBookingTimeRange(timeSlot);
+      const derivedDurationFromTimeSlot = parsedSelectedTimeRange
+        ? roundCurrency((parsedSelectedTimeRange.endMinutes - parsedSelectedTimeRange.startMinutes) / 60)
+        : undefined;
+      const sessionDurationHours =
+        derivedDurationFromTimeSlot && derivedDurationFromTimeSlot > 0
+          ? derivedDurationFromTimeSlot
+          : requestedSessionDurationHours;
+
+      if (!sessionDurationHours || sessionDurationHours <= 0) {
+        return res.status(400).json({ error: 'A valid booking duration is required.' });
+      }
+
+      const bookingFeeBreakdown = calculateBookingFeeBreakdown(tutorHourlyRate * sessionDurationHours);
+      const baseAmount = bookingFeeBreakdown.baseAmount;
+      const platformFee = bookingFeeBreakdown.platformFee;
+      const totalAmount = bookingFeeBreakdown.totalAmount;
+      const sessionAmount = totalAmount;
+
       const hasConflict = await hasTutorBookingConflict({
         tutorId,
-        date,
+        date: normalizedDateLabel,
+        sessionDateKey,
         slotId,
         timeSlot,
       });
 
       if (hasConflict) {
-        return res.status(409).json({ error: 'This time slot is already booked.' });
+        return res.status(409).json({ error: CONFLICT_ERROR_MESSAGE });
       }
 
       let resolvedStudentName = studentName;
@@ -5894,7 +6629,8 @@ async function startServer() {
         tutorId,
         slotId,
         subject,
-        date,
+        date: normalizedDateLabel,
+        sessionDateKey,
         timeSlot: timeSlot || undefined,
         meetingLink: meetingLink || undefined,
         status,
@@ -5903,6 +6639,9 @@ async function startServer() {
         paymentFailureReason: paymentStatus === 'failed' ? (paymentFailureReason || 'Payment failed before confirmation.') : undefined,
         paidAt: paymentStatus === 'paid' ? (paidAt || new Date().toISOString()) : undefined,
         sessionDurationHours,
+        baseAmount,
+        platformFee,
+        totalAmount,
         sessionAmount,
         sessionResources: [],
         hiddenForTutor: false,
@@ -5915,7 +6654,7 @@ async function startServer() {
       const tutorUser = await User.findOne({ id: tutorId }, { firstName: 1, lastName: 1 });
       const tutorDisplayName = getDisplayNameFromParts(tutorUser?.firstName, tutorUser?.lastName, 'Tutor');
       const studentDisplayName = resolvedStudentName || 'Student';
-      const sessionLabel = formatSessionLabel({ subject, date, timeSlot });
+      const sessionLabel = formatSessionLabel({ subject, date: normalizedDateLabel, timeSlot });
 
       const bookingNotifications: NotificationDraft[] = [];
 
@@ -6045,33 +6784,40 @@ async function startServer() {
         }
 
         const requestedDate = String(incomingRescheduleRequest?.requestedDate || '').trim();
+        const requestedDateKey = resolveSessionDateKey(
+          requestedDate,
+          incomingRescheduleRequest?.requestedDateKey
+        );
+        const requestedDateLabel = requestedDate || (requestedDateKey ? formatDateLabelFromDateKey(requestedDateKey) : '');
         const requestedTimeSlot = String(incomingRescheduleRequest?.requestedTimeSlot || '').trim();
         const requestedSlotId = String(incomingRescheduleRequest?.requestedSlotId || existingBooking.slotId || '').trim();
         const requestedNote = String(incomingRescheduleRequest?.note || '').trim();
 
-        if (!requestedDate || !requestedTimeSlot || !requestedSlotId) {
-          return res.status(400).json({ error: 'requestedDate, requestedTimeSlot, and requestedSlotId are required.' });
+        if (!requestedDateKey || !requestedTimeSlot || !requestedSlotId) {
+          return res.status(400).json({ error: 'requestedDate/requestedDateKey, requestedTimeSlot, and requestedSlotId are required.' });
         }
 
-        const requestedStart = parseSessionStartDateTime(requestedDate, requestedTimeSlot);
+        const requestedStart = parseSessionStartDateTime(requestedDateLabel, requestedTimeSlot, requestedDateKey);
         if (requestedStart && requestedStart.getTime() <= Date.now()) {
           return res.status(400).json({ error: 'Rescheduled session must be in the future.' });
         }
 
         const hasConflict = await hasTutorBookingConflict({
           tutorId: existingBooking.tutorId,
-          date: requestedDate,
+          date: requestedDateLabel,
+          sessionDateKey: requestedDateKey,
           slotId: requestedSlotId,
           timeSlot: requestedTimeSlot,
           excludeBookingId: existingBooking.id,
         });
 
         if (hasConflict) {
-          return res.status(409).json({ error: 'The requested reschedule time conflicts with another booking.' });
+          return res.status(409).json({ error: CONFLICT_ERROR_MESSAGE });
         }
 
         const requestPayload = {
-          requestedDate,
+          requestedDate: requestedDateLabel,
+          requestedDateKey,
           requestedTimeSlot,
           requestedSlotId,
           note: requestedNote || undefined,
@@ -6102,7 +6848,7 @@ async function startServer() {
         const currentSessionLabel = formatSessionLabel(existingBooking);
         const requestedSessionLabel = formatSessionLabel({
           subject: booking.subject,
-          date: requestedDate,
+          date: requestedDateLabel,
           timeSlot: requestedTimeSlot,
         });
 
@@ -6141,32 +6887,36 @@ async function startServer() {
         }
 
         const requestedDate = String(activeRescheduleRequest.requestedDate || '').trim();
+        const requestedDateKey = resolveSessionDateKey(requestedDate, activeRescheduleRequest.requestedDateKey);
+        const requestedDateLabel = requestedDate || (requestedDateKey ? formatDateLabelFromDateKey(requestedDateKey) : '');
         const requestedTimeSlot = String(activeRescheduleRequest.requestedTimeSlot || '').trim();
         const requestedSlotId = String(activeRescheduleRequest.requestedSlotId || existingBooking.slotId || '').trim();
 
         if (incomingRescheduleDecision === 'accept') {
-          const requestedStart = parseSessionStartDateTime(requestedDate, requestedTimeSlot);
+          const requestedStart = parseSessionStartDateTime(requestedDateLabel, requestedTimeSlot, requestedDateKey);
           if (requestedStart && requestedStart.getTime() <= Date.now()) {
             return res.status(400).json({ error: 'This rescheduled time is no longer valid because it is in the past.' });
           }
 
           const hasConflict = await hasTutorBookingConflict({
             tutorId: existingBooking.tutorId,
-            date: requestedDate,
+            date: requestedDateLabel,
+            sessionDateKey: requestedDateKey || undefined,
             slotId: requestedSlotId,
             timeSlot: requestedTimeSlot,
             excludeBookingId: existingBooking.id,
           });
 
           if (hasConflict) {
-            return res.status(409).json({ error: 'The requested reschedule time is no longer available.' });
+            return res.status(409).json({ error: CONFLICT_ERROR_MESSAGE });
           }
 
           const booking = await Booking.findOneAndUpdate(
             { id: req.params.id },
             {
               $set: {
-                date: requestedDate,
+                date: requestedDateLabel,
+                sessionDateKey: requestedDateKey || undefined,
                 timeSlot: requestedTimeSlot,
                 slotId: requestedSlotId,
               },
@@ -6318,12 +7068,17 @@ async function startServer() {
       const nextTutorId = String(req.body?.tutorId ?? existingBooking.tutorId).trim();
       const nextSlotId = String(req.body?.slotId ?? existingBooking.slotId).trim();
       const nextDate = String(req.body?.date ?? existingBooking.date).trim();
+      const nextSessionDateKey = resolveSessionDateKey(
+        nextDate,
+        req.body?.sessionDateKey ?? (existingBooking as any)?.sessionDateKey
+      );
+      const nextDateLabel = nextDate || (nextSessionDateKey ? formatDateLabelFromDateKey(nextSessionDateKey) : '');
       const nextTimeSlot = req.body?.timeSlot !== undefined
         ? String(req.body?.timeSlot || '').trim()
         : String(existingBooking.timeSlot || '').trim();
 
-      if (!nextTutorId || !nextSlotId || !nextDate) {
-        return res.status(400).json({ error: 'tutorId, slotId, and date must be valid values.' });
+      if (!nextTutorId || !nextSlotId || !nextSessionDateKey) {
+        return res.status(400).json({ error: 'tutorId, slotId, and a valid session date must be provided.' });
       }
 
       const normalizedMeetingLink = req.body?.meetingLink !== undefined
@@ -6376,6 +7131,7 @@ async function startServer() {
         req.body?.tutorId !== undefined ||
         req.body?.slotId !== undefined ||
         req.body?.date !== undefined ||
+        req.body?.sessionDateKey !== undefined ||
         req.body?.timeSlot !== undefined ||
         req.body?.status !== undefined ||
         req.body?.paymentStatus !== undefined;
@@ -6383,14 +7139,15 @@ async function startServer() {
       if (scheduleRelevantChange && (status === 'pending' || status === 'confirmed') && paymentStatus !== 'failed' && paymentStatus !== 'refunded') {
         const hasConflict = await hasTutorBookingConflict({
           tutorId: nextTutorId,
-          date: nextDate,
+          date: nextDateLabel,
+          sessionDateKey: nextSessionDateKey,
           slotId: nextSlotId,
           timeSlot: nextTimeSlot,
           excludeBookingId: req.params.id,
         });
 
         if (hasConflict) {
-          return res.status(409).json({ error: 'This time slot is already booked.' });
+          return res.status(409).json({ error: CONFLICT_ERROR_MESSAGE });
         }
       }
 
@@ -6402,6 +7159,11 @@ async function startServer() {
       const updateUnset: Record<string, ''> = {};
       delete updateSet.rescheduleDecision;
       delete updateSet.rescheduleRequest;
+      delete updateSet.sessionAmount;
+      delete updateSet.baseAmount;
+      delete updateSet.platformFee;
+      delete updateSet.totalAmount;
+      delete updateSet.sessionDurationHours;
 
       if (req.body?.tutorId !== undefined) {
         updateSet.tutorId = nextTutorId;
@@ -6411,8 +7173,9 @@ async function startServer() {
         updateSet.slotId = nextSlotId;
       }
 
-      if (req.body?.date !== undefined) {
-        updateSet.date = nextDate;
+      if (req.body?.date !== undefined || req.body?.sessionDateKey !== undefined) {
+        updateSet.date = nextDateLabel;
+        updateSet.sessionDateKey = nextSessionDateKey;
       }
 
       if (req.body?.timeSlot !== undefined) {

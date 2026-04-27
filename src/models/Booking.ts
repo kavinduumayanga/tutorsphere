@@ -9,6 +9,7 @@ export interface IBooking extends Document {
   status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
   subject: string;
   date: string;
+  sessionDateKey?: string;
   timeSlot?: string;
   meetingLink?: string;
   expertFeedback?: string;
@@ -19,9 +20,13 @@ export interface IBooking extends Document {
   refundedAt?: string;
   refundReason?: string;
   sessionDurationHours?: number;
+  baseAmount?: number;
+  platformFee?: number;
+  totalAmount?: number;
   sessionAmount?: number;
   rescheduleRequest?: {
     requestedDate: string;
+    requestedDateKey?: string;
     requestedTimeSlot: string;
     requestedSlotId?: string;
     note?: string;
@@ -47,6 +52,7 @@ export interface IBooking extends Document {
 const BookingRescheduleRequestSchema = new Schema(
   {
     requestedDate: { type: String, required: true },
+    requestedDateKey: { type: String },
     requestedTimeSlot: { type: String, required: true },
     requestedSlotId: { type: String },
     note: { type: String },
@@ -81,6 +87,7 @@ const BookingSchema: Schema = new Schema({
   status: { type: String, required: true, enum: ['pending', 'confirmed', 'completed', 'cancelled'], default: 'pending' },
   subject: { type: String, required: true },
   date: { type: String, required: true },
+  sessionDateKey: { type: String },
   timeSlot: { type: String },
   meetingLink: { type: String },
   expertFeedback: { type: String },
@@ -91,6 +98,9 @@ const BookingSchema: Schema = new Schema({
   refundedAt: { type: String },
   refundReason: { type: String },
   sessionDurationHours: { type: Number },
+  baseAmount: { type: Number },
+  platformFee: { type: Number },
+  totalAmount: { type: Number },
   sessionAmount: { type: Number },
   rescheduleRequest: { type: BookingRescheduleRequestSchema },
   sessionResources: { type: [BookingSessionResourceSchema], default: [] },

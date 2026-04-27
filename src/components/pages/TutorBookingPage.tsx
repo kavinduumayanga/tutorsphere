@@ -14,6 +14,7 @@ import {
   Lock,
   CreditCard,
   AlertTriangle,
+  Info,
   Sunrise,
   Sun,
   Sunset,
@@ -28,9 +29,9 @@ import { apiService } from "../../services/apiService";
 type BookingCheckoutPayload = {
   slotId: string;
   sessionDate: string;
+  sessionDateKey: string;
   sessionTime: string;
   sessionDurationHours: number;
-  sessionAmount: number;
   paymentStatus: 'paid' | 'failed';
   paymentReference?: string;
   paymentFailureReason?: string;
@@ -52,6 +53,7 @@ interface TutorBookingPageProps {
 const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MONTH_LABEL_FORMATTER = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" });
 const DAY_KEYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+const BOOKING_PLATFORM_FEE_RATE = 0.12;
 
 type CalendarDayCell = {
   date: Date;
@@ -63,6 +65,7 @@ type TutorAvailabilitySlot = {
   day?: string;
   startTime?: string;
   endTime?: string;
+  dateKey?: string;
   isBooked?: boolean;
 };
 
@@ -70,6 +73,7 @@ type BookingSlotOption = {
   id: string;
   startTime: string;
   endTime: string;
+  isBooked: boolean;
   label: string;
 };
 
@@ -79,6 +83,12 @@ type PaymentFieldErrors = Record<PaymentFieldKey, string>;
 
 const startOfDay = (date: Date): Date => new Date(date.getFullYear(), date.getMonth(), date.getDate());
 const startOfMonth = (date: Date): Date => new Date(date.getFullYear(), date.getMonth(), 1);
+const toDateKey = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 const addDays = (date: Date, days: number): Date => {
   const next = new Date(date);
@@ -180,16 +190,22 @@ const getDayKeyForDate = (date: Date): string => DAY_KEYS[date.getDay()];
 
 const buildAvailabilityForDate = (availability: TutorAvailabilitySlot[], date: Date): BookingSlotOption[] => {
   const targetDayKey = getDayKeyForDate(date);
+  const targetDateKey = toDateKey(date);
 
   return availability
     .filter((slot) => {
       const dayKey = normalizeDayKey(slot.day);
-      return Boolean(dayKey) && dayKey === targetDayKey && !slot.isBooked;
+      const slotDateKey = String(slot.dateKey || '').trim();
+      if (slotDateKey) {
+        return slotDateKey === targetDateKey;
+      }
+      return Boolean(dayKey) && dayKey === targetDayKey;
     })
     .map((slot, index) => ({
       id: slot.id || `${targetDayKey}-${slot.startTime || 'start'}-${slot.endTime || 'end'}-${index}`,
       startTime: String(slot.startTime || ''),
       endTime: String(slot.endTime || ''),
+      isBooked: Boolean(slot.isBooked),
       label: `${formatTimeLabel(slot.startTime)} - ${formatTimeLabel(slot.endTime)}`,
     }))
     .filter((slot) => {
@@ -348,26 +364,10 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
   const [isDownloadingReceipt, setIsDownloadingReceipt] = useState(false);
   const [receiptDownloadError, setReceiptDownloadError] = useState<string | null>(null);
 
-  if (!tutor) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <div className="text-center bg-white p-10 rounded-3xl shadow-sm border border-slate-100 max-w-sm w-full">
-          <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <UserIcon className="w-8 h-8 text-slate-300" />
-          </div>
-          <h3 className="text-xl font-bold text-slate-900 mb-2">Tutor Not Found</h3>
-          <p className="text-slate-500 mb-6 font-medium text-sm">The tutor you're looking for is unavailable.</p>
-          <button onClick={onBack} className="px-6 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-bold transition-colors w-full">
-            Go Back
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  const displayName = tutor.user?.name || tutor.name || `${tutor.firstName || ''} ${tutor.lastName || ''}`.trim() || "Tutor";
-  const formattedHourlyRate = formatLkr(tutor.pricePerHour);
-  const tutorAvailability = Array.isArray(tutor.availability) ? tutor.availability : [];
+  const displayName = tutor?.user?.name || tutor?.name || `${tutor?.firstName || ''} ${tutor?.lastName || ''}`.trim() || "Tutor";
+  const hourlyRate = Number(tutor?.pricePerHour) || 0;
+  const formattedHourlyRate = formatLkr(hourlyRate);
+  const tutorAvailability = Array.isArray(tutor?.availability) ? tutor.availability : [];
 
   const availableSlots = useMemo(
     () => buildAvailabilityForDate(tutorAvailability, selectedDate),
@@ -376,17 +376,24 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
   const grouped = useMemo(() => groupSlotsByPeriod(availableSlots), [availableSlots]);
 
   const selectedSlot = useMemo(
-    () => availableSlots.find((slot) => slot.id === selectedSlotId) || null,
+    () => availableSlots.find((slot) => slot.id === selectedSlotId && !slot.isBooked) || null,
     [availableSlots, selectedSlotId]
   );
   const selectedSessionDurationHours = useMemo(
     () => calculateSlotDurationHours(selectedSlot),
     [selectedSlot]
   );
-  const sessionTotalAmount = useMemo(() => {
-    const hourlyRate = Number(tutor.pricePerHour) || 0;
+  const sessionBaseAmount = useMemo(() => {
     return Math.max(0, Math.round(hourlyRate * selectedSessionDurationHours * 100) / 100);
-  }, [tutor.pricePerHour, selectedSessionDurationHours]);
+  }, [hourlyRate, selectedSessionDurationHours]);
+  const sessionPlatformFeeAmount = useMemo(() => {
+    return Math.max(0, Math.round(sessionBaseAmount * BOOKING_PLATFORM_FEE_RATE * 100) / 100);
+  }, [sessionBaseAmount]);
+  const sessionTotalAmount = useMemo(() => {
+    return Math.max(0, Math.round((sessionBaseAmount + sessionPlatformFeeAmount) * 100) / 100);
+  }, [sessionBaseAmount, sessionPlatformFeeAmount]);
+  const formattedSessionBaseAmount = useMemo(() => formatLkr(sessionBaseAmount), [sessionBaseAmount]);
+  const formattedSessionPlatformFee = useMemo(() => formatLkr(sessionPlatformFeeAmount), [sessionPlatformFeeAmount]);
   const formattedSessionTotal = useMemo(() => formatLkr(sessionTotalAmount), [sessionTotalAmount]);
   const paymentFieldErrors = useMemo(
     () => getPaymentFieldErrors({ cardholderName, cardNumber, expiry, cvv }),
@@ -398,7 +405,10 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
   );
 
   // Slot count per date for badge
-  const getSlotCount = useCallback((date: Date) => buildAvailabilityForDate(tutorAvailability, date).length, [tutorAvailability]);
+  const getSlotCount = useCallback(
+    (date: Date) => buildAvailabilityForDate(tutorAvailability, date).filter((slot) => !slot.isBooked).length,
+    [tutorAvailability]
+  );
 
   const calendarDays = useMemo(() => buildCalendarDays(calendarMonth), [calendarMonth]);
   const minMonth = useMemo(() => startOfMonth(BOOKING_MIN_DATE), []);
@@ -423,13 +433,17 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
   }, [isDateInBookingRange]);
 
   const handleSlotClick = useCallback(
-    (slotId: string) => {
+    (slot: BookingSlotOption) => {
+      if (slot.isBooked) {
+        return;
+      }
+
       // If already selected, deselect
-      if (selectedSlotId === slotId) {
+      if (selectedSlotId === slot.id) {
         setSelectedSlotId(null);
         return;
       }
-      setSelectedSlotId(slotId);
+      setSelectedSlotId(slot.id);
     },
     [selectedSlotId]
   );
@@ -499,9 +513,9 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
         const response = await onConfirmBooking({
           slotId: selectedSlot.id,
           sessionDate: sessionDateLabel,
+          sessionDateKey: toDateKey(selectedDate),
           sessionTime: selectedSlot.label,
           sessionDurationHours: selectedSessionDurationHours,
-          sessionAmount: sessionTotalAmount,
           paymentStatus: 'failed',
           paymentReference,
           paymentFailureReason: failureReason,
@@ -524,9 +538,9 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
       const response = await onConfirmBooking({
         slotId: selectedSlot.id,
         sessionDate: sessionDateLabel,
+        sessionDateKey: toDateKey(selectedDate),
         sessionTime: selectedSlot.label,
         sessionDurationHours: selectedSessionDurationHours,
-        sessionAmount: sessionTotalAmount,
         paymentStatus: 'paid',
         paymentReference,
       });
@@ -568,6 +582,23 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
       setIsDownloadingReceipt(false);
     }
   };
+
+  if (!tutor) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <div className="text-center bg-white p-10 rounded-3xl shadow-sm border border-slate-100 max-w-sm w-full">
+          <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <UserIcon className="w-8 h-8 text-slate-300" />
+          </div>
+          <h3 className="text-xl font-bold text-slate-900 mb-2">Tutor Not Found</h3>
+          <p className="text-slate-500 mb-6 font-medium text-sm">The tutor you're looking for is unavailable.</p>
+          <button onClick={onBack} className="px-6 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-bold transition-colors w-full">
+            Go Back
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (bookingResult) {
     const isSuccess = bookingResult.status === 'success';
@@ -948,22 +979,34 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
                 </div>
 
                 <div className="border-t border-slate-100 pt-6 mb-5">
-                  <div className="flex justify-between items-center mb-2.5">
-                    <span className="font-bold text-slate-500 text-sm">Rate per hour</span>
-                    <span className="font-bold text-slate-900">{formattedHourlyRate}</span>
+                <div className="flex justify-between items-center mb-2.5">
+                  <span className="font-bold text-slate-500 text-sm">Rate per hour</span>
+                  <span className="font-bold text-slate-900">{formattedHourlyRate}</span>
+                </div>
+                <div className="flex justify-between items-center mb-2.5">
+                  <span className="font-bold text-slate-500 text-sm">Session Duration</span>
+                  <span className="font-bold text-slate-900">{selectedSessionDurationHours.toFixed(2)} h</span>
+                </div>
+                <div className="flex justify-between items-center mb-4">
+                  <span className="font-bold text-slate-500 text-sm">Tutor Fee</span>
+                  <span className="font-bold text-slate-900">{formattedSessionBaseAmount}</span>
+                </div>
+                <div className="flex justify-between items-center mb-4">
+                  <div className="flex items-center gap-1.5 text-slate-500">
+                    <span className="font-bold text-sm">Platform Fee (12%)</span>
+                    <span className="group relative inline-flex">
+                      <Info className="w-3.5 h-3.5" />
+                      <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-1 hidden w-52 -translate-x-1/2 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-500 shadow-lg group-hover:block">
+                        Platform fee supports TutorSphere services and platform maintenance.
+                      </span>
+                    </span>
                   </div>
-                  <div className="flex justify-between items-center mb-2.5">
-                    <span className="font-bold text-slate-500 text-sm">Session Duration</span>
-                    <span className="font-bold text-slate-900">{selectedSessionDurationHours.toFixed(2)} h</span>
-                  </div>
-                  <div className="flex justify-between items-center mb-4">
-                    <span className="font-bold text-slate-500 text-sm">Service Fee</span>
-                    <span className="font-bold text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-md text-xs uppercase tracking-wider">Free</span>
-                  </div>
-                  <div className="flex justify-between items-end pt-4 border-t border-slate-100">
-                    <span className="font-black text-slate-900 text-lg">Total</span>
-                    <span className="font-black text-slate-900 text-3xl tracking-tight">{formattedSessionTotal}</span>
-                  </div>
+                  <span className="font-bold text-slate-900">{formattedSessionPlatformFee}</span>
+                </div>
+                <div className="flex justify-between items-end pt-4 border-t border-slate-100">
+                  <span className="font-black text-slate-900 text-lg">Total</span>
+                  <span className="font-black text-slate-900 text-3xl tracking-tight">{formattedSessionTotal}</span>
+                </div>
                 </div>
 
                 <div className="mt-5 flex items-center justify-center gap-2 text-xs font-bold text-slate-500 bg-slate-50 py-2.5 rounded-xl border border-slate-200">
@@ -998,15 +1041,19 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
           {slots.map((slot) => {
             const isSelected = selectedSlotId === slot.id;
+            const isBooked = slot.isBooked;
 
             return (
               <motion.button
                 key={slot.id}
-                whileHover={{ y: -2 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => handleSlotClick(slot.id)}
+                whileHover={isBooked ? {} : { y: -2 }}
+                whileTap={isBooked ? {} : { scale: 0.95 }}
+                onClick={() => handleSlotClick(slot)}
+                disabled={isBooked}
                 className={`py-3 px-3 rounded-xl border-2 font-bold transition-all text-sm flex items-center justify-center gap-2 relative ${
-                  isSelected
+                  isBooked
+                    ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
+                    : isSelected
                     ? "border-indigo-600 bg-indigo-600 text-white shadow-md shadow-indigo-200"
                     : "border-slate-100 bg-white text-slate-700 hover:border-indigo-300 hover:text-indigo-700 shadow-sm"
                 }`}
@@ -1014,6 +1061,11 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
               >
                 {isSelected && <CheckCircle className="w-3.5 h-3.5 shrink-0" />}
                 {slot.label}
+                {isBooked && (
+                  <span className="absolute -top-2 right-1 text-[10px] font-black uppercase tracking-wider bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded">
+                    Booked
+                  </span>
+                )}
               </motion.button>
             );
           })}
@@ -1235,6 +1287,10 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
                       <div className="w-4 h-4 rounded bg-indigo-600 border-2 border-indigo-600" />
                       Selected
                     </div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-4 h-4 rounded bg-slate-100 border-2 border-slate-200" />
+                      Booked
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1319,8 +1375,20 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
                   <span className="font-bold text-slate-900">{selectedSessionDurationHours.toFixed(2)} h</span>
                 </div>
                 <div className="flex justify-between items-center mb-4">
-                  <span className="font-bold text-slate-500 text-sm">Service Fee</span>
-                  <span className="font-bold text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-md text-xs uppercase tracking-wider">Free</span>
+                  <span className="font-bold text-slate-500 text-sm">Tutor Fee</span>
+                  <span className="font-bold text-slate-900">{formattedSessionBaseAmount}</span>
+                </div>
+                <div className="flex justify-between items-center mb-4">
+                  <div className="flex items-center gap-1.5 text-slate-500">
+                    <span className="font-bold text-sm">Platform Fee (12%)</span>
+                    <span className="group relative inline-flex">
+                      <Info className="w-3.5 h-3.5" />
+                      <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-1 hidden w-52 -translate-x-1/2 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-500 shadow-lg group-hover:block">
+                        Platform fee supports TutorSphere services and platform maintenance.
+                      </span>
+                    </span>
+                  </div>
+                  <span className="font-bold text-slate-900">{formattedSessionPlatformFee}</span>
                 </div>
                 <div className="flex justify-between items-end pt-4 border-t border-slate-100">
                   <span className="font-black text-slate-900 text-lg">Total</span>
@@ -1333,14 +1401,14 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
                 whileHover={{ scale: selectedSlot ? 1.02 : 1 }}
                 whileTap={{ scale: selectedSlot ? 0.98 : 1 }}
                 onClick={handleContinueToCheckout}
-                disabled={!selectedSlotId}
+                disabled={!selectedSlot}
                 className={`w-full py-4 rounded-2xl font-bold text-lg flex items-center justify-center gap-2 transition-all duration-300 ${
-                  selectedSlotId
+                  selectedSlot
                     ? "bg-indigo-600 hover:bg-indigo-700 text-white shadow-xl shadow-indigo-200"
                     : "bg-slate-100 text-slate-400 cursor-not-allowed"
                 }`}
               >
-                {selectedSlotId ? (
+                {selectedSlot ? (
                   <>
                     <CreditCard className="w-5 h-5" />
                     Continue to Checkout

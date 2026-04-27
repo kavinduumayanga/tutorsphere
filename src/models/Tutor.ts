@@ -17,6 +17,8 @@ export interface ITutor extends Document {
     day: string;
     startTime: string;
     endTime: string;
+    dateKey?: string;
+    weekStartKey?: string;
     isBooked: boolean;
   }[];
   isVerified: boolean;
@@ -40,6 +42,8 @@ const TutorSchema: Schema = new Schema({
     day: { type: String, required: true },
     startTime: { type: String, required: true },
     endTime: { type: String, required: true },
+    dateKey: { type: String },
+    weekStartKey: { type: String },
     isBooked: { type: Boolean, required: true, default: false }
   }],
   isVerified: { type: Boolean, required: true, default: false },

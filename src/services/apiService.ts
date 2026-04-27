@@ -212,6 +212,40 @@ export type FaqChatResponse = {
   reply: string;
 };
 
+export type ExamPreparationDifficulty = 'easy' | 'medium' | 'hard';
+
+export type ExamPreparationQuestionCount = 5 | 10 | 15;
+
+export type ExamPreparationOptionLabel = 'A' | 'B' | 'C' | 'D';
+
+export type ExamPreparationQuestion = {
+  id: string;
+  question: string;
+  options: {
+    A: string;
+    B: string;
+    C: string;
+    D: string;
+  };
+  correctOption: ExamPreparationOptionLabel;
+  explanation: string;
+  concept: string;
+};
+
+export type ExamPreparationSetResponse = {
+  assistant: string;
+  setTitle: string;
+  instructions: string;
+  questions: ExamPreparationQuestion[];
+};
+
+export type ExamPreparationImprovementResponse = {
+  weakAreas: string[];
+  improvementTips: string[];
+  encouragement: string;
+  nextPracticePlan: string;
+};
+
 export type ForgotPasswordResponse = {
   message: string;
   cooldownSeconds: number;
@@ -1582,6 +1616,46 @@ class ApiService {
         message,
         context,
       }),
+    });
+  }
+
+  async generateExamPreparationSet(payload: {
+    subject: string;
+    topic: string;
+    difficulty: ExamPreparationDifficulty;
+    questionCount: ExamPreparationQuestionCount;
+  }): Promise<ExamPreparationSetResponse> {
+    try {
+      return await this.request('/exam-preparation-ai/generate-set', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    } catch (error) {
+      const message = String(error instanceof Error ? error.message : error || '').toLowerCase();
+      const shouldTryAlias = message.includes('not found') || message.includes('404');
+
+      if (!shouldTryAlias) {
+        throw error;
+      }
+
+      return this.request('/exam-preparation/generate-set', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    }
+  }
+
+  async getExamPreparationImprovementTips(payload: {
+    subject: string;
+    topic: string;
+    difficulty: ExamPreparationDifficulty;
+    score: number;
+    totalQuestions: number;
+    weakAreas: string[];
+  }): Promise<ExamPreparationImprovementResponse> {
+    return this.request('/exam-preparation-ai/improvement-tips', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   }
 }

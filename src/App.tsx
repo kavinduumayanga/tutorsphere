@@ -84,10 +84,11 @@ import { NotificationBell } from './components/common/NotificationBell';
 import { NotificationsPage } from './components/pages/NotificationsPage';
 import { MessagesPage } from './components/pages/MessagesPage';
 import { FAQSection } from './components/common/FAQSection';
+import { ExamPreparationPage } from './components/pages/ExamPreparationPage';
 
 const STEM_SUBJECTS: string[] = [...ALLOWED_TUTOR_SUBJECTS];
 
-type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'tutorSessions' | 'studentSessions' | 'messages' | 'earnings' | 'settings' | 'notifications' | 'tutorProfile' | 'tutorBooking' | 'about';
+type Tab = 'home' | 'tutors' | 'questions' | 'manageAvailability' | 'courses' | 'courseLearning' | 'resources' | 'quizzes' | 'examPreparation' | 'registerSelect' | 'registerStudent' | 'registerTutor' | 'forgotPassword' | 'register' | 'dashboard' | 'tutorSessions' | 'studentSessions' | 'messages' | 'earnings' | 'settings' | 'notifications' | 'tutorProfile' | 'tutorBooking' | 'about';
 
 const NAV_LABELS: Record<Tab, string> = {
   home: 'Home',
@@ -98,6 +99,7 @@ const NAV_LABELS: Record<Tab, string> = {
   courseLearning: 'Course Learning',
   resources: 'Resources',
   quizzes: 'AI Assistant',
+  examPreparation: 'Exam Preparation AI',
   registerSelect: 'Register',
   registerStudent: 'Register',
   registerTutor: 'Register',
@@ -125,6 +127,7 @@ const getAllowedTabs = (user: AppUser | null): Tab[] => {
       'courses',
       'resources',
       'quizzes',
+      'examPreparation',
       'registerSelect',
       'registerStudent',
       'registerTutor',
@@ -134,11 +137,11 @@ const getAllowedTabs = (user: AppUser | null): Tab[] => {
   }
 
   if (user.role === 'student') {
-    return ['home', 'tutors', 'questions', 'courses', 'resources', 'quizzes', 'dashboard', 'studentSessions', 'messages', 'settings', 'notifications', 'about'];
+    return ['home', 'tutors', 'questions', 'courses', 'resources', 'quizzes', 'examPreparation', 'dashboard', 'studentSessions', 'messages', 'settings', 'notifications', 'about'];
   }
 
   if (user.role === 'tutor') {
-    return ['home', 'dashboard', 'tutorSessions', 'messages', 'earnings', 'manageAvailability', 'register', 'courses', 'resources', 'quizzes', 'settings', 'notifications', 'about'];
+    return ['home', 'dashboard', 'tutorSessions', 'messages', 'earnings', 'manageAvailability', 'register', 'courses', 'resources', 'quizzes', 'examPreparation', 'settings', 'notifications', 'about'];
   }
 
   return ['home', 'about'];
@@ -225,8 +228,11 @@ const parseRouteFromLocation = (
     '/courses': 'courses',
     '/resources': 'resources',
     '/aiassistant': 'quizzes',
+    '/aiassistant/exam-preparation': 'examPreparation',
     '/assistant': 'quizzes',
+    '/assistant/exam-preparation': 'examPreparation',
     '/quizzes': 'quizzes',
+    '/exam-preparation-ai': 'examPreparation',
     '/register': 'registerSelect',
     '/register/student': 'registerStudent',
     '/register/tutor': 'registerTutor',
@@ -257,6 +263,9 @@ const parseRouteFromLocation = (
     { prefix: '/manage-availability/', tab: 'manageAvailability' },
     { prefix: '/courses/', tab: 'courses' },
     { prefix: '/resources/', tab: 'resources' },
+    { prefix: '/aiassistant/exam-preparation/', tab: 'examPreparation' },
+    { prefix: '/assistant/exam-preparation/', tab: 'examPreparation' },
+    { prefix: '/exam-preparation-ai/', tab: 'examPreparation' },
     { prefix: '/aiassistant/', tab: 'quizzes' },
     { prefix: '/assistant/', tab: 'quizzes' },
     { prefix: '/quizzes/', tab: 'quizzes' },
@@ -355,6 +364,8 @@ const routeTargetToPath = (route: RouteTarget): string => {
       return '/resources';
     case 'quizzes':
       return '/aiassistant';
+    case 'examPreparation':
+      return '/aiassistant/exam-preparation';
     case 'registerSelect':
       return '/register';
     case 'registerStudent':
@@ -4669,7 +4680,7 @@ export default function App() {
   };
 
   return (
-    <div className={`${activeTab === 'quizzes' ? 'h-[100dvh] overflow-hidden' : 'min-h-screen'} bg-[#F8FAFC] font-sans text-slate-900`}>
+    <div className={`${activeTab === 'quizzes' || activeTab === 'examPreparation' ? 'h-[100dvh] overflow-hidden' : 'min-h-screen'} bg-[#F8FAFC] font-sans text-slate-900`}>
       {/* Navbar */}
       <nav className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -4693,11 +4704,11 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setActiveTab(tab)}
-                    className={`text-base font-semibold whitespace-nowrap px-1 py-2 transition-colors ${activeTab === tab ? 'text-indigo-600' : 'text-slate-500 hover:text-indigo-500'}`}
+                    className={`text-base font-semibold whitespace-nowrap px-1 py-2 transition-colors ${(activeTab === tab || (activeTab === 'examPreparation' && tab === 'quizzes')) ? 'text-indigo-600' : 'text-slate-500 hover:text-indigo-500'}`}
                   >
                     {NAV_LABELS[tab]}
                   </button>
-                  {activeTab === tab && (
+                  {(activeTab === tab || (activeTab === 'examPreparation' && tab === 'quizzes')) && (
                     <motion.div
                       layoutId="activeTabUnderline"
                       className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600"
@@ -5531,7 +5542,7 @@ export default function App() {
 
       {/* Main Content - All other tabs */}
       {activeTab !== 'courseLearning' && (
-        <main className={activeTab === 'quizzes'
+        <main className={activeTab === 'quizzes' || activeTab === 'examPreparation'
           ? 'h-[calc(100dvh-4rem)] overflow-hidden'
           : 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8'}>
           {activeTab === 'tutorProfile' && viewingTutorId && (
@@ -6030,7 +6041,16 @@ export default function App() {
 
           {activeTab === 'quizzes' && (
             <div className="h-full w-full bg-slate-50 overflow-hidden">
-              <QuizChatbotPage currentUser={currentUser} />
+              <QuizChatbotPage
+                currentUser={currentUser}
+                onOpenExamPreparation={() => setActiveTab('examPreparation')}
+              />
+            </div>
+          )}
+
+          {activeTab === 'examPreparation' && (
+            <div className="h-full w-full bg-slate-50 overflow-hidden">
+              <ExamPreparationPage onBack={() => setActiveTab('quizzes')} />
             </div>
           )}
 

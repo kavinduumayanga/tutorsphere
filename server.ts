@@ -32,6 +32,7 @@ import { MessageConversation } from "./src/models/MessageConversation.js";
 import { DirectMessage } from "./src/models/DirectMessage.js";
 import { quizChatbotRouter } from "./src/server/quiz-chatbot/chatController.js";
 import { faqChatbotRouter } from "./src/server/faq-chatbot/chatController.js";
+import { examPreparationAiRouter } from "./src/server/exam-preparation-ai/chatController.js";
 import { authRouter } from "./src/server/auth/authRoutes.js";
 import { messagingRouter } from "./src/server/messages/messageRoutes.js";
 import {
@@ -1966,6 +1967,8 @@ async function startServer() {
   console.log(`[Startup] Session store mode: ${isProduction ? 'connect-mongo' : 'memory (development)'}`);
   app.use('/api/quiz-chatbot', quizChatbotRouter);
   app.use('/api/faq-chatbot', faqChatbotRouter);
+  app.use('/api/exam-preparation-ai', examPreparationAiRouter);
+  app.use('/api/exam-preparation', examPreparationAiRouter);
   app.use('/api/auth', authRouter);
   app.use('/api/messages', messagingRouter);
   console.log('[Startup] Core route setup completed.');

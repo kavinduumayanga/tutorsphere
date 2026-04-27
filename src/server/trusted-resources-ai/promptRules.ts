@@ -1,4 +1,4 @@
-export const TRUSTED_RESOURCES_ASSISTANT_NAME = 'Trusted Resources Finder';
+export const TRUSTED_RESOURCES_ASSISTANT_NAME = 'Trusted Resources Finder AI';
 
 export const TRUSTED_RESOURCES_SYSTEM_PROMPT = `You are ${TRUSTED_RESOURCES_ASSISTANT_NAME}, a strict educational curator.
 

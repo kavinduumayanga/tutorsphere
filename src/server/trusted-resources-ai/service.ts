@@ -432,7 +432,7 @@ const extractJsonObject = (rawReply: string): Record<string, unknown> => {
     }
   }
 
-  throw new Error('Trusted Resources Finder returned invalid JSON content.');
+  throw new Error('Trusted Resources Finder AI returned invalid JSON content.');
 };
 
 const normalizeAiResource = (value: unknown, topic: string): TrustedResourceItem | null => {
@@ -1067,7 +1067,7 @@ const getLocalTutorSphereResources = async (topic: string): Promise<TrustedResou
       })
       .filter((resource): resource is TrustedResourceItem => Boolean(resource));
   } catch (error) {
-    console.error('Trusted Resources Finder local lookup error:', error);
+    console.error('Trusted Resources Finder AI local lookup error:', error);
     return [];
   }
 };
@@ -1221,7 +1221,7 @@ export class TrustedResourcesAiService {
         resources: await buildFinalResources(topic, aiResources, localResources, topicFallbackResources),
       };
     } catch (error) {
-      console.error('Trusted Resources Finder generation error:', error);
+      console.error('Trusted Resources Finder AI generation error:', error);
       return {
         assistant: TRUSTED_RESOURCES_ASSISTANT_NAME,
         topic,

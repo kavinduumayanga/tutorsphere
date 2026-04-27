@@ -20,7 +20,7 @@ router.post('/generate', async (req, res) => {
     const generated = await trustedResourcesAiService.generateTrustedResources({ topic });
     return res.json(generated);
   } catch (error) {
-    console.error('Trusted Resources Finder /generate error:', error);
+    console.error('Trusted Resources Finder AI /generate error:', error);
     return res.status(500).json({ error: 'Failed to generate trusted resources.' });
   }
 });

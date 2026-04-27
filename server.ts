@@ -36,6 +36,7 @@ import { examPreparationAiRouter } from "./src/server/exam-preparation-ai/chatCo
 import { trustedResourcesAiRouter } from "./src/server/trusted-resources-ai/chatController.js";
 import { authRouter } from "./src/server/auth/authRoutes.js";
 import { messagingRouter } from "./src/server/messages/messageRoutes.js";
+import { tutorRevenueInsightsAiService } from "./src/server/revenue-insights/service.js";
 import {
   hashPassword,
   shouldUpgradePasswordHash,
@@ -3494,6 +3495,69 @@ async function startServer() {
         incomingTutorData.pricePerHour = toFinitePrice(incomingTutorData.pricePerHour);
       }
 
+      if (Object.prototype.hasOwnProperty.call(incomingTutorData, 'aiPricingState')) {
+        const rawAiPricingState = incomingTutorData.aiPricingState;
+        const normalizedAiPricingState: Record<string, unknown> = {};
+
+        if (!rawAiPricingState || typeof rawAiPricingState !== 'object' || Array.isArray(rawAiPricingState)) {
+          delete (incomingTutorData as any).aiPricingState;
+        } else {
+          const parsedAppliedRate = toFinitePrice((rawAiPricingState as any).lastAppliedSuggestedRate);
+          if (parsedAppliedRate > 0) {
+            normalizedAiPricingState.lastAppliedSuggestedRate = roundCurrency(parsedAppliedRate);
+          }
+
+          const rawAppliedAt = String((rawAiPricingState as any).lastSuggestionAppliedAt || '').trim();
+          if (rawAppliedAt && !Number.isNaN(Date.parse(rawAppliedAt))) {
+            normalizedAiPricingState.lastSuggestionAppliedAt = new Date(rawAppliedAt).toISOString();
+          }
+
+          const rawSnapshot = (rawAiPricingState as any).lastAnalyzedSnapshot;
+          if (rawSnapshot && typeof rawSnapshot === 'object' && !Array.isArray(rawSnapshot)) {
+            const clampRate = (value: unknown): number => {
+              const parsed = Number(value);
+              if (!Number.isFinite(parsed)) {
+                return 0;
+              }
+              return roundCurrency(Math.max(0, Math.min(1, parsed)));
+            };
+
+            const clampCount = (value: unknown): number => {
+              const parsed = Number(value);
+              if (!Number.isFinite(parsed) || parsed <= 0) {
+                return 0;
+              }
+              return Math.round(parsed);
+            };
+
+            const clampRating = (value: unknown): number => {
+              const parsed = Number(value);
+              if (!Number.isFinite(parsed)) {
+                return 0;
+              }
+              return roundCurrency(Math.max(0, Math.min(5, parsed)));
+            };
+
+            normalizedAiPricingState.lastAnalyzedSnapshot = {
+              bookingDemandLast30Days: clampCount((rawSnapshot as any).bookingDemandLast30Days),
+              completedSessions: clampCount((rawSnapshot as any).completedSessions),
+              cancelledSessions: clampCount((rawSnapshot as any).cancelledSessions),
+              completionRate: clampRate((rawSnapshot as any).completionRate),
+              cancellationRate: clampRate((rawSnapshot as any).cancellationRate),
+              conversionRate: clampRate((rawSnapshot as any).conversionRate),
+              averageRating: clampRating((rawSnapshot as any).averageRating),
+              totalReviewCount: clampCount((rawSnapshot as any).totalReviewCount),
+            };
+          }
+
+          if (Object.keys(normalizedAiPricingState).length > 0) {
+            incomingTutorData.aiPricingState = normalizedAiPricingState;
+          } else {
+            delete (incomingTutorData as any).aiPricingState;
+          }
+        }
+      }
+
       if (Object.prototype.hasOwnProperty.call(incomingTutorData, 'bio')) {
         incomingTutorData.bio = String(incomingTutorData.bio ?? '').trim();
       }
@@ -5968,6 +6032,843 @@ async function startServer() {
     );
   };
 
+  type RevenueTransactionStatus = 'paid' | 'pending' | 'refunded_or_cancelled';
+
+  type RevenueHistoryRow = {
+    id: string;
+    timestamp: number;
+    dateLabel: string;
+    itemName: string;
+    studentName: string;
+    paymentType: 'session booking' | 'course purchase';
+    amount: number;
+    platformFee: number;
+    netEarning: number;
+    status: RevenueTransactionStatus;
+    paymentReference?: string;
+  };
+
+  type RevenueCsvRow = {
+    date: string;
+    sessionOrCourse: string;
+    student: string;
+    paymentType: 'session booking' | 'course purchase' | 'withdrawal' | 'refund';
+    amount: number;
+    platformFee: number;
+    netEarning: number;
+    status: string;
+    withdrawnAmount?: number;
+  };
+
+  type RevenueMonthlyEarnings = {
+    month: string;
+    monthKey: string;
+    sessionNetEarnings: number;
+    courseNetEarnings: number;
+    totalNetEarnings: number;
+  };
+
+  type RevenueTaxMonth = {
+    month: string;
+    monthKey: string;
+    sessionIncome: number;
+    courseSales: number;
+    platformFees: number;
+    refunds: number;
+    withdrawals: number;
+    netTaxableIncome: number;
+  };
+
+  type TutorRevenueSnapshot = {
+    generatedAt: string;
+    summary: {
+      totalEarnings: number;
+      availableBalance: number;
+      completedSessionEarnings: number;
+      pendingEarnings: number;
+      withdrawnAmount: number;
+      remainingBalance: number;
+      pendingWithdrawalAmount: number;
+      monthlyEarnings: RevenueMonthlyEarnings[];
+      paymentHistory: RevenueHistoryRow[];
+    };
+    forecasting: {
+      windows: Array<{
+        days: 30 | 60 | 90;
+        projectedNetEarning: number;
+        historicalProjection: number;
+        upcomingConfirmedNet: number;
+        confidence: 'low' | 'medium' | 'high';
+      }>;
+      fallback: boolean;
+      fallbackMessage?: string;
+      methodology: string;
+    };
+    pricingSuggestion: {
+      currentHourlyRate: number;
+      suggestedHourlyRate: number;
+      suggestedRange: { min: number; max: number };
+      direction: 'increase' | 'decrease' | 'keep';
+      reason: string;
+      confidence: 'low' | 'medium' | 'high';
+      metrics: {
+        bookingDemandLast30Days: number;
+        completedSessions: number;
+        cancelledSessions: number;
+        cancellationRate: number;
+        completionRate: number;
+        conversionRate: number;
+        averageRating: number;
+        totalReviewCount: number;
+      };
+    };
+    taxPrep: {
+      monthlySummaries: RevenueTaxMonth[];
+      totals: {
+        sessionIncome: number;
+        courseSales: number;
+        platformFees: number;
+        refunds: number;
+        withdrawals: number;
+        netTaxableIncome: number;
+      };
+    };
+    aiInsights: {
+      assistant: string;
+      source: 'azure' | 'fallback';
+      forecastSummary: string;
+      pricingSummary: string;
+      taxSummary: string;
+      actionItems: string[];
+      warning?: string;
+    };
+    csvRows: RevenueCsvRow[];
+  };
+
+  const toTimestampSafe = (value: unknown): number | null => {
+    const timestamp = Date.parse(String(value || ''));
+    return Number.isNaN(timestamp) ? null : timestamp;
+  };
+
+  const clampNumber = (value: number, min: number, max: number): number => {
+    return Math.max(min, Math.min(max, value));
+  };
+
+  const getMonthKeyFromTimestamp = (timestamp: number): string => {
+    const date = new Date(timestamp);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  };
+
+  const getMonthLabelFromKey = (monthKey: string): string => {
+    const [year, month] = monthKey.split('-').map((token) => Number(token));
+    if (!Number.isFinite(year) || !Number.isFinite(month)) {
+      return monthKey;
+    }
+
+    return new Date(year, month - 1, 1).toLocaleDateString('en-US', {
+      month: 'short',
+      year: 'numeric',
+    });
+  };
+
+  const toRevenueTransactionStatus = (bookingStatus: string, paymentStatus: string): RevenueTransactionStatus => {
+    if (bookingStatus === 'cancelled' || paymentStatus === 'failed' || paymentStatus === 'refunded') {
+      return 'refunded_or_cancelled';
+    }
+
+    if (bookingStatus === 'completed' && paymentStatus === 'paid') {
+      return 'paid';
+    }
+
+    return 'pending';
+  };
+
+  const normalizeEnrollmentPaymentStatus = (value: unknown): 'pending' | 'paid' | 'failed' | 'refunded' | 'cancelled' => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'paid') return 'paid';
+    if (normalized === 'failed') return 'failed';
+    if (normalized === 'refunded') return 'refunded';
+    if (normalized === 'cancelled') return 'cancelled';
+    return 'pending';
+  };
+
+  const escapeCsvValue = (value: unknown): string => {
+    let normalized = String(value ?? '');
+    if (/^[=+\-@]/.test(normalized)) {
+      normalized = `'${normalized}`;
+    }
+
+    normalized = normalized.replace(/\r?\n/g, ' ').trim();
+
+    if (/[",]/.test(normalized)) {
+      return `"${normalized.replace(/"/g, '""')}"`;
+    }
+
+    return normalized;
+  };
+
+  const buildTutorRevenueSnapshot = async (tutorId: string): Promise<TutorRevenueSnapshot> => {
+    const tutor = await Tutor.findOne({ id: tutorId }, { id: 1, pricePerHour: 1, rating: 1, aiPricingState: 1 });
+    if (!tutor) {
+      throw new Error('Tutor not found.');
+    }
+
+    const [bookings, tutorReviews, withdrawalRequests, tutorCourseIds] = await Promise.all([
+      Booking.find({ tutorId }),
+      Review.find({ tutorId }, { rating: 1 }),
+      WithdrawalRequest.find({ tutorId }),
+      Course.find({ tutorId }).distinct('id'),
+    ]);
+
+    const normalizedTutorCourseIds = (tutorCourseIds as string[]).filter(Boolean);
+    const [courseEnrollments, courses] = normalizedTutorCourseIds.length > 0
+      ? await Promise.all([
+          CourseEnrollment.find({ courseId: { $in: normalizedTutorCourseIds } }),
+          Course.find({ id: { $in: normalizedTutorCourseIds } }, { id: 1, title: 1, isFree: 1, price: 1 }),
+        ])
+      : [[], []];
+
+    const courseById = new Map(
+      courses.map((course) => [String((course as any)?.id || '').trim(), course])
+    );
+
+    const tutorHourlyRate = roundCurrency(toFinitePrice((tutor as any)?.pricePerHour));
+    const now = Date.now();
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const thirtyDaysAgo = now - (30 * DAY_MS);
+
+    let completedSessionNetEarnings = 0;
+    let pendingSessionNetEarnings = 0;
+    let completedCourseNetEarnings = 0;
+    let totalRefunds = 0;
+
+    let totalSessionBookings = 0;
+    let paidSessionBookings = 0;
+    let completedSessions = 0;
+    let cancelledSessions = 0;
+    let bookingDemandLast30Days = 0;
+
+    const monthlyEarningsByKey = new Map<string, { sessionNetEarnings: number; courseNetEarnings: number }>();
+    const monthlyTaxByKey = new Map<string, Omit<RevenueTaxMonth, 'netTaxableIncome'>>();
+    const upcomingConfirmedSessions: Array<{ timestamp: number; tutorNetEarning: number }> = [];
+    const paidEventHistory: Array<{ timestamp: number; netAmount: number }> = [];
+    const paymentHistory: RevenueHistoryRow[] = [];
+    const csvRows: RevenueCsvRow[] = [];
+
+    const ensureMonthlyEarnings = (monthKey: string) => {
+      if (!monthlyEarningsByKey.has(monthKey)) {
+        monthlyEarningsByKey.set(monthKey, {
+          sessionNetEarnings: 0,
+          courseNetEarnings: 0,
+        });
+      }
+      return monthlyEarningsByKey.get(monthKey)!;
+    };
+
+    const ensureMonthlyTax = (monthKey: string) => {
+      if (!monthlyTaxByKey.has(monthKey)) {
+        monthlyTaxByKey.set(monthKey, {
+          month: getMonthLabelFromKey(monthKey),
+          monthKey,
+          sessionIncome: 0,
+          courseSales: 0,
+          platformFees: 0,
+          refunds: 0,
+          withdrawals: 0,
+        });
+      }
+      return monthlyTaxByKey.get(monthKey)!;
+    };
+
+    for (const bookingDoc of bookings) {
+      const booking = typeof (bookingDoc as any)?.toObject === 'function'
+        ? (bookingDoc as any).toObject()
+        : (bookingDoc as any);
+
+      const bookingId = String((booking as any)?.id || '').trim() || String((booking as any)?._id || '').trim();
+      const studentName = String((booking as any)?.studentName || '').trim() || 'Student';
+      const subject = String((booking as any)?.subject || '').trim() || 'Tutoring';
+      const bookingStatus = normalizeBookingStatus((booking as any)?.status);
+      const paymentStatus = normalizeBookingPaymentStatus((booking as any)?.paymentStatus);
+      const sessionStart = parseSessionStartDateTime((booking as any)?.date, (booking as any)?.timeSlot, (booking as any)?.sessionDateKey);
+      const sessionTimestamp = sessionStart ? sessionStart.getTime() : null;
+      const paidTimestamp = toTimestampSafe((booking as any)?.paidAt);
+      const refundedTimestamp = toTimestampSafe((booking as any)?.refundedAt);
+      const createdTimestamp = toTimestampSafe((booking as any)?.createdAt);
+      const eventTimestamp = paidTimestamp || sessionTimestamp || createdTimestamp || now;
+      const eventDate = new Date(eventTimestamp);
+      const eventDateLabel = Number.isNaN(eventDate.getTime())
+        ? 'N/A'
+        : eventDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+      const parsedDurationHours = Number((booking as any)?.sessionDurationHours);
+      const fallbackBaseAmount =
+        Number.isFinite(parsedDurationHours) && parsedDurationHours > 0 && tutorHourlyRate > 0
+          ? roundCurrency(tutorHourlyRate * parsedDurationHours)
+          : tutorHourlyRate;
+      const financials = resolveBookingFinancialBreakdown(booking, fallbackBaseAmount);
+
+      const transactionStatus = toRevenueTransactionStatus(bookingStatus, paymentStatus);
+      const isCompletedPaid = bookingStatus === 'completed' && paymentStatus === 'paid';
+      const isPendingPaid = (bookingStatus === 'pending' || bookingStatus === 'confirmed') && paymentStatus === 'paid';
+      const isRefunded = bookingStatus === 'cancelled' || paymentStatus === 'refunded';
+
+      totalSessionBookings += 1;
+      if (paymentStatus === 'paid') {
+        paidSessionBookings += 1;
+      }
+      if (isCompletedPaid) {
+        completedSessions += 1;
+      }
+      if (bookingStatus === 'cancelled' || paymentStatus === 'refunded') {
+        cancelledSessions += 1;
+      }
+      if (sessionTimestamp && sessionTimestamp >= thirtyDaysAgo && !isRefunded) {
+        bookingDemandLast30Days += 1;
+      }
+
+      if (isCompletedPaid) {
+        completedSessionNetEarnings += financials.tutorNetEarning;
+        paidEventHistory.push({ timestamp: eventTimestamp, netAmount: financials.tutorNetEarning });
+        const monthKey = getMonthKeyFromTimestamp(eventTimestamp);
+        const monthEarnings = ensureMonthlyEarnings(monthKey);
+        monthEarnings.sessionNetEarnings += financials.tutorNetEarning;
+
+        const monthTax = ensureMonthlyTax(monthKey);
+        monthTax.sessionIncome += financials.tutorNetEarning;
+        monthTax.platformFees += financials.tutorPlatformFee;
+      }
+
+      if (isPendingPaid) {
+        pendingSessionNetEarnings += financials.tutorNetEarning;
+        if (sessionTimestamp && sessionTimestamp > now) {
+          upcomingConfirmedSessions.push({
+            timestamp: sessionTimestamp,
+            tutorNetEarning: financials.tutorNetEarning,
+          });
+        }
+      }
+
+      if (isRefunded) {
+        const refundTimestamp = refundedTimestamp || eventTimestamp;
+        const monthKey = getMonthKeyFromTimestamp(refundTimestamp);
+        const monthTax = ensureMonthlyTax(monthKey);
+        monthTax.refunds += financials.studentTotalPaid;
+        totalRefunds += financials.studentTotalPaid;
+      }
+
+      paymentHistory.push({
+        id: `session-${bookingId}`,
+        timestamp: eventTimestamp,
+        dateLabel: eventDateLabel,
+        itemName: `${subject} Session`,
+        studentName,
+        paymentType: 'session booking',
+        amount: financials.baseAmount,
+        platformFee: transactionStatus === 'paid' ? financials.tutorPlatformFee : 0,
+        netEarning: transactionStatus === 'paid' ? financials.tutorNetEarning : 0,
+        status: transactionStatus,
+        paymentReference: String((booking as any)?.paymentReference || '').trim() || undefined,
+      });
+
+      const csvPaymentType: RevenueCsvRow['paymentType'] = isRefunded ? 'refund' : 'session booking';
+      const csvStatus =
+        paymentStatus === 'refunded'
+          ? 'refunded'
+          : bookingStatus === 'cancelled'
+            ? 'cancelled'
+            : bookingStatus === 'completed' && paymentStatus === 'paid'
+              ? 'completed'
+              : paymentStatus === 'paid'
+                ? 'paid'
+                : paymentStatus === 'failed'
+                  ? 'failed'
+                  : bookingStatus || 'pending';
+      const csvPlatformFee = transactionStatus === 'paid' ? financials.tutorPlatformFee : 0;
+      const csvNetEarning = transactionStatus === 'paid' ? financials.tutorNetEarning : 0;
+
+      csvRows.push({
+        date: new Date(eventTimestamp).toISOString(),
+        sessionOrCourse: `${subject} Session`,
+        student: studentName,
+        paymentType: csvPaymentType,
+        amount: financials.baseAmount,
+        platformFee: csvPlatformFee,
+        netEarning: csvNetEarning,
+        status: csvStatus,
+      });
+    }
+
+    for (const enrollmentDoc of courseEnrollments) {
+      const enrollment = typeof (enrollmentDoc as any)?.toObject === 'function'
+        ? (enrollmentDoc as any).toObject()
+        : (enrollmentDoc as any);
+      const enrollmentId = String((enrollment as any)?.id || '').trim() || String((enrollment as any)?._id || '').trim();
+      const paymentStatus = normalizeEnrollmentPaymentStatus((enrollment as any)?.paymentStatus);
+      const paidAtTimestamp = toTimestampSafe((enrollment as any)?.paidAt);
+      const enrolledAtTimestamp = toTimestampSafe((enrollment as any)?.enrolledAt);
+      const eventTimestamp = paidAtTimestamp || enrolledAtTimestamp || now;
+      const eventDate = new Date(eventTimestamp);
+      const eventDateLabel = Number.isNaN(eventDate.getTime())
+        ? 'N/A'
+        : eventDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+      let grossAmount = Number((enrollment as any)?.amountPaid);
+      if (!Number.isFinite(grossAmount) || grossAmount <= 0) {
+        grossAmount = Number((enrollment as any)?.finalPaidAmount);
+      }
+      if (!Number.isFinite(grossAmount) || grossAmount <= 0) {
+        const mappedCourse = courseById.get(String((enrollment as any)?.courseId || '').trim());
+        const fallbackPrice = toFinitePrice((mappedCourse as any)?.price);
+        const isFree = resolveCourseIsFree((mappedCourse as any)?.isFree, fallbackPrice);
+        grossAmount = isFree ? 0 : fallbackPrice;
+      }
+
+      if (!Number.isFinite(grossAmount) || grossAmount <= 0) {
+        continue;
+      }
+
+      const roundedGrossAmount = roundCurrency(grossAmount);
+      const tutorPlatformFee = roundCurrency(roundedGrossAmount * WITHDRAWAL_PLATFORM_FEE_RATE);
+      const tutorNetEarning = roundCurrency(Math.max(0, roundedGrossAmount - tutorPlatformFee));
+      const isPaid = paymentStatus === 'paid';
+      const isRefunded = paymentStatus === 'refunded' || paymentStatus === 'cancelled';
+      const transactionStatus: RevenueTransactionStatus = isRefunded
+        ? 'refunded_or_cancelled'
+        : isPaid
+          ? 'paid'
+          : 'pending';
+
+      const courseTitle =
+        String((enrollment as any)?.courseTitle || '').trim() ||
+        String((courseById.get(String((enrollment as any)?.courseId || '').trim()) as any)?.title || '').trim() ||
+        'Course Purchase';
+      const studentName = String((enrollment as any)?.studentName || '').trim() || 'Student';
+
+      if (isPaid) {
+        completedCourseNetEarnings += tutorNetEarning;
+        paidEventHistory.push({ timestamp: eventTimestamp, netAmount: tutorNetEarning });
+        const monthKey = getMonthKeyFromTimestamp(eventTimestamp);
+        const monthEarnings = ensureMonthlyEarnings(monthKey);
+        monthEarnings.courseNetEarnings += tutorNetEarning;
+
+        const monthTax = ensureMonthlyTax(monthKey);
+        monthTax.courseSales += tutorNetEarning;
+        monthTax.platformFees += tutorPlatformFee;
+      }
+
+      if (isRefunded) {
+        const monthKey = getMonthKeyFromTimestamp(eventTimestamp);
+        const monthTax = ensureMonthlyTax(monthKey);
+        monthTax.refunds += roundedGrossAmount;
+        totalRefunds += roundedGrossAmount;
+      }
+
+      paymentHistory.push({
+        id: `course-${enrollmentId}`,
+        timestamp: eventTimestamp,
+        dateLabel: eventDateLabel,
+        itemName: courseTitle,
+        studentName,
+        paymentType: 'course purchase',
+        amount: roundedGrossAmount,
+        platformFee: transactionStatus === 'paid' ? tutorPlatformFee : 0,
+        netEarning: transactionStatus === 'paid' ? tutorNetEarning : 0,
+        status: transactionStatus,
+        paymentReference: String((enrollment as any)?.paymentReference || '').trim() || undefined,
+      });
+
+      const csvPaymentType: RevenueCsvRow['paymentType'] = isRefunded ? 'refund' : 'course purchase';
+      const csvStatus =
+        paymentStatus === 'refunded'
+          ? 'refunded'
+          : paymentStatus === 'cancelled'
+            ? 'cancelled'
+            : paymentStatus === 'paid'
+              ? 'paid'
+              : paymentStatus === 'failed'
+                ? 'failed'
+                : 'pending';
+      const csvPlatformFee = transactionStatus === 'paid' ? tutorPlatformFee : 0;
+      const csvNetEarning = transactionStatus === 'paid' ? tutorNetEarning : 0;
+
+      csvRows.push({
+        date: new Date(eventTimestamp).toISOString(),
+        sessionOrCourse: courseTitle,
+        student: studentName,
+        paymentType: csvPaymentType,
+        amount: roundedGrossAmount,
+        platformFee: csvPlatformFee,
+        netEarning: csvNetEarning,
+        status: csvStatus,
+      });
+    }
+
+    for (const withdrawalDoc of withdrawalRequests) {
+      const withdrawal = typeof (withdrawalDoc as any)?.toObject === 'function'
+        ? (withdrawalDoc as any).toObject()
+        : (withdrawalDoc as any);
+      const withdrawalId = String((withdrawal as any)?.id || '').trim() || String((withdrawal as any)?._id || '').trim();
+      const amount = roundCurrency(toFinitePrice((withdrawal as any)?.amount));
+      const requestedTimestamp =
+        toTimestampSafe((withdrawal as any)?.requestedAt) ||
+        toTimestampSafe((withdrawal as any)?.createdAt) ||
+        now;
+      const monthKey = getMonthKeyFromTimestamp(requestedTimestamp);
+      const monthTax = ensureMonthlyTax(monthKey);
+      monthTax.withdrawals += amount;
+      const withdrawalStatus = String((withdrawal as any)?.status || '').trim().toLowerCase() || 'pending';
+
+      csvRows.push({
+        date: new Date(requestedTimestamp).toISOString(),
+        sessionOrCourse: `Withdrawal Request ${withdrawalId}`,
+        student: '',
+        paymentType: 'withdrawal',
+        amount,
+        platformFee: 0,
+        netEarning: 0,
+        status: withdrawalStatus,
+        withdrawnAmount: amount,
+      });
+    }
+
+    const monthlyEarnings = Array.from(monthlyEarningsByKey.entries())
+      .map(([monthKey, values]) => {
+        const sessionNetEarnings = roundCurrency(values.sessionNetEarnings);
+        const courseNetEarnings = roundCurrency(values.courseNetEarnings);
+        return {
+          month: getMonthLabelFromKey(monthKey),
+          monthKey,
+          sessionNetEarnings,
+          courseNetEarnings,
+          totalNetEarnings: roundCurrency(sessionNetEarnings + courseNetEarnings),
+        };
+      })
+      .sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+
+    const monthlySummaries = Array.from(monthlyTaxByKey.values())
+      .map((entry) => {
+        const sessionIncome = roundCurrency(entry.sessionIncome);
+        const courseSales = roundCurrency(entry.courseSales);
+        const platformFees = roundCurrency(entry.platformFees);
+        const refunds = roundCurrency(entry.refunds);
+        const withdrawals = roundCurrency(entry.withdrawals);
+        const netTaxableIncome = roundCurrency(Math.max(0, sessionIncome + courseSales - platformFees - refunds));
+
+        return {
+          ...entry,
+          sessionIncome,
+          courseSales,
+          platformFees,
+          refunds,
+          withdrawals,
+          netTaxableIncome,
+        };
+      })
+      .sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+
+    const taxTotals = monthlySummaries.reduce(
+      (acc, month) => {
+        acc.sessionIncome += month.sessionIncome;
+        acc.courseSales += month.courseSales;
+        acc.platformFees += month.platformFees;
+        acc.refunds += month.refunds;
+        acc.withdrawals += month.withdrawals;
+        acc.netTaxableIncome += month.netTaxableIncome;
+        return acc;
+      },
+      {
+        sessionIncome: 0,
+        courseSales: 0,
+        platformFees: 0,
+        refunds: 0,
+        withdrawals: 0,
+        netTaxableIncome: 0,
+      }
+    );
+
+    const normalizedTaxTotals = {
+      sessionIncome: roundCurrency(taxTotals.sessionIncome),
+      courseSales: roundCurrency(taxTotals.courseSales),
+      platformFees: roundCurrency(taxTotals.platformFees),
+      refunds: roundCurrency(taxTotals.refunds),
+      withdrawals: roundCurrency(taxTotals.withdrawals),
+      netTaxableIncome: roundCurrency(taxTotals.netTaxableIncome),
+    };
+
+    const recentMonthlyTotals = monthlyEarnings.slice(-6).map((entry) => entry.totalNetEarnings);
+    const averageMonthlyNet = recentMonthlyTotals.length > 0
+      ? roundCurrency(recentMonthlyTotals.reduce((sum, value) => sum + value, 0) / recentMonthlyTotals.length)
+      : 0;
+    const baseDailyRunRate = roundCurrency(averageMonthlyNet / 30);
+    const recentThreeAverage = recentMonthlyTotals.slice(-3);
+    const previousThreeAverage = recentMonthlyTotals.slice(-6, -3);
+    const trendFactor = previousThreeAverage.length > 0 && recentThreeAverage.length > 0
+      ? clampNumber(
+          recentThreeAverage.reduce((sum, value) => sum + value, 0) /
+            Math.max(0.01, previousThreeAverage.reduce((sum, value) => sum + value, 0)),
+          0.75,
+          1.25
+        )
+      : 1;
+
+    const hasEnoughForecastData = paidEventHistory.length >= 2 || upcomingConfirmedSessions.length > 0;
+    const fallbackForecastMessage = hasEnoughForecastData
+      ? undefined
+      : 'Not enough historical paid data was found. Forecast uses a conservative baseline estimate.';
+
+    const forecastWindows = ([30, 60, 90] as const).map((days) => {
+      const windowEnd = now + (days * DAY_MS);
+      const upcomingConfirmedNet = roundCurrency(
+        upcomingConfirmedSessions
+          .filter((entry) => entry.timestamp <= windowEnd)
+          .reduce((sum, entry) => sum + entry.tutorNetEarning, 0)
+      );
+
+      let historicalProjection = roundCurrency(baseDailyRunRate * days * trendFactor);
+      if (!hasEnoughForecastData) {
+        const conservativeMonthlyBase = roundCurrency(Math.max(0, tutorHourlyRate - (tutorHourlyRate * WITHDRAWAL_PLATFORM_FEE_RATE)));
+        historicalProjection = roundCurrency(conservativeMonthlyBase * Math.max(1, Math.round(days / 30)));
+      }
+
+      const projectedNetEarning = roundCurrency(historicalProjection + upcomingConfirmedNet);
+      const confidence: 'low' | 'medium' | 'high' =
+        paidEventHistory.length >= 20
+          ? 'high'
+          : paidEventHistory.length >= 8
+            ? 'medium'
+            : 'low';
+
+      return {
+        days,
+        projectedNetEarning,
+        historicalProjection,
+        upcomingConfirmedNet,
+        confidence,
+      };
+    });
+
+    const totalReviewCount = tutorReviews.length;
+    const averageRating = totalReviewCount > 0
+      ? roundCurrency(
+          tutorReviews.reduce((sum, review) => sum + toFinitePrice((review as any)?.rating), 0) / totalReviewCount
+        )
+      : roundCurrency(toFinitePrice((tutor as any)?.rating));
+    const completionRate = roundCurrency(completedSessions / Math.max(1, totalSessionBookings));
+    const cancellationRate = roundCurrency(cancelledSessions / Math.max(1, totalSessionBookings));
+    const conversionRate = roundCurrency(paidSessionBookings / Math.max(1, totalSessionBookings));
+    const currentPricingSnapshot = {
+      bookingDemandLast30Days,
+      completedSessions,
+      cancelledSessions,
+      completionRate,
+      cancellationRate,
+      conversionRate,
+      averageRating,
+      totalReviewCount,
+    };
+    const tutorAiPricingState = (tutor as any)?.aiPricingState;
+    const rawLastAnalyzedSnapshot =
+      tutorAiPricingState &&
+      typeof tutorAiPricingState === 'object' &&
+      !Array.isArray(tutorAiPricingState)
+        ? (tutorAiPricingState as any).lastAnalyzedSnapshot
+        : undefined;
+    const previousPricingSnapshot =
+      rawLastAnalyzedSnapshot &&
+      typeof rawLastAnalyzedSnapshot === 'object' &&
+      !Array.isArray(rawLastAnalyzedSnapshot)
+        ? {
+            bookingDemandLast30Days: Math.max(0, Math.round(Number((rawLastAnalyzedSnapshot as any).bookingDemandLast30Days || 0))),
+            completedSessions: Math.max(0, Math.round(Number((rawLastAnalyzedSnapshot as any).completedSessions || 0))),
+            cancelledSessions: Math.max(0, Math.round(Number((rawLastAnalyzedSnapshot as any).cancelledSessions || 0))),
+            completionRate: roundCurrency(Math.max(0, Math.min(1, Number((rawLastAnalyzedSnapshot as any).completionRate || 0)))),
+            cancellationRate: roundCurrency(Math.max(0, Math.min(1, Number((rawLastAnalyzedSnapshot as any).cancellationRate || 0)))),
+            conversionRate: roundCurrency(Math.max(0, Math.min(1, Number((rawLastAnalyzedSnapshot as any).conversionRate || 0)))),
+            averageRating: roundCurrency(Math.max(0, Math.min(5, Number((rawLastAnalyzedSnapshot as any).averageRating || 0)))),
+            totalReviewCount: Math.max(0, Math.round(Number((rawLastAnalyzedSnapshot as any).totalReviewCount || 0))),
+          }
+        : null;
+    const lastAppliedSuggestedRate = roundCurrency(toFinitePrice((tutorAiPricingState as any)?.lastAppliedSuggestedRate));
+    const lastSuggestionAppliedAtTimestamp = toTimestampSafe((tutorAiPricingState as any)?.lastSuggestionAppliedAt);
+    const hasAppliedSuggestionSnapshot = Boolean(previousPricingSnapshot && lastSuggestionAppliedAtTimestamp);
+    let hasMeaningfulNewPricingData = true;
+
+    if (hasAppliedSuggestionSnapshot && previousPricingSnapshot) {
+      const bookingDemandDelta = Math.abs(currentPricingSnapshot.bookingDemandLast30Days - previousPricingSnapshot.bookingDemandLast30Days);
+      const completionRateDelta = Math.abs(currentPricingSnapshot.completionRate - previousPricingSnapshot.completionRate);
+      const cancellationRateDelta = Math.abs(currentPricingSnapshot.cancellationRate - previousPricingSnapshot.cancellationRate);
+      const conversionRateDelta = Math.abs(currentPricingSnapshot.conversionRate - previousPricingSnapshot.conversionRate);
+      const ratingDelta = Math.abs(currentPricingSnapshot.averageRating - previousPricingSnapshot.averageRating);
+      const completedSessionsDelta = currentPricingSnapshot.completedSessions - previousPricingSnapshot.completedSessions;
+      const cancelledSessionsDelta = currentPricingSnapshot.cancelledSessions - previousPricingSnapshot.cancelledSessions;
+      const reviewCountDelta = currentPricingSnapshot.totalReviewCount - previousPricingSnapshot.totalReviewCount;
+
+      hasMeaningfulNewPricingData =
+        completedSessionsDelta > 0 ||
+        cancelledSessionsDelta > 0 ||
+        reviewCountDelta > 0 ||
+        bookingDemandDelta >= 3 ||
+        completionRateDelta >= 0.05 ||
+        cancellationRateDelta >= 0.05 ||
+        conversionRateDelta >= 0.05 ||
+        ratingDelta >= 0.2;
+    }
+
+    let pricingDirection: 'increase' | 'decrease' | 'keep' = 'keep';
+    let suggestedHourlyRate = tutorHourlyRate;
+    let pricingReason = 'Performance is stable. Keep the current hourly rate and monitor demand trends.';
+    const rateMatchesLastAppliedSuggestion =
+      lastAppliedSuggestedRate > 0 &&
+      Math.abs(lastAppliedSuggestedRate - tutorHourlyRate) < 0.01;
+
+    if (tutorHourlyRate > 0) {
+      if (hasAppliedSuggestionSnapshot && rateMatchesLastAppliedSuggestion && !hasMeaningfulNewPricingData) {
+        pricingDirection = 'keep';
+        suggestedHourlyRate = tutorHourlyRate;
+        pricingReason = 'Your current rate looks good based on the latest data.';
+      } else {
+        const strongDemand =
+          bookingDemandLast30Days >= 12 &&
+          completionRate >= 0.65 &&
+          cancellationRate <= 0.2 &&
+          averageRating >= 4.3;
+        const moderateDemand =
+          bookingDemandLast30Days >= 6 &&
+          completionRate >= 0.55 &&
+          cancellationRate <= 0.25 &&
+          averageRating >= 4.0;
+        const weakDemand =
+          bookingDemandLast30Days <= 3 ||
+          completionRate < 0.45 ||
+          cancellationRate >= 0.35 ||
+          averageRating < 3.8;
+
+        if (strongDemand) {
+          pricingDirection = 'increase';
+          suggestedHourlyRate = roundCurrency(tutorHourlyRate * 1.12);
+          pricingReason = 'High demand, strong completion, and good ratings support a measured rate increase.';
+        } else if (moderateDemand) {
+          pricingDirection = 'increase';
+          suggestedHourlyRate = roundCurrency(tutorHourlyRate * 1.06);
+          pricingReason = 'Steady demand and healthy outcomes suggest room for a gradual upward adjustment.';
+        } else if (weakDemand) {
+          pricingDirection = 'decrease';
+          suggestedHourlyRate = roundCurrency(tutorHourlyRate * 0.92);
+          pricingReason = 'Lower demand or weaker completion signals suggest testing a slightly more competitive rate.';
+        }
+      }
+    }
+
+    const pricingConfidence: 'low' | 'medium' | 'high' =
+      totalSessionBookings >= 30 && totalReviewCount >= 12
+        ? 'high'
+        : totalSessionBookings >= 10
+          ? 'medium'
+          : 'low';
+
+    const pricingSuggestion = {
+      currentHourlyRate: tutorHourlyRate,
+      suggestedHourlyRate,
+      suggestedRange: {
+        min: roundCurrency(Math.max(0, suggestedHourlyRate * 0.97)),
+        max: roundCurrency(suggestedHourlyRate * 1.03),
+      },
+      direction: pricingDirection,
+      reason: pricingReason,
+      confidence: pricingConfidence,
+      metrics: {
+        bookingDemandLast30Days,
+        completedSessions,
+        cancelledSessions,
+        cancellationRate,
+        completionRate,
+        conversionRate,
+        averageRating,
+        totalReviewCount,
+      },
+    };
+
+    const completedSessionEarnings = roundCurrency(completedSessionNetEarnings);
+    const completedCourseEarnings = roundCurrency(completedCourseNetEarnings);
+    const computedTotalEarnings = roundCurrency(completedSessionEarnings + completedCourseEarnings);
+
+    const withdrawalSummary = await calculateTutorWithdrawalSummary(tutorId);
+    const totalEarnings = computedTotalEarnings > 0
+      ? computedTotalEarnings
+      : roundCurrency(toFinitePrice(withdrawalSummary.totalEarnings));
+    const withdrawnAmount = roundCurrency(toFinitePrice(withdrawalSummary.withdrawnAmount));
+    const pendingWithdrawalAmount = roundCurrency(toFinitePrice(withdrawalSummary.pendingWithdrawalAmount));
+    const availableBalance = roundCurrency(Math.max(0, toFinitePrice(withdrawalSummary.availableBalance)));
+
+    const latestTaxMonth = monthlySummaries.length > 0
+      ? monthlySummaries[monthlySummaries.length - 1]
+      : null;
+
+    const aiInsights = await tutorRevenueInsightsAiService.generateInsights({
+      tutorName: 'Tutor',
+      currentHourlyRate: tutorHourlyRate,
+      forecast: {
+        windows: forecastWindows.map((entry) => ({
+          days: entry.days,
+          projectedNetEarning: entry.projectedNetEarning,
+          historicalProjection: entry.historicalProjection,
+          upcomingConfirmedNet: entry.upcomingConfirmedNet,
+          confidence: entry.confidence,
+        })),
+        fallback: !hasEnoughForecastData,
+        fallbackMessage: fallbackForecastMessage,
+      },
+      pricing: {
+        currentHourlyRate: pricingSuggestion.currentHourlyRate,
+        suggestedHourlyRate: pricingSuggestion.suggestedHourlyRate,
+        suggestedRange: pricingSuggestion.suggestedRange,
+        direction: pricingSuggestion.direction,
+        confidence: pricingSuggestion.confidence,
+        reason: pricingSuggestion.reason,
+        metrics: pricingSuggestion.metrics,
+      },
+      tax: {
+        latestMonth: latestTaxMonth?.month || 'N/A',
+        latestNetTaxableIncome: roundCurrency(latestTaxMonth?.netTaxableIncome || 0),
+        totalSessionIncome: normalizedTaxTotals.sessionIncome,
+        totalCourseSales: normalizedTaxTotals.courseSales,
+        totalPlatformFees: normalizedTaxTotals.platformFees,
+        totalRefunds: normalizedTaxTotals.refunds,
+        totalWithdrawals: normalizedTaxTotals.withdrawals,
+      },
+    });
+
+    return {
+      generatedAt: new Date().toISOString(),
+      summary: {
+        totalEarnings,
+        availableBalance,
+        completedSessionEarnings,
+        pendingEarnings: roundCurrency(pendingSessionNetEarnings),
+        withdrawnAmount,
+        remainingBalance: availableBalance,
+        pendingWithdrawalAmount,
+        monthlyEarnings,
+        paymentHistory: paymentHistory.sort((a, b) => b.timestamp - a.timestamp),
+      },
+      forecasting: {
+        windows: forecastWindows,
+        fallback: !hasEnoughForecastData,
+        fallbackMessage: fallbackForecastMessage,
+        methodology:
+          'Forecast combines historical monthly net earnings trends with upcoming confirmed paid sessions. Fallback uses conservative baseline estimates when historical data is limited.',
+      },
+      pricingSuggestion,
+      taxPrep: {
+        monthlySummaries,
+        totals: normalizedTaxTotals,
+      },
+      aiInsights,
+      csvRows: csvRows.sort((a, b) => String(b.date).localeCompare(String(a.date))),
+    };
+  };
+
   const getBookingSessionResourceContainerCandidates = (resource: unknown): string[] => {
     const explicitContainerName = String((resource as any)?.containerName || '').trim();
 
@@ -6219,6 +7120,81 @@ async function startServer() {
     } catch (error) {
       console.error("Get bookings error:", error);
       res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get('/api/revenue/insights', requireTutorSession, async (req, res) => {
+    try {
+      const sessionContext = getSessionAuthContext(req);
+      const requestedTutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
+      const tutorId = requestedTutorId || sessionContext.userId;
+
+      if (!requireSessionUserMatch(sessionContext, res, tutorId, 'You can only access your own revenue insights.')) {
+        return;
+      }
+
+      const snapshot = await buildTutorRevenueSnapshot(tutorId);
+      return res.json(snapshot);
+    } catch (error) {
+      console.error('Get tutor revenue insights error:', error);
+      return res.status(500).json({ error: 'Failed to load tutor revenue insights.' });
+    }
+  });
+
+  app.get('/api/revenue/report.csv', requireTutorSession, async (req, res) => {
+    try {
+      const sessionContext = getSessionAuthContext(req);
+      const requestedTutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
+      const tutorId = requestedTutorId || sessionContext.userId;
+
+      if (!requireSessionUserMatch(sessionContext, res, tutorId, 'You can only download your own revenue report.')) {
+        return;
+      }
+
+      const snapshot = await buildTutorRevenueSnapshot(tutorId);
+      const headers = [
+        'DATE',
+        'SESSION/COURSE',
+        'STUDENT',
+        'PAYMENT TYPE',
+        'AMOUNT',
+        'PLATFORM FEE',
+        'NET EARNING',
+        'STATUS',
+        'TOTAL NET EARNINGS',
+        'WITHDRAWN',
+      ];
+      const totalNetEarnings = roundCurrency(toFinitePrice(snapshot.summary.totalEarnings));
+      const withdrawnAmountSummary = roundCurrency(toFinitePrice(snapshot.summary.withdrawnAmount));
+
+      const csvLines = [
+        headers.join(','),
+        ...snapshot.csvRows.map((row) => [
+          escapeCsvValue(row.date),
+          escapeCsvValue(row.sessionOrCourse),
+          escapeCsvValue(row.student),
+          escapeCsvValue(row.paymentType),
+          escapeCsvValue(roundCurrency(toFinitePrice(row.amount))),
+          escapeCsvValue(roundCurrency(toFinitePrice(row.platformFee))),
+          escapeCsvValue(roundCurrency(toFinitePrice(row.netEarning))),
+          escapeCsvValue(row.status),
+          escapeCsvValue(totalNetEarnings),
+          escapeCsvValue(
+            roundCurrency(
+              toFinitePrice(row.paymentType === 'withdrawal' ? (row.withdrawnAmount ?? row.amount) : withdrawnAmountSummary)
+            )
+          ),
+        ].join(',')),
+      ];
+
+      const csvContent = csvLines.join('\n');
+      const reportDate = new Date().toISOString().slice(0, 10);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename=\"tutor-revenue-report-${sanitizeFileSegment(tutorId)}-${reportDate}.csv\"`);
+      return res.send(csvContent);
+    } catch (error) {
+      console.error('Download tutor revenue CSV error:', error);
+      return res.status(500).json({ error: 'Failed to download tutor revenue CSV report.' });
     }
   });
 

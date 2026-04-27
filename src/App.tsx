@@ -56,7 +56,7 @@ import {
   DEFAULT_COURSE_THUMBNAIL_PLACEHOLDER,
 } from './utils/defaultImages';
 
-import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz, TimeSlot, CourseEnrollment, CourseCoupon, WithdrawalRequest, WithdrawalSummary, AppNotification } from './types';
+import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz, TimeSlot, CourseEnrollment, CourseCoupon, WithdrawalRequest, WithdrawalSummary, TutorRevenueInsights, AppNotification } from './types';
 import { TutorProfilePage } from './components/pages/TutorProfilePage';
 import { GetStartedSection } from "./components/pages/GetStartedSection";
 import { TutorBookingPage } from './components/pages/TutorBookingPage';
@@ -159,6 +159,12 @@ type RouteTarget = {
 type HistoryMode = 'push' | 'replace';
 type TabNavigationOptions = {
   replace?: boolean;
+};
+
+type PricingSuggestionApplyState = {
+  cycleId: string;
+  appliedRate: number;
+  message: string;
 };
 
 const normalizePathname = (pathname: string): string => {
@@ -759,6 +765,12 @@ export default function App() {
   const [isLoadingWithdrawalData, setIsLoadingWithdrawalData] = useState(false);
   const [isWithdrawalModalOpen, setIsWithdrawalModalOpen] = useState(false);
   const [isSubmittingWithdrawal, setIsSubmittingWithdrawal] = useState(false);
+  const [revenueInsights, setRevenueInsights] = useState<TutorRevenueInsights | null>(null);
+  const [isLoadingRevenueInsights, setIsLoadingRevenueInsights] = useState(false);
+  const [revenueInsightsError, setRevenueInsightsError] = useState<string | null>(null);
+  const [isDownloadingRevenueCsv, setIsDownloadingRevenueCsv] = useState(false);
+  const [isApplyingPricingSuggestion, setIsApplyingPricingSuggestion] = useState(false);
+  const [pricingSuggestionApplyState, setPricingSuggestionApplyState] = useState<PricingSuggestionApplyState | null>(null);
   const [withdrawalForm, setWithdrawalForm] = useState({
     amount: '',
     payoutMethodType: 'bank_transfer' as WithdrawalRequest['payoutMethodType'],
@@ -1542,6 +1554,14 @@ export default function App() {
     });
   };
 
+  const resetRevenueInsightsState = () => {
+    setRevenueInsights(null);
+    setRevenueInsightsError(null);
+    setIsLoadingRevenueInsights(false);
+    setIsApplyingPricingSuggestion(false);
+    setPricingSuggestionApplyState(null);
+  };
+
   const refreshTutorWithdrawalSummary = async (tutorId: string) => {
     const normalizedTutorId = String(tutorId || '').trim();
     if (!normalizedTutorId) {
@@ -1553,6 +1573,33 @@ export default function App() {
       setWithdrawalSummary(summary);
     } catch (error) {
       console.error('Failed to refresh withdrawal summary:', error);
+    }
+  };
+
+  const refreshTutorRevenueInsights = async (tutorId: string) => {
+    const normalizedTutorId = String(tutorId || '').trim();
+    if (!normalizedTutorId) {
+      resetRevenueInsightsState();
+      return;
+    }
+
+    setIsLoadingRevenueInsights(true);
+    setRevenueInsightsError(null);
+    try {
+      const insights = await apiService.getTutorRevenueInsights(normalizedTutorId);
+      setRevenueInsights(insights);
+      setPricingSuggestionApplyState((previousState) => {
+        if (!previousState) {
+          return null;
+        }
+
+        return previousState.cycleId === insights.generatedAt ? previousState : null;
+      });
+    } catch (error) {
+      console.error('Failed to refresh tutor revenue insights:', error);
+      setRevenueInsightsError('Revenue insights are temporarily unavailable. Please try again shortly.');
+    } finally {
+      setIsLoadingRevenueInsights(false);
     }
   };
 
@@ -1666,13 +1713,14 @@ export default function App() {
         setBookings([]);
         setReviews([]);
         setQuestions([]);
-        setCourseEnrollments([]);
-        setUserCourses([]);
-        setWithdrawalRequests([]);
-        resetWithdrawalSummaryState();
-        setIsLoadingWithdrawalData(false);
-        setIsLoadingUserData(false);
-        return;
+      setCourseEnrollments([]);
+      setUserCourses([]);
+      setWithdrawalRequests([]);
+      resetWithdrawalSummaryState();
+      resetRevenueInsightsState();
+      setIsLoadingWithdrawalData(false);
+      setIsLoadingUserData(false);
+      return;
       }
 
       setIsLoadingUserData(true);
@@ -1710,6 +1758,7 @@ export default function App() {
           setUserCourses(enrollments.map((enrollment) => enrollment.courseId));
           setWithdrawalRequests([]);
           resetWithdrawalSummaryState();
+          resetRevenueInsightsState();
           setIsLoadingWithdrawalData(false);
         } else {
           setQuestions([]);
@@ -1718,11 +1767,15 @@ export default function App() {
           if (resolvedTutorId) {
             const tutorEnrollments = await apiService.getCourseEnrollments({ tutorId: resolvedTutorId });
             setCourseEnrollments(tutorEnrollments);
-            await loadTutorWithdrawalData(resolvedTutorId);
+            await Promise.all([
+              loadTutorWithdrawalData(resolvedTutorId),
+              refreshTutorRevenueInsights(resolvedTutorId),
+            ]);
           } else {
             setCourseEnrollments([]);
             setWithdrawalRequests([]);
             resetWithdrawalSummaryState();
+            resetRevenueInsightsState();
             setIsLoadingWithdrawalData(false);
           }
           setUserCourses([]);
@@ -1759,6 +1812,20 @@ export default function App() {
 
     fetchUserData();
   }, [currentUser, currentTutor?.id]);
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== 'tutor' || activeTab !== 'earnings') {
+      return;
+    }
+
+    const resolvedTutorId = currentTutor?.id || currentUser.id;
+    if (!resolvedTutorId) {
+      return;
+    }
+
+    void refreshTutorRevenueInsights(resolvedTutorId);
+    void refreshTutorWithdrawalSummary(resolvedTutorId);
+  }, [activeTab, currentUser, currentTutor?.id]);
 
   useEffect(() => {
     if (activeTab !== 'courseLearning') {
@@ -3387,6 +3454,7 @@ export default function App() {
         const resolvedTutorId = currentTutor?.id || currentUser.id;
         if (resolvedTutorId && (updates.status !== undefined || updates.paymentStatus !== undefined)) {
           void refreshTutorWithdrawalSummary(resolvedTutorId);
+          void refreshTutorRevenueInsights(resolvedTutorId);
         }
       }
     } catch (error) {
@@ -4125,6 +4193,120 @@ export default function App() {
     });
   };
 
+  const handleDownloadRevenueCsv = async () => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      alert('Only tutor accounts can download revenue reports.');
+      return;
+    }
+
+    const resolvedTutorId = currentTutor?.id || currentUser.id;
+    if (!resolvedTutorId) {
+      alert('Tutor profile is required to download revenue reports.');
+      return;
+    }
+
+    setIsDownloadingRevenueCsv(true);
+    try {
+      await apiService.downloadTutorRevenueCsv(resolvedTutorId);
+    } catch (error) {
+      console.error('Failed to download revenue CSV:', error);
+      const message = error instanceof Error ? error.message : 'Failed to download revenue CSV report.';
+      setRevenueInsightsError(message);
+      alert(message);
+    } finally {
+      setIsDownloadingRevenueCsv(false);
+    }
+  };
+
+  const handleRetryRevenueInsights = () => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      return;
+    }
+
+    const resolvedTutorId = currentTutor?.id || currentUser.id;
+    if (!resolvedTutorId) {
+      return;
+    }
+
+    void refreshTutorRevenueInsights(resolvedTutorId);
+  };
+
+  const handleApplyPricingSuggestion = async () => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      alert('Only tutor accounts can apply pricing suggestions.');
+      return;
+    }
+
+    const resolvedTutorId = currentTutor?.id || currentUser.id;
+    if (!resolvedTutorId || !revenueInsights?.pricingSuggestion) {
+      alert('Pricing suggestion is not available right now.');
+      return;
+    }
+
+    const cycleId = String(revenueInsights.generatedAt || '').trim() || `cycle-${Date.now()}`;
+    if (pricingSuggestionApplyState && cycleId && pricingSuggestionApplyState.cycleId === cycleId) {
+      return;
+    }
+
+    const suggestedRate = Math.max(0, Number(revenueInsights.pricingSuggestion.suggestedHourlyRate || 0));
+    const normalizedSuggestedRate = Number.isFinite(suggestedRate)
+      ? Math.round(suggestedRate * 100) / 100
+      : 0;
+    if (normalizedSuggestedRate <= 0) {
+      alert('Suggested rate is invalid. Please refresh AI insights and try again.');
+      return;
+    }
+
+    const appliedAtIso = new Date().toISOString();
+    const pricingMetrics = revenueInsights.pricingSuggestion.metrics;
+    const analyzedSnapshot = {
+      bookingDemandLast30Days: Math.max(0, Math.round(Number(pricingMetrics.bookingDemandLast30Days || 0))),
+      completedSessions: Math.max(0, Math.round(Number(pricingMetrics.completedSessions || 0))),
+      cancelledSessions: Math.max(0, Math.round(Number(pricingMetrics.cancelledSessions || 0))),
+      completionRate: Math.max(0, Math.min(1, Number(pricingMetrics.completionRate || 0))),
+      cancellationRate: Math.max(0, Math.min(1, Number(pricingMetrics.cancellationRate || 0))),
+      conversionRate: Math.max(0, Math.min(1, Number(pricingMetrics.conversionRate || 0))),
+      averageRating: Math.max(0, Math.min(5, Number(pricingMetrics.averageRating || 0))),
+      totalReviewCount: Math.max(0, Math.round(Number(pricingMetrics.totalReviewCount || 0))),
+    };
+
+    const successMessage = `Suggested rate applied successfully. Your hourly rate is now ${formatLkr(normalizedSuggestedRate)}.`;
+
+    setIsApplyingPricingSuggestion(true);
+    try {
+      const updatedTutor = await apiService.updateTutor(resolvedTutorId, {
+        pricePerHour: normalizedSuggestedRate,
+        aiPricingState: {
+          lastAppliedSuggestedRate: normalizedSuggestedRate,
+          lastSuggestionAppliedAt: appliedAtIso,
+          lastAnalyzedSnapshot: analyzedSnapshot,
+        },
+      });
+
+      setTutors((prevTutors) =>
+        prevTutors.map((entry) =>
+          entry.id === resolvedTutorId
+            ? { ...entry, ...updatedTutor, pricePerHour: normalizedSuggestedRate }
+            : entry
+        )
+      );
+      setProfileData((previousProfile) => ({
+        ...previousProfile,
+        pricePerHour: normalizedSuggestedRate,
+      }));
+      setPricingSuggestionApplyState({
+        cycleId,
+        appliedRate: normalizedSuggestedRate,
+        message: successMessage,
+      });
+    } catch (error) {
+      console.error('Failed to apply AI pricing suggestion:', error);
+      alert(error instanceof Error ? error.message : 'Failed to apply pricing suggestion.');
+    } finally {
+      setIsApplyingPricingSuggestion(false);
+    }
+  };
+
   const handleOpenWithdrawalModal = () => {
     setWithdrawalNotice(null);
     resetWithdrawalForm();
@@ -4211,7 +4393,10 @@ export default function App() {
         payoutMethodDetails: payoutDetails,
       });
 
-      await loadTutorWithdrawalData(resolvedTutorId);
+      await Promise.all([
+        loadTutorWithdrawalData(resolvedTutorId),
+        refreshTutorRevenueInsights(resolvedTutorId),
+      ]);
       setIsWithdrawalModalOpen(false);
       resetWithdrawalForm();
 
@@ -4672,24 +4857,46 @@ export default function App() {
   );
 
   const withdrawalTotalEarnings = useMemo(() => {
+    const insightsTotal = Number(revenueInsights?.summary?.totalEarnings || 0);
+    if (insightsTotal > 0) {
+      return roundMoney(insightsTotal);
+    }
+
     const serverTotal = Number(withdrawalSummary.totalEarnings || 0);
     if (serverTotal > 0 || tutorTotalEarnings <= 0) {
       return roundMoney(serverTotal);
     }
     return roundMoney(tutorTotalEarnings);
-  }, [withdrawalSummary.totalEarnings, tutorTotalEarnings]);
+  }, [revenueInsights?.summary?.totalEarnings, withdrawalSummary.totalEarnings, tutorTotalEarnings]);
 
   const withdrawalWithdrawnAmount = useMemo(
-    () => roundMoney(Math.max(0, Number(withdrawalSummary.withdrawnAmount || 0))),
-    [withdrawalSummary.withdrawnAmount]
+    () =>
+      roundMoney(
+        Math.max(
+          0,
+          Number((revenueInsights?.summary?.withdrawnAmount ?? withdrawalSummary.withdrawnAmount) || 0)
+        )
+      ),
+    [revenueInsights?.summary?.withdrawnAmount, withdrawalSummary.withdrawnAmount]
   );
 
   const withdrawalPendingAmount = useMemo(
-    () => roundMoney(Math.max(0, Number(withdrawalSummary.pendingWithdrawalAmount || 0))),
-    [withdrawalSummary.pendingWithdrawalAmount]
+    () =>
+      roundMoney(
+        Math.max(
+          0,
+          Number((revenueInsights?.summary?.pendingWithdrawalAmount ?? withdrawalSummary.pendingWithdrawalAmount) || 0)
+        )
+      ),
+    [revenueInsights?.summary?.pendingWithdrawalAmount, withdrawalSummary.pendingWithdrawalAmount]
   );
 
   const withdrawalAvailableBalance = useMemo(() => {
+    const insightsAvailable = Number(revenueInsights?.summary?.availableBalance || 0);
+    if (insightsAvailable > 0) {
+      return roundMoney(Math.max(0, insightsAvailable));
+    }
+
     const serverAvailable = Number(withdrawalSummary.availableBalance || 0);
     const hasServerSummary =
       Number(withdrawalSummary.totalEarnings || 0) > 0 ||
@@ -4703,6 +4910,7 @@ export default function App() {
 
     return roundMoney(Math.max(0, withdrawalTotalEarnings - withdrawalWithdrawnAmount - withdrawalPendingAmount));
   }, [
+    revenueInsights?.summary?.availableBalance,
     withdrawalSummary.availableBalance,
     withdrawalSummary.totalEarnings,
     withdrawalSummary.withdrawnAmount,
@@ -6910,6 +7118,16 @@ export default function App() {
               getTransactionStatusPillClassName={getTransactionStatusPillClassName}
               getTransactionStatusLabel={getTransactionStatusLabel}
               isLoadingUserData={isLoadingUserData}
+              revenueInsights={revenueInsights}
+              isLoadingRevenueInsights={isLoadingRevenueInsights}
+              revenueInsightsError={revenueInsightsError}
+              handleDownloadRevenueCsv={handleDownloadRevenueCsv}
+              isDownloadingRevenueCsv={isDownloadingRevenueCsv}
+              handleRetryRevenueInsights={handleRetryRevenueInsights}
+              handleApplyPricingSuggestion={handleApplyPricingSuggestion}
+              isApplyingPricingSuggestion={isApplyingPricingSuggestion}
+              pricingSuggestionApplyState={pricingSuggestionApplyState}
+              currentTutorHourlyRate={Number(currentTutor?.pricePerHour || 0)}
             />
           )}
 

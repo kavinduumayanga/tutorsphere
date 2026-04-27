@@ -6,8 +6,10 @@ import React from 'react';
 import { motion } from 'motion/react';
 import {
   ArrowLeft,
-  ArrowRight,
   BarChart3,
+  Brain,
+  Calculator,
+  CheckCircle,
   Clock,
   TrendingUp,
   Wallet,
@@ -16,11 +18,12 @@ import {
   CreditCard,
   Receipt,
   Download,
-  FileText,
-  BookOpen,
+  FileDown,
   Activity,
+  RefreshCw,
 } from 'lucide-react';
 import { formatLkr } from '../../utils/currency';
+import { TutorRevenueInsights } from '../../types';
 
 /* ─── Fade-up animation ─── */
 const fadeUp = {
@@ -72,6 +75,20 @@ export interface TutorEarningsPageProps {
   getTransactionStatusPillClassName: (s: string) => string;
   getTransactionStatusLabel: (s: string) => string;
   isLoadingUserData: boolean;
+  revenueInsights: TutorRevenueInsights | null;
+  isLoadingRevenueInsights: boolean;
+  revenueInsightsError: string | null;
+  handleDownloadRevenueCsv: () => void;
+  isDownloadingRevenueCsv: boolean;
+  handleRetryRevenueInsights: () => void;
+  handleApplyPricingSuggestion: () => void;
+  isApplyingPricingSuggestion: boolean;
+  pricingSuggestionApplyState: {
+    cycleId: string;
+    appliedRate: number;
+    message: string;
+  } | null;
+  currentTutorHourlyRate: number;
 }
 
 export const TutorEarningsPage: React.FC<TutorEarningsPageProps> = (props) => {
@@ -109,9 +126,60 @@ export const TutorEarningsPage: React.FC<TutorEarningsPageProps> = (props) => {
     getTransactionStatusPillClassName,
     getTransactionStatusLabel,
     isLoadingUserData,
+    revenueInsights,
+    isLoadingRevenueInsights,
+    revenueInsightsError,
+    handleDownloadRevenueCsv,
+    isDownloadingRevenueCsv,
+    handleRetryRevenueInsights,
+    handleApplyPricingSuggestion,
+    isApplyingPricingSuggestion,
+    pricingSuggestionApplyState,
+    currentTutorHourlyRate,
   } = props;
 
   /* ─── Top financial cards ─── */
+  const insightsSummary = revenueInsights?.summary;
+  const insightsForecast = revenueInsights?.forecasting;
+  const insightsPricing = revenueInsights?.pricingSuggestion;
+  const insightsTax = revenueInsights?.taxPrep;
+  const insightsAi = revenueInsights?.aiInsights;
+  const shouldShowAiRetry = Boolean(revenueInsightsError) || Boolean(insightsAi?.warning);
+  const currentPricingCycleId = String(revenueInsights?.generatedAt || '').trim();
+  const isPricingSuggestionApplied = Boolean(
+    pricingSuggestionApplyState &&
+      currentPricingCycleId &&
+      pricingSuggestionApplyState.cycleId === currentPricingCycleId
+  );
+  const effectiveMonthlyEarnings = (insightsSummary?.monthlyEarnings || tutorRecentMonthlyEarnings || []).slice(-6);
+  const paymentHistoryRows = insightsSummary?.paymentHistory?.length
+    ? insightsSummary.paymentHistory
+    : filteredTutorTransactions;
+  const visiblePaymentRows = React.useMemo(() => {
+    const statusFiltered = paymentHistoryRows.filter((transaction: any) =>
+      tutorTransactionFilter === 'all' ? true : transaction.status === tutorTransactionFilter
+    );
+
+    return [...statusFiltered].sort((a: any, b: any) =>
+      tutorTransactionSortOrder === 'newest' ? b.timestamp - a.timestamp : a.timestamp - b.timestamp
+    );
+  }, [paymentHistoryRows, tutorTransactionFilter, tutorTransactionSortOrder]);
+
+  const completedSessionEarnings = insightsSummary?.completedSessionEarnings ?? tutorSessionNetEarnings;
+  const pendingEarnings = insightsSummary?.pendingEarnings ?? 0;
+  const normalizedCurrentTutorHourlyRate = Number.isFinite(Number(currentTutorHourlyRate))
+    ? Math.max(0, Number(currentTutorHourlyRate))
+    : 0;
+  const displayedCurrentPricingRate =
+    normalizedCurrentTutorHourlyRate > 0
+      ? normalizedCurrentTutorHourlyRate
+      : Number(insightsPricing?.currentHourlyRate || 0);
+  const suggestedPricingRate = Number(insightsPricing?.suggestedHourlyRate || 0);
+  const isSuggestedRateAlreadyCurrent =
+    displayedCurrentPricingRate > 0 &&
+    suggestedPricingRate > 0 &&
+    Math.abs(displayedCurrentPricingRate - suggestedPricingRate) < 0.01;
+
   const financialCards = [
     { label: 'Total Net Earnings', value: formatLkr(withdrawalTotalEarnings), color: 'text-slate-900', bg: 'bg-gradient-to-br from-slate-50 to-slate-100/60', iconBg: 'bg-slate-200/60', icon: CircleDollarSign, border: 'border-slate-200/80' },
     { label: 'Withdrawn', value: formatLkr(withdrawalWithdrawnAmount), color: 'text-emerald-700', bg: 'bg-gradient-to-br from-emerald-50/80 to-emerald-100/40', iconBg: 'bg-emerald-100', icon: Download, border: 'border-emerald-200/60' },
@@ -120,8 +188,8 @@ export const TutorEarningsPage: React.FC<TutorEarningsPageProps> = (props) => {
   ];
 
   const detailCards = [
-    { label: 'Session Earnings', value: formatLkr(tutorSessionNetEarnings), color: 'text-indigo-700', icon: Activity },
-    { label: 'Course Earnings', value: formatLkr(tutorCourseNetEarnings), color: 'text-cyan-700', icon: BookOpen },
+    { label: 'Completed Session Earnings', value: formatLkr(completedSessionEarnings), color: 'text-indigo-700', icon: Activity },
+    { label: 'Pending Earnings', value: formatLkr(pendingEarnings), color: 'text-amber-700', icon: Clock },
     { label: 'Completed Sessions', value: tutorCompletedPaidBookings.length, color: 'text-emerald-600', icon: ShieldCheck },
     { label: 'Paid Course Sales', value: tutorPaidCourseEnrollmentsCount, color: 'text-cyan-600', icon: CreditCard },
   ];
@@ -163,28 +231,46 @@ export const TutorEarningsPage: React.FC<TutorEarningsPageProps> = (props) => {
               </span>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={handleOpenWithdrawalModal}
-              disabled={isLoadingWithdrawalData || withdrawalAvailableBalance <= 0}
-              className={`inline-flex items-center gap-2 px-5 py-3 rounded-xl font-bold text-sm transition-all active:scale-[0.97] shadow-md ${
-                isLoadingWithdrawalData || withdrawalAvailableBalance <= 0
-                  ? 'bg-slate-200 text-slate-500 cursor-not-allowed shadow-none'
-                  : 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-200/50'
-              }`}
-            >
-              <Wallet className="w-4 h-4" />
-              Withdraw Money
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('dashboard')}
-              className="inline-flex items-center gap-2 px-5 py-3 rounded-xl border border-slate-200 bg-white text-slate-700 font-bold text-sm hover:bg-slate-50 transition-colors"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              Dashboard
-            </button>
+          <div className="w-full md:w-auto">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <button
+                type="button"
+                onClick={() => setActiveTab('dashboard')}
+                className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-slate-200 bg-white text-slate-700 font-bold text-sm hover:bg-slate-50 transition-colors"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Dashboard
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadRevenueCsv}
+                disabled={isDownloadingRevenueCsv}
+                className={`inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-bold text-sm transition-all active:scale-[0.97] ${
+                  isDownloadingRevenueCsv
+                    ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                    : 'bg-slate-900 text-white hover:bg-slate-800 shadow-md shadow-slate-200/60'
+                }`}
+              >
+                <FileDown className="w-4 h-4" />
+                {isDownloadingRevenueCsv ? 'Preparing CSV...' : 'Download CSV'}
+              </button>
+              <button
+                type="button"
+                onClick={handleOpenWithdrawalModal}
+                disabled={isLoadingWithdrawalData || withdrawalAvailableBalance <= 0}
+                className={`inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-bold text-sm transition-all active:scale-[0.97] shadow-md ${
+                  isLoadingWithdrawalData || withdrawalAvailableBalance <= 0
+                    ? 'bg-slate-200 text-slate-500 cursor-not-allowed shadow-none'
+                    : 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-200/50'
+                }`}
+              >
+                <Wallet className="w-4 h-4" />
+                Withdraw
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-500 mt-2">
+              Quick actions for navigation, report export, and withdrawals.
+            </p>
           </div>
         </div>
 
@@ -260,58 +346,49 @@ export const TutorEarningsPage: React.FC<TutorEarningsPageProps> = (props) => {
         </div>
       )}
 
-      {/* ──── Monthly Earnings Trend + Breakdown ──── */}
-      <div className="grid xl:grid-cols-3 gap-6">
+      {/* ──── Clean Revenue Core ──── */}
+      <div className="grid xl:grid-cols-2 gap-6">
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3, duration: 0.4 }}
-          className="xl:col-span-2 rounded-2xl border border-slate-200/70 bg-white shadow-sm overflow-hidden"
+          className="rounded-2xl border border-slate-200/70 bg-white shadow-sm overflow-hidden"
         >
           <div className="p-6 md:p-7 border-b border-slate-100 flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center">
               <BarChart3 className="w-5 h-5 text-indigo-600" />
             </div>
-            <h3 className="text-lg font-bold text-slate-900">Monthly Earnings Trend</h3>
+            <div>
+              <h3 className="text-lg font-bold text-slate-900">Revenue Summary</h3>
+              <p className="text-xs text-slate-500 mt-0.5">Monthly net trend from completed paid activity.</p>
+            </div>
           </div>
           <div className="p-5 md:p-6">
-            {tutorRecentMonthlyEarnings.length === 0 ? (
+            {effectiveMonthlyEarnings.length === 0 ? (
               <div className="text-center py-14 bg-slate-50 border border-dashed border-slate-200 rounded-2xl">
                 <Clock className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                <p className="font-semibold text-slate-500">No paid earnings available yet.</p>
+                <p className="font-semibold text-slate-500">No monthly earnings data available yet.</p>
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4 items-end">
-                {tutorRecentMonthlyEarnings.map((entry: any) => {
+                {effectiveMonthlyEarnings.map((entry: any) => {
                   const chartMax = Math.max(
-                    ...tutorRecentMonthlyEarnings.map((p: any) => p.totalNetEarnings),
+                    ...effectiveMonthlyEarnings.map((p: any) => Number(p.totalNetEarnings || 0)),
                     1
                   );
-                  const sessionH = Math.max(10, Math.round((entry.sessionNetEarnings / chartMax) * 150));
-                  const courseH = Math.max(10, Math.round((entry.courseNetEarnings / chartMax) * 150));
+                  const totalHeight = Math.max(10, Math.round((Number(entry.totalNetEarnings || 0) / chartMax) * 150));
 
                   return (
-                    <div key={entry.monthKey} className="flex flex-col items-center gap-2 group">
+                    <div key={entry.monthKey} className="flex flex-col items-center gap-2">
                       <div className="h-44 w-full rounded-xl border border-slate-100 bg-slate-50/60 p-2 flex items-end justify-center">
-                        <div className="flex items-end gap-1">
-                          {tutorHasSessionEarningMethod && (
-                            <div
-                              className="w-4 rounded-md bg-indigo-500 transition-all duration-300 group-hover:bg-indigo-600"
-                              style={{ height: `${sessionH}px` }}
-                              title={`Session earnings: ${formatLkr(entry.sessionNetEarnings)}`}
-                            />
-                          )}
-                          {tutorHasCourseEarningMethod && (
-                            <div
-                              className="w-4 rounded-md bg-cyan-500 transition-all duration-300 group-hover:bg-cyan-600"
-                              style={{ height: `${courseH}px` }}
-                              title={`Course earnings: ${formatLkr(entry.courseNetEarnings)}`}
-                            />
-                          )}
-                        </div>
+                        <div
+                          className="w-5 rounded-md bg-indigo-500 transition-all duration-300"
+                          style={{ height: `${totalHeight}px` }}
+                          title={`Net earnings: ${formatLkr(Number(entry.totalNetEarnings || 0))}`}
+                        />
                       </div>
                       <p className="text-[11px] font-bold text-slate-700">{entry.month}</p>
-                      <p className="text-[10px] font-semibold text-slate-500">{formatLkr(entry.totalNetEarnings)}</p>
+                      <p className="text-[10px] font-semibold text-slate-500">{formatLkr(Number(entry.totalNetEarnings || 0))}</p>
                     </div>
                   );
                 })}
@@ -320,7 +397,6 @@ export const TutorEarningsPage: React.FC<TutorEarningsPageProps> = (props) => {
           </div>
         </motion.div>
 
-        {/* Source breakdown */}
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
@@ -328,144 +404,303 @@ export const TutorEarningsPage: React.FC<TutorEarningsPageProps> = (props) => {
           className="rounded-2xl border border-slate-200/70 bg-white shadow-sm overflow-hidden"
         >
           <div className="p-6 md:p-7 border-b border-slate-100 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center">
-              <TrendingUp className="w-5 h-5 text-violet-600" />
+            <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center">
+              <TrendingUp className="w-5 h-5 text-emerald-600" />
             </div>
-            <h3 className="text-lg font-bold text-slate-900">Source Breakdown</h3>
+            <div>
+              <h3 className="text-lg font-bold text-slate-900">AI Revenue Forecasting</h3>
+              <p className="text-xs text-slate-500 mt-0.5">Projected tutor net earnings for 30, 60, and 90 days.</p>
+            </div>
           </div>
-          <div className="p-5 md:p-6 space-y-5">
-            {tutorHasSessionEarningMethod && (
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <p className="text-xs font-bold uppercase tracking-widest text-slate-500">Sessions</p>
-                  <p className="text-xs font-bold text-indigo-700">{tutorSessionSharePercent}%</p>
-                </div>
-                <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-indigo-500 transition-all duration-700"
-                    style={{ width: `${tutorSessionSharePercent}%` }}
-                  />
-                </div>
-                <p className="text-xs text-slate-500 mt-1.5">
-                  {formatLkr(tutorSessionNetEarnings)} • {tutorCompletedPaidBookings.length} sessions
-                </p>
+          <div className="p-5 md:p-6">
+            {isLoadingRevenueInsights ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map((row) => (
+                  <div key={row} className="h-16 rounded-xl bg-slate-100 animate-pulse" />
+                ))}
+              </div>
+            ) : !insightsForecast || insightsForecast.windows.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-600">
+                Forecast data is not available yet. Complete a few paid sessions to generate projections.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {insightsForecast.windows.map((window) => (
+                  <div key={window.days} className="rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-bold text-slate-800">Next {window.days} Days</p>
+                      <span className="text-xs font-bold uppercase tracking-wider text-slate-500">{window.confidence} confidence</span>
+                    </div>
+                    <p className="text-xl font-extrabold text-emerald-700 mt-1">{formatLkr(window.projectedNetEarning)}</p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Historical: {formatLkr(window.historicalProjection)} • Upcoming confirmed: {formatLkr(window.upcomingConfirmedNet)}
+                    </p>
+                  </div>
+                ))}
+                {insightsForecast.fallback && (
+                  <p className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    {insightsForecast.fallbackMessage || 'Forecast is using fallback logic because historical data is limited.'}
+                  </p>
+                )}
               </div>
             )}
-
-            {tutorHasCourseEarningMethod && (
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <p className="text-xs font-bold uppercase tracking-widest text-slate-500">Course Sales</p>
-                  <p className="text-xs font-bold text-cyan-700">{tutorCourseSharePercent}%</p>
-                </div>
-                <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-cyan-500 transition-all duration-700"
-                    style={{ width: `${tutorCourseSharePercent}%` }}
-                  />
-                </div>
-                <p className="text-xs text-slate-500 mt-1.5">
-                  {formatLkr(tutorCourseNetEarnings)} • {tutorPaidCourseEnrollmentsCount} enrollments
-                </p>
-              </div>
-            )}
-
-            <div className="pt-4 border-t border-slate-100">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Paid Transactions</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{tutorPaidTransactions.length}</p>
-            </div>
           </div>
         </motion.div>
       </div>
 
-      {/* ──── Session & Course Earnings panels ──── */}
+      {/* ──── AI Pricing + Tax Prep ──── */}
       <div className="grid xl:grid-cols-2 gap-6">
-        {/* Session earnings */}
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.38, duration: 0.4 }}
+          className="rounded-2xl border border-slate-200/70 bg-white shadow-sm overflow-hidden"
+        >
+          <div className="p-6 md:p-7 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center">
+                <Brain className="w-5 h-5 text-violet-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">AI Pricing Suggestions</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Rate guidance based on demand, outcomes, and quality signals.</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleRetryRevenueInsights}
+              disabled={isLoadingRevenueInsights}
+              className={`inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-colors ${
+                isLoadingRevenueInsights
+                  ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                  : 'bg-slate-900 text-white hover:bg-slate-800'
+              }`}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingRevenueInsights ? 'animate-spin' : ''}`} />
+              {isLoadingRevenueInsights ? 'Refreshing...' : 'Generate New Suggestion'}
+            </button>
+          </div>
+          <div className="p-5 md:p-6">
+            {!insightsPricing ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-600">
+                Pricing insights will appear once enough booking performance data is available.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Current Rate</p>
+                    <p className="text-lg font-extrabold text-slate-900 mt-1">{formatLkr(displayedCurrentPricingRate)}</p>
+                  </div>
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-700">Suggested Rate</p>
+                      {isPricingSuggestionApplied && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-full border border-emerald-300 bg-emerald-100 text-emerald-700">
+                          <CheckCircle className="w-3.5 h-3.5" />
+                          Applied
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-lg font-extrabold text-emerald-700 mt-1">{formatLkr(insightsPricing.suggestedHourlyRate)}</p>
+                    <p className="text-[11px] text-emerald-700 mt-1">
+                      Range: {formatLkr(insightsPricing.suggestedRange.min)} - {formatLkr(insightsPricing.suggestedRange.max)}
+                    </p>
+                  </div>
+                </div>
+                {isPricingSuggestionApplied && pricingSuggestionApplyState?.message && (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
+                    {pricingSuggestionApplyState.message}
+                  </div>
+                )}
+                {!isPricingSuggestionApplied && isSuggestedRateAlreadyCurrent && (
+                  <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700">
+                    Your current hourly rate already matches this suggestion.
+                  </div>
+                )}
+                <p className="text-sm font-medium text-slate-700">{insightsPricing.reason}</p>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded-lg border border-slate-200 px-3 py-2 bg-white">Demand (30d): <span className="font-bold text-slate-900">{insightsPricing.metrics.bookingDemandLast30Days}</span></div>
+                  <div className="rounded-lg border border-slate-200 px-3 py-2 bg-white">Completed: <span className="font-bold text-slate-900">{insightsPricing.metrics.completedSessions}</span></div>
+                  <div className="rounded-lg border border-slate-200 px-3 py-2 bg-white">Completion: <span className="font-bold text-slate-900">{Math.round(insightsPricing.metrics.completionRate * 100)}%</span></div>
+                  <div className="rounded-lg border border-slate-200 px-3 py-2 bg-white">Cancellation: <span className="font-bold text-slate-900">{Math.round(insightsPricing.metrics.cancellationRate * 100)}%</span></div>
+                </div>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Confidence: {insightsPricing.confidence}</p>
+                  <button
+                    type="button"
+                    onClick={handleApplyPricingSuggestion}
+                    disabled={
+                      isApplyingPricingSuggestion ||
+                      isLoadingRevenueInsights ||
+                      isPricingSuggestionApplied ||
+                      isSuggestedRateAlreadyCurrent
+                    }
+                    className={`inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors ${
+                      isApplyingPricingSuggestion ||
+                      isLoadingRevenueInsights ||
+                      isPricingSuggestionApplied ||
+                      isSuggestedRateAlreadyCurrent
+                        ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                        : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                    }`}
+                  >
+                    {isApplyingPricingSuggestion
+                      ? 'Applying...'
+                      : isPricingSuggestionApplied
+                        ? 'Applied'
+                        : isSuggestedRateAlreadyCurrent
+                          ? 'Already Current'
+                          : 'Apply Suggested Rate'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </motion.div>
+
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.4, duration: 0.4 }}
           className="rounded-2xl border border-slate-200/70 bg-white shadow-sm overflow-hidden"
         >
-          <div className="p-6 border-b border-slate-100 flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-indigo-50 flex items-center justify-center">
-              <Activity className="w-4.5 h-4.5 text-indigo-600" />
+          <div className="p-6 md:p-7 border-b border-slate-100 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center">
+              <Calculator className="w-5 h-5 text-amber-600" />
             </div>
-            <h3 className="text-lg font-bold text-slate-900">Earnings by Sessions</h3>
+            <div>
+              <h3 className="text-lg font-bold text-slate-900">Tax Prep Helper</h3>
+              <p className="text-xs text-slate-500 mt-0.5">Monthly accounting summary by income, fees, refunds, and withdrawals.</p>
+            </div>
           </div>
-          <div className="p-5">
-            {!tutorHasSessionEarningMethod ? (
-              <p className="text-sm font-medium text-slate-500 bg-slate-50 border border-slate-200/70 rounded-xl px-4 py-3">
-                Session-based earning method is not active.
-              </p>
-            ) : tutorPaidSessionTransactions.length === 0 ? (
-              <p className="text-sm font-medium text-slate-500 bg-slate-50 border border-slate-200/70 rounded-xl px-4 py-3">
-                No paid and completed session transactions yet.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {[...tutorPaidSessionTransactions]
-                  .sort((a, b) => b.timestamp - a.timestamp)
-                  .slice(0, 8)
-                  .map((t: any) => (
-                    <div key={t.id} className="rounded-xl border border-slate-200/60 bg-slate-50/50 p-4 hover:bg-slate-50 transition-colors">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-bold text-slate-900">{t.itemName}</p>
-                          <p className="text-xs text-slate-500 mt-1">{t.dateLabel} • {t.studentName}</p>
-                        </div>
-                        <p className="text-sm font-bold text-emerald-700">{formatLkr(t.netEarning)}</p>
-                      </div>
-                    </div>
-                  ))}
+          <div className="p-5 md:p-6">
+            {!insightsTax || insightsTax.monthlySummaries.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-600">
+                Tax prep data will populate once payment activity is available.
               </div>
-            )}
-          </div>
-        </motion.div>
-
-        {/* Course earnings */}
-        <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.45, duration: 0.4 }}
-          className="rounded-2xl border border-slate-200/70 bg-white shadow-sm overflow-hidden"
-        >
-          <div className="p-6 border-b border-slate-100 flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-cyan-50 flex items-center justify-center">
-              <BookOpen className="w-4.5 h-4.5 text-cyan-600" />
-            </div>
-            <h3 className="text-lg font-bold text-slate-900">Earnings by Course Sales</h3>
-          </div>
-          <div className="p-5">
-            {!tutorHasCourseEarningMethod ? (
-              <p className="text-sm font-medium text-slate-500 bg-slate-50 border border-slate-200/70 rounded-xl px-4 py-3">
-                Course-based earning method is not active.
-              </p>
-            ) : tutorPaidCourseTransactions.length === 0 ? (
-              <p className="text-sm font-medium text-slate-500 bg-slate-50 border border-slate-200/70 rounded-xl px-4 py-3">
-                No paid course purchase transactions yet.
-              </p>
             ) : (
-              <div className="space-y-3">
-                {[...tutorPaidCourseTransactions]
-                  .sort((a, b) => b.timestamp - a.timestamp)
-                  .slice(0, 8)
-                  .map((t: any) => (
-                    <div key={t.id} className="rounded-xl border border-slate-200/60 bg-slate-50/50 p-4 hover:bg-slate-50 transition-colors">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-bold text-slate-900">{t.itemName}</p>
-                          <p className="text-xs text-slate-500 mt-1">{t.dateLabel} • {t.studentName}</p>
-                        </div>
-                        <p className="text-sm font-bold text-emerald-700">{formatLkr(t.netEarning)}</p>
-                      </div>
-                    </div>
-                  ))}
+              <div className="space-y-4">
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full min-w-[720px]">
+                    <thead className="bg-slate-50 border-b border-slate-200">
+                      <tr>
+                        {['Month', 'Session Income', 'Course Sales', 'Platform Fees', 'Refunds', 'Withdrawals', 'Net Taxable'].map((header) => (
+                          <th key={header} className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-widest text-slate-500">{header}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {insightsTax.monthlySummaries.slice(-6).map((month) => (
+                        <tr key={month.monthKey}>
+                          <td className="px-3 py-2 text-xs font-semibold text-slate-700">{month.month}</td>
+                          <td className="px-3 py-2 text-xs font-semibold text-slate-700">{formatLkr(month.sessionIncome)}</td>
+                          <td className="px-3 py-2 text-xs font-semibold text-slate-700">{formatLkr(month.courseSales)}</td>
+                          <td className="px-3 py-2 text-xs font-semibold text-slate-700">{formatLkr(month.platformFees)}</td>
+                          <td className="px-3 py-2 text-xs font-semibold text-slate-700">{formatLkr(month.refunds)}</td>
+                          <td className="px-3 py-2 text-xs font-semibold text-slate-700">{formatLkr(month.withdrawals)}</td>
+                          <td className="px-3 py-2 text-xs font-bold text-emerald-700">{formatLkr(month.netTaxableIncome)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-3 text-sm">
+                  <p className="font-bold text-slate-700">Totals</p>
+                  <p className="text-slate-600 mt-1">
+                    Net Taxable: <span className="font-bold text-emerald-700">{formatLkr(insightsTax.totals.netTaxableIncome)}</span> •
+                    Platform Fees: <span className="font-bold text-slate-800"> {formatLkr(insightsTax.totals.platformFees)}</span> •
+                    Refunds: <span className="font-bold text-slate-800"> {formatLkr(insightsTax.totals.refunds)}</span>
+                  </p>
+                </div>
               </div>
             )}
           </div>
         </motion.div>
       </div>
+
+      {/* ──── AI Insights Summary ──── */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.45, duration: 0.4 }}
+        className="rounded-2xl border border-slate-200/70 bg-white shadow-sm overflow-hidden"
+      >
+        <div className="p-6 md:p-7 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center">
+              <Brain className="w-5 h-5 text-slate-700" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-slate-900">AI Revenue Insights</h3>
+              <p className="text-xs text-slate-500 mt-0.5">Narrative guidance generated from trusted financial metrics.</p>
+            </div>
+          </div>
+          {shouldShowAiRetry && (
+            <button
+              type="button"
+              onClick={handleRetryRevenueInsights}
+              disabled={isLoadingRevenueInsights}
+              className={`inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-colors ${
+                isLoadingRevenueInsights
+                  ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                  : 'bg-slate-900 text-white hover:bg-slate-800'
+              }`}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingRevenueInsights ? 'animate-spin' : ''}`} />
+              {isLoadingRevenueInsights ? 'Retrying...' : 'Retry AI Insights'}
+            </button>
+          )}
+        </div>
+        <div className="p-5 md:p-6 space-y-4">
+          {revenueInsightsError && !isLoadingRevenueInsights && (
+            <p className="text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+              {revenueInsightsError}
+            </p>
+          )}
+          {isLoadingRevenueInsights ? (
+            <div className="space-y-3">
+              {[1, 2, 3].map((row) => (
+                <div key={row} className="h-20 rounded-xl bg-slate-100 animate-pulse" />
+              ))}
+            </div>
+          ) : !insightsAi ? (
+            <p className="text-sm text-slate-600">AI summary will appear after revenue insights are loaded.</p>
+          ) : (
+            <>
+              {insightsAi.warning && (
+                <p className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  {insightsAi.warning}
+                </p>
+              )}
+              <div className="grid md:grid-cols-3 gap-3">
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">Forecast</p>
+                  <p className="text-sm text-slate-700 leading-relaxed">{insightsAi.forecastSummary}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">Pricing</p>
+                  <p className="text-sm text-slate-700 leading-relaxed">{insightsAi.pricingSummary}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">Tax Prep</p>
+                  <p className="text-sm text-slate-700 leading-relaxed">{insightsAi.taxSummary}</p>
+                </div>
+              </div>
+              {insightsAi.actionItems.length > 0 && (
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-2">Recommended Actions</p>
+                  <div className="space-y-1.5">
+                    {insightsAi.actionItems.map((item, index) => (
+                      <p key={`${item}-${index}`} className="text-sm font-medium text-slate-700">{index + 1}. {item}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </motion.div>
 
       {/* ──── Withdrawal History ──── */}
       <motion.div
@@ -475,30 +710,16 @@ export const TutorEarningsPage: React.FC<TutorEarningsPageProps> = (props) => {
         className="rounded-2xl border border-slate-200/70 bg-white shadow-sm overflow-hidden"
       >
         <div className="p-6 md:p-7 border-b border-slate-100">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center">
-                <Wallet className="w-5 h-5 text-emerald-600" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-slate-900">Withdrawal History</h3>
-                <p className="text-sm text-slate-500 mt-0.5">
-                  Review payout requests, statuses, and processing updates.
-                </p>
-              </div>
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center">
+              <Wallet className="w-5 h-5 text-emerald-600" />
             </div>
-            <button
-              type="button"
-              onClick={handleOpenWithdrawalModal}
-              disabled={isLoadingWithdrawalData || withdrawalAvailableBalance <= 0}
-              className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all active:scale-[0.97] ${
-                isLoadingWithdrawalData || withdrawalAvailableBalance <= 0
-                  ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
-                  : 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-md shadow-emerald-200/50'
-              }`}
-            >
-              Withdraw Money
-            </button>
+            <div>
+              <h3 className="text-lg font-bold text-slate-900">Withdrawal History</h3>
+              <p className="text-sm text-slate-500 mt-0.5">
+                Review payout requests, statuses, and processing updates.
+              </p>
+            </div>
           </div>
         </div>
         <div className="p-5 md:p-6">
@@ -618,7 +839,7 @@ export const TutorEarningsPage: React.FC<TutorEarningsPageProps> = (props) => {
                 <div key={row} className="h-14 rounded-xl bg-slate-100 animate-pulse" />
               ))}
             </div>
-          ) : filteredTutorTransactions.length === 0 ? (
+          ) : visiblePaymentRows.length === 0 ? (
             <div className="text-center py-14 bg-slate-50/80 rounded-2xl border border-dashed border-slate-200">
               <Clock className="w-10 h-10 text-slate-300 mx-auto mb-3" />
               <p className="font-semibold text-slate-500">No transactions found for current filters.</p>
@@ -636,7 +857,7 @@ export const TutorEarningsPage: React.FC<TutorEarningsPageProps> = (props) => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
-                  {filteredTutorTransactions.map((t: any) => (
+                  {visiblePaymentRows.map((t: any) => (
                     <tr key={t.id} className="hover:bg-slate-50/60 transition-colors">
                       <td className="px-4 py-3 text-sm font-medium text-slate-700 whitespace-nowrap">{t.dateLabel}</td>
                       <td className="px-4 py-3">

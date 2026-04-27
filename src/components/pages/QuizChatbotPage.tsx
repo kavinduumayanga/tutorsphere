@@ -9,15 +9,13 @@ import {
   Brain,
   Check,
   ChevronRight,
-  Clipboard,
   ClipboardCheck,
   Copy,
-  GraduationCap,
   Lightbulb,
   Loader2,
   Lock,
   MapPin,
-  MessageSquare,
+  RefreshCcw,
   Rocket,
   RotateCcw,
   Send,
@@ -25,6 +23,7 @@ import {
   Target,
   User,
   Wand2,
+  XCircle,
   Zap,
   type LucideIcon,
 } from 'lucide-react';
@@ -95,7 +94,68 @@ type FeatureCard = {
   decorativeIcon: LucideIcon;
 };
 
-const QUIZ_OPENING_MESSAGE = 'Which subject are you weak in?';
+type SkillAssessmentOptionLabel = 'A' | 'B' | 'C' | 'D';
+
+type SkillAssessmentConfig = {
+  subject: string;
+  topic: string;
+};
+
+type SkillAssessmentQuestion = {
+  id: string;
+  questionNumber: number;
+  totalQuestions: number;
+  difficulty: string;
+  question: string;
+  options: Record<SkillAssessmentOptionLabel, string>;
+};
+
+type SkillAssessmentFeedback = {
+  isCorrect: boolean;
+  explanation: string;
+  correctOption?: SkillAssessmentOptionLabel;
+};
+
+type SkillAssessmentAnswerRecord = {
+  questionNumber: number;
+  selectedOption: SkillAssessmentOptionLabel;
+  isCorrect: boolean;
+};
+
+type SkillAssessmentStudyPlanItem = {
+  day: string;
+  focus: string;
+};
+
+type SkillAssessmentResource = {
+  title: string;
+  url: string;
+  source: string;
+};
+
+type SkillAssessmentSummary = {
+  subject: string;
+  topic: string;
+  score: number;
+  total: number;
+  level: string;
+  weakAreas: string[];
+  studyPlan: SkillAssessmentStudyPlanItem[];
+  resources: SkillAssessmentResource[];
+  rawText: string;
+};
+
+const INITIAL_SKILL_CONFIG: SkillAssessmentConfig = {
+  subject: '',
+  topic: '',
+};
+
+const SKILL_ASSESSMENT_TOTAL_QUESTIONS = 5;
+const SKILL_ASSESSMENT_OPTION_LABELS: SkillAssessmentOptionLabel[] = ['A', 'B', 'C', 'D'];
+const SKILL_ASSESSMENT_RESTART_PROMPT_PATTERN = /^Are you weak in another subject\?/im;
+const SKILL_QUESTION_HEADER_PATTERN = /^Question\s+(\d+)\s*\/\s*(\d+)(?:\s*\(([^)]+)\))?/i;
+const SKILL_OPTION_LINE_PATTERN = /^([ABCD])\.\s*(.*)$/i;
+
 const MESSAGE_LINK_PATTERN = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s]+)/g;
 const ASK_LEARN_WELCOME_MESSAGE =
   'Hi! I am Ask & Learn AI. Ask me Science, Technology, Maths, Engineering, or ICT questions and I will teach step by step.';
@@ -157,12 +217,6 @@ const AI_FEATURE_CARDS: FeatureCard[] = [
   },
 ];
 
-const SKILL_ASSESSMENT_PROMPTS = [
-  "I'm weak in Mathematics",
-  'Test me on Physics',
-  'I need help with ICT',
-];
-
 const ASK_LEARN_PROMPTS = [
   'Explain quantum computing simply',
   'How does photosynthesis work?',
@@ -181,6 +235,266 @@ const createMessage = (role: AssistantMessage['role'], text: string): AssistantM
   text,
   timestamp: new Date(),
 });
+
+const makeSkillQuestionId = (): string => `skill-q-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+const getErrorMessage = (error: unknown, fallbackMessage: string): string => {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
+  return fallbackMessage;
+};
+
+const deriveLevelFromScore = (score: number): string => {
+  if (score <= 1) return 'Beginner';
+  if (score <= 3) return 'Intermediate';
+  return 'Advanced';
+};
+
+const extractSection = (text: string, startPattern: RegExp, endPattern?: RegExp): string => {
+  const startMatch = text.match(startPattern);
+  const startIndex = startMatch?.index;
+  if (typeof startIndex !== 'number') {
+    return '';
+  }
+
+  const fromStart = text.slice(startIndex + startMatch[0].length);
+
+  if (!endPattern) {
+    return fromStart.trim();
+  }
+
+  const endMatch = fromStart.match(endPattern);
+  const endIndex = typeof endMatch?.index === 'number' ? endMatch.index : fromStart.length;
+  return fromStart.slice(0, endIndex).trim();
+};
+
+const parseQuestionFromReply = (reply: string): SkillAssessmentQuestion | null => {
+  const lines = reply.replace(/\r/g, '').split('\n');
+  const headerIndex = lines.findIndex((line) => SKILL_QUESTION_HEADER_PATTERN.test(line.trim()));
+  if (headerIndex < 0) {
+    return null;
+  }
+
+  const headerLine = lines[headerIndex].trim();
+  const headerMatch = headerLine.match(SKILL_QUESTION_HEADER_PATTERN);
+  if (!headerMatch) {
+    return null;
+  }
+
+  const questionNumber = Number.parseInt(headerMatch[1], 10) || 1;
+  const totalQuestions = Number.parseInt(headerMatch[2], 10) || SKILL_ASSESSMENT_TOTAL_QUESTIONS;
+  const difficulty = (headerMatch[3] || 'diagnostic').trim();
+
+  const questionLines: string[] = [];
+  const options: Partial<Record<SkillAssessmentOptionLabel, string>> = {};
+  let currentOption: SkillAssessmentOptionLabel | null = null;
+
+  for (let index = headerIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+
+    if (!line && !currentOption && questionLines.length === 0) {
+      continue;
+    }
+
+    if (/^answer with a,\s*b,\s*c,\s*or\s*d\.?$/i.test(line)) {
+      break;
+    }
+
+    const optionMatch = line.match(SKILL_OPTION_LINE_PATTERN);
+    if (optionMatch) {
+      currentOption = optionMatch[1].toUpperCase() as SkillAssessmentOptionLabel;
+      options[currentOption] = optionMatch[2].trim();
+      continue;
+    }
+
+    if (currentOption) {
+      if (!line) {
+        continue;
+      }
+      options[currentOption] = `${options[currentOption] || ''} ${line}`.trim();
+      continue;
+    }
+
+    if (line) {
+      questionLines.push(line);
+    }
+  }
+
+  if (!questionLines.length || !options.A || !options.B || !options.C || !options.D) {
+    return null;
+  }
+
+  return {
+    id: makeSkillQuestionId(),
+    questionNumber,
+    totalQuestions,
+    difficulty,
+    question: questionLines.join(' ').trim(),
+    options: {
+      A: options.A,
+      B: options.B,
+      C: options.C,
+      D: options.D,
+    },
+  };
+};
+
+const parseFeedbackFromReply = (
+  reply: string,
+  selectedOption: SkillAssessmentOptionLabel
+): SkillAssessmentFeedback | null => {
+  const lines = reply.replace(/\r/g, '').split('\n');
+  const statusLineIndex = lines.findIndex((line) => {
+    const normalized = line.trim();
+    return (
+      /^✅\s*correct/i.test(normalized) ||
+      /^❌\s*incorrect/i.test(normalized) ||
+      /^correct\b/i.test(normalized) ||
+      /^incorrect\b/i.test(normalized)
+    );
+  });
+
+  if (statusLineIndex < 0) {
+    return null;
+  }
+
+  const statusLine = lines[statusLineIndex].trim();
+  const isCorrect = /^✅\s*correct/i.test(statusLine) || /^correct\b/i.test(statusLine);
+
+  const explanationLines: string[] = [];
+  for (let index = statusLineIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    const normalized = line.trim();
+
+    if (
+      SKILL_QUESTION_HEADER_PATTERN.test(normalized) ||
+      /^1\)\s*Score Summary$/i.test(normalized) ||
+      SKILL_ASSESSMENT_RESTART_PROMPT_PATTERN.test(normalized)
+    ) {
+      break;
+    }
+
+    explanationLines.push(line);
+  }
+
+  const explanation = explanationLines.join('\n').trim();
+
+  return {
+    isCorrect,
+    explanation: explanation || (isCorrect ? 'Correct answer.' : 'Incorrect answer.'),
+    correctOption: isCorrect ? selectedOption : undefined,
+  };
+};
+
+const parseResourceLabel = (label: string): { title: string; source: string } => {
+  const trimmed = label.trim();
+  const titledSourceMatch = trimmed.match(/^(.*)\s+\(([^()]+)\)\s*$/);
+  if (!titledSourceMatch) {
+    return {
+      title: trimmed,
+      source: 'Reference',
+    };
+  }
+
+  return {
+    title: titledSourceMatch[1].trim(),
+    source: titledSourceMatch[2].trim(),
+  };
+};
+
+const parseSummaryFromReply = (
+  reply: string,
+  fallback: { subject: string; topic: string; score: number; total: number }
+): SkillAssessmentSummary => {
+  const normalized = reply.replace(/\r/g, '').trim();
+  const subjectMatch = normalized.match(/-\s*Subject:\s*([^\n]+)/i);
+  const topicMatch = normalized.match(/-\s*Topic:\s*([^\n]+)/i);
+  const scoreMatch = normalized.match(/-\s*Score:\s*(\d+)\s*\/\s*(\d+)/i);
+  const levelMatch = normalized.match(/-\s*Level:\s*([^\n]+)/i);
+
+  const subject = subjectMatch?.[1]?.trim() || fallback.subject;
+  const topic = topicMatch?.[1]?.trim() || fallback.topic;
+  const score = scoreMatch ? Number.parseInt(scoreMatch[1], 10) : fallback.score;
+  const total = scoreMatch ? Number.parseInt(scoreMatch[2], 10) : fallback.total;
+  const level = levelMatch?.[1]?.trim() || deriveLevelFromScore(score);
+
+  const weakAreaSection = extractSection(
+    normalized,
+    /^2\)\s*Weak Areas\s*$/im,
+    /^3\)\s*7-Day Study Plan\s*$/im
+  );
+  const weakAreas = weakAreaSection
+    .split('\n')
+    .map((line) => line.trim())
+    .map((line) => line.replace(/^\d+\.\s*/, '').trim())
+    .filter(Boolean)
+    .slice(0, 5);
+
+  const studyPlanSection = extractSection(
+    normalized,
+    /^3\)\s*7-Day Study Plan\s*$/im,
+    /^4\)\s*Trusted Study Resources\s*$/im
+  );
+  const studyPlan: SkillAssessmentStudyPlanItem[] = studyPlanSection
+    .split('\n')
+    .map((line) => line.trim())
+    .map((line) => line.match(/^(Day\s*\d+)\s*:\s*(.+)$/i))
+    .filter((match): match is RegExpMatchArray => Boolean(match))
+    .map((match) => ({
+      day: match[1].trim(),
+      focus: match[2].trim(),
+    }))
+    .slice(0, 7);
+
+  const resourcesSection = extractSection(
+    normalized,
+    /^4\)\s*Trusted Study Resources\s*$/im,
+    SKILL_ASSESSMENT_RESTART_PROMPT_PATTERN
+  );
+  const resources: SkillAssessmentResource[] = resourcesSection
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^\d+\.\s*/, '').trim())
+    .map((line) => {
+      const markdownLinkMatch = line.match(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/i);
+      if (markdownLinkMatch) {
+        const label = parseResourceLabel(markdownLinkMatch[1]);
+        return {
+          title: label.title,
+          source: label.source,
+          url: markdownLinkMatch[2].trim(),
+        };
+      }
+
+      const rawUrlMatch = line.match(/(https?:\/\/\S+)/i);
+      if (!rawUrlMatch) {
+        return null;
+      }
+
+      return {
+        title: line.replace(rawUrlMatch[1], '').replace(/[()\[\]-]/g, ' ').trim() || 'Reference',
+        source: 'Reference',
+        url: rawUrlMatch[1],
+      };
+    })
+    .filter((item): item is SkillAssessmentResource => Boolean(item))
+    .slice(0, 6);
+
+  return {
+    subject,
+    topic,
+    score: Number.isFinite(score) ? score : fallback.score,
+    total: Number.isFinite(total) ? total : fallback.total,
+    level,
+    weakAreas,
+    studyPlan,
+    resources,
+    rawText: normalized,
+  };
+};
 
 /* ═══════════════════════════════════════════
    Rich Message Renderer
@@ -640,20 +954,554 @@ const AssistantChatPanel: React.FC<AssistantChatPanelProps> = ({
   );
 };
 
+interface SkillAssessmentPanelProps {
+  currentUser: AppUser | null;
+  canQuizChat: boolean;
+  onBack: () => void;
+}
+
+const SkillAssessmentPanel: React.FC<SkillAssessmentPanelProps> = ({ currentUser, canQuizChat, onBack }) => {
+  const [config, setConfig] = useState<SkillAssessmentConfig>(INITIAL_SKILL_CONFIG);
+  const [isGeneratingSet, setIsGeneratingSet] = useState(false);
+  const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
+  const [errorText, setErrorText] = useState<string | null>(null);
+
+  const [currentQuestion, setCurrentQuestion] = useState<SkillAssessmentQuestion | null>(null);
+  const [queuedQuestion, setQueuedQuestion] = useState<SkillAssessmentQuestion | null>(null);
+  const [selectedOption, setSelectedOption] = useState<SkillAssessmentOptionLabel | null>(null);
+  const [currentFeedback, setCurrentFeedback] = useState<SkillAssessmentFeedback | null>(null);
+  const [answers, setAnswers] = useState<SkillAssessmentAnswerRecord[]>([]);
+  const [summary, setSummary] = useState<SkillAssessmentSummary | null>(null);
+  const [showSummary, setShowSummary] = useState(false);
+
+  const score = useMemo(
+    () => answers.reduce((total, answer) => total + (answer.isCorrect ? 1 : 0), 0),
+    [answers]
+  );
+
+  const totalQuestions = currentQuestion?.totalQuestions || summary?.total || SKILL_ASSESSMENT_TOTAL_QUESTIONS;
+  const scorePercent = totalQuestions ? Math.round((score / totalQuestions) * 100) : 0;
+
+  const progressPercent = useMemo(() => {
+    if (!currentQuestion && !showSummary) {
+      return 0;
+    }
+
+    if (showSummary) {
+      return 100;
+    }
+
+    if (!currentQuestion) {
+      return 0;
+    }
+
+    const completedSoFar = (currentQuestion.questionNumber - 1) + (currentFeedback ? 1 : 0);
+    return Math.round((completedSoFar / Math.max(1, currentQuestion.totalQuestions)) * 100);
+  }, [currentFeedback, currentQuestion, showSummary]);
+
+  const clearAssessment = () => {
+    setCurrentQuestion(null);
+    setQueuedQuestion(null);
+    setSelectedOption(null);
+    setCurrentFeedback(null);
+    setAnswers([]);
+    setSummary(null);
+    setShowSummary(false);
+    setErrorText(null);
+  };
+
+  const restartToSetup = () => {
+    clearAssessment();
+    setConfig(INITIAL_SKILL_CONFIG);
+    setIsGeneratingSet(false);
+    setIsSubmittingAnswer(false);
+  };
+
+  const startAssessment = async () => {
+    const subject = config.subject.trim();
+    const topic = config.topic.trim();
+
+    if (!subject || !topic) {
+      setErrorText('Please provide both weak subject and specific weak area to start your diagnostic assessment.');
+      return;
+    }
+
+    if (!currentUser || !canQuizChat) {
+      setErrorText('Only logged-in student and tutor accounts can start Skill Assessment AI.');
+      return;
+    }
+
+    clearAssessment();
+    setIsGeneratingSet(true);
+
+    try {
+      await apiService.resetQuizChatSession({
+        id: currentUser.id,
+        role: currentUser.role,
+      });
+
+      await apiService.sendQuizChatMessage(subject, {
+        id: currentUser.id,
+        role: currentUser.role,
+      });
+
+      const topicResult = await apiService.sendQuizChatMessage(topic, {
+        id: currentUser.id,
+        role: currentUser.role,
+      });
+
+      const firstQuestion = parseQuestionFromReply(topicResult.reply);
+      if (!firstQuestion) {
+        throw new Error('Failed to parse the first diagnostic question. Please try again.');
+      }
+
+      setCurrentQuestion(firstQuestion);
+    } catch (error) {
+      setErrorText(getErrorMessage(error, 'Unable to start the skill assessment right now. Please try again.'));
+    } finally {
+      setIsGeneratingSet(false);
+    }
+  };
+
+  const handleSubmitAnswer = async () => {
+    if (
+      !selectedOption ||
+      !currentQuestion ||
+      currentFeedback ||
+      !currentUser ||
+      !canQuizChat ||
+      isSubmittingAnswer
+    ) {
+      return;
+    }
+
+    setIsSubmittingAnswer(true);
+    setErrorText(null);
+
+    try {
+      const result = await apiService.sendQuizChatMessage(selectedOption, {
+        id: currentUser.id,
+        role: currentUser.role,
+      });
+
+      const parsedFeedback =
+        parseFeedbackFromReply(result.reply, selectedOption) ||
+        {
+          isCorrect: /^✅\s*correct/i.test(result.reply.trim()),
+          explanation: 'Review the explanation and continue to the next question.',
+          correctOption: undefined,
+        };
+
+      const nextRecord: SkillAssessmentAnswerRecord = {
+        questionNumber: currentQuestion.questionNumber,
+        selectedOption,
+        isCorrect: parsedFeedback.isCorrect,
+      };
+      const nextAnswers = [...answers, nextRecord];
+
+      setAnswers(nextAnswers);
+      setCurrentFeedback(parsedFeedback);
+
+      if (result.stage === 'quiz') {
+        const nextQuestion = parseQuestionFromReply(result.reply);
+        if (!nextQuestion) {
+          throw new Error('Unable to load the next question. Please restart the assessment.');
+        }
+        setQueuedQuestion(nextQuestion);
+        setSummary(null);
+        return;
+      }
+
+      const parsedSummary = parseSummaryFromReply(result.reply, {
+        subject: config.subject.trim(),
+        topic: config.topic.trim(),
+        score: nextAnswers.filter((answer) => answer.isCorrect).length,
+        total: SKILL_ASSESSMENT_TOTAL_QUESTIONS,
+      });
+
+      setQueuedQuestion(null);
+      setSummary(parsedSummary);
+    } catch (error) {
+      setErrorText(getErrorMessage(error, 'Unable to submit your answer right now. Please try again.'));
+    } finally {
+      setIsSubmittingAnswer(false);
+    }
+  };
+
+  const handleContinue = () => {
+    if (queuedQuestion) {
+      setCurrentQuestion(queuedQuestion);
+      setQueuedQuestion(null);
+      setSelectedOption(null);
+      setCurrentFeedback(null);
+      return;
+    }
+
+    if (summary) {
+      setShowSummary(true);
+      setSelectedOption(null);
+      setCurrentFeedback(null);
+    }
+  };
+
+  const weakAreas = summary?.weakAreas?.length
+    ? summary.weakAreas
+    : ['No major weak areas were identified in this attempt.'];
+
+  const studyPlan = summary?.studyPlan || [];
+  const studyResources = summary?.resources || [];
+
+  return (
+    <section className="flex h-full flex-col overflow-hidden">
+      <div className="flex-none border-b border-slate-200/60 bg-white/80 px-4 py-3 backdrop-blur-lg sm:px-6">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onBack}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 transition-all hover:border-indigo-200 hover:text-indigo-600 hover:shadow-sm"
+              title="Back to AI tools"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+
+            <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-violet-600 to-indigo-600 shadow-sm">
+              <BarChart3 className="h-4 w-4 text-white" />
+            </div>
+
+            <div>
+              <h2 className="text-lg font-extrabold tracking-tight text-slate-900 sm:text-xl">Skill Assessment AI</h2>
+              <p className="text-[11px] font-medium text-slate-400 sm:text-xs">
+                Diagnostic assessment with instant feedback, level detection, and study recommendations
+              </p>
+            </div>
+          </div>
+
+          {(currentQuestion || showSummary) && (
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+              <button
+                onClick={restartToSetup}
+                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-3 py-2 text-xs font-bold text-white shadow-sm transition-all hover:from-violet-700 hover:to-indigo-700"
+              >
+                <RefreshCcw className="h-3.5 w-3.5" />
+                Restart Assessment
+              </button>
+            </div>
+          )}
+        </div>
+
+        {(currentQuestion || showSummary) && (
+          <div className="mt-3">
+            <div className="mb-1 flex items-center justify-between text-[11px] font-semibold text-slate-500">
+              <span>
+                {showSummary
+                  ? 'Completed'
+                  : `Question ${Math.min(currentQuestion?.questionNumber || 1, totalQuestions)}/${totalQuestions}`}
+              </span>
+              <span>{progressPercent}%</span>
+            </div>
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+              <motion.div
+                initial={false}
+                animate={{ width: `${Math.max(0, Math.min(100, progressPercent))}%` }}
+                transition={{ type: 'spring', stiffness: 140, damping: 24 }}
+                className="h-full rounded-full bg-gradient-to-r from-violet-600 to-indigo-600"
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="relative flex-1 overflow-y-auto custom-scrollbar ai-home-bg px-4 py-6 sm:px-6 lg:px-8">
+        <div className="mx-auto w-full max-w-4xl">
+          <AnimatePresence mode="wait" initial={false}>
+            {!currentQuestion && !showSummary && (
+              <motion.section
+                key="skill-assessment-setup"
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -12 }}
+                className="space-y-6"
+              >
+                <div className="rounded-2xl border border-violet-100 bg-white/95 p-6 shadow-sm sm:p-8">
+                  <div className="mb-6 flex items-center gap-3">
+                    <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-600 shadow-lg">
+                      <Brain className="h-6 w-6 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-extrabold tracking-tight text-slate-900">Create Your Skill Assessment</h3>
+                      <p className="text-sm font-medium text-slate-500">
+                        Start a 5-question diagnostic to identify weak areas and generate your AI study plan.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="space-y-1.5">
+                      <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Weak Subject</span>
+                      <input
+                        value={config.subject}
+                        onChange={(event) => setConfig((prev) => ({ ...prev, subject: event.target.value }))}
+                        placeholder="e.g. Mathematics"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-800 outline-none transition-all focus:border-violet-300 focus:ring-4 focus:ring-violet-100"
+                      />
+                    </label>
+
+                    <label className="space-y-1.5">
+                      <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Specific Weak Area</span>
+                      <input
+                        value={config.topic}
+                        onChange={(event) => setConfig((prev) => ({ ...prev, topic: event.target.value }))}
+                        placeholder="e.g. Quadratic Equations"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-800 outline-none transition-all focus:border-violet-300 focus:ring-4 focus:ring-violet-100"
+                      />
+                    </label>
+                  </div>
+
+                  {!canQuizChat && (
+                    <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs font-semibold text-amber-700">
+                      Only logged-in student and tutor accounts can use Skill Assessment AI.
+                    </div>
+                  )}
+
+                  {errorText && (
+                    <div className="mt-4 rounded-xl border border-violet-200 bg-violet-50 px-4 py-2.5 text-xs font-semibold text-violet-700">
+                      {errorText}
+                    </div>
+                  )}
+
+                  {isGeneratingSet && (
+                    <div className="mt-4 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs font-semibold text-slate-600">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Generating your diagnostic questions...
+                    </div>
+                  )}
+
+                  <div className="mt-6 flex items-center justify-end">
+                    <button
+                      onClick={() => void startAssessment()}
+                      disabled={isGeneratingSet || !canQuizChat}
+                      className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-indigo-200 transition-all hover:from-violet-700 hover:to-indigo-700 disabled:cursor-not-allowed disabled:opacity-65"
+                    >
+                      {isGeneratingSet ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                      {isGeneratingSet ? 'Creating Assessment...' : 'Start Assessment'}
+                    </button>
+                  </div>
+                </div>
+              </motion.section>
+            )}
+
+            {currentQuestion && !showSummary && (
+              <motion.section
+                key="skill-assessment-question"
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -12 }}
+                className="space-y-5"
+              >
+                <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <div className="inline-flex items-center gap-2 rounded-full border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-bold text-violet-700">
+                      <Target className="h-3.5 w-3.5" />
+                      Skill Diagnostic Assessment
+                    </div>
+                    <div className="text-xs font-semibold text-slate-500">
+                      Question {currentQuestion.questionNumber}/{totalQuestions}
+                    </div>
+                  </div>
+
+                  <p className="text-lg font-bold leading-relaxed text-slate-900">{currentQuestion.question}</p>
+                  <p className="mt-2 text-xs font-medium text-slate-500">
+                    Focus: {config.topic.trim()} · Difficulty: {currentQuestion.difficulty}
+                  </p>
+
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                    {SKILL_ASSESSMENT_OPTION_LABELS.map((label) => {
+                      const isPicked = selectedOption === label;
+                      const showCorrect = Boolean(currentFeedback?.correctOption) && currentFeedback.correctOption === label;
+                      const showIncorrectSelection = Boolean(currentFeedback) && isPicked && !currentFeedback.isCorrect;
+
+                      return (
+                        <button
+                          key={label}
+                          onClick={() => {
+                            if (!currentFeedback && !isSubmittingAnswer) {
+                              setSelectedOption(label);
+                            }
+                          }}
+                          disabled={Boolean(currentFeedback) || isSubmittingAnswer}
+                          className={`rounded-xl border px-4 py-3 text-left text-sm font-semibold transition-all ${
+                                  showCorrect
+                                    ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                                    : showIncorrectSelection
+                                ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
+                                : isPicked
+                                  ? 'border-violet-300 bg-violet-50 text-violet-700'
+                                  : 'border-slate-200 bg-white text-slate-700 hover:border-violet-200 hover:bg-violet-50/40'
+                          }`}
+                        >
+                          <span className="mr-2 text-xs font-black">{label}.</span>
+                          {currentQuestion.options[label]}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {currentFeedback && (
+                    <div className={`mt-5 rounded-xl border px-4 py-3 ${
+                      currentFeedback.isCorrect
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                        : 'border-indigo-200 bg-indigo-50 text-indigo-800'
+                    }`}>
+                      <div className="flex items-center gap-2 text-sm font-bold">
+                        {currentFeedback.isCorrect ? <Check className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+                        {currentFeedback.isCorrect
+                          ? 'Correct answer!'
+                          : currentFeedback.correctOption
+                            ? `Incorrect. Correct option: ${currentFeedback.correctOption}`
+                            : 'Incorrect answer.'}
+                      </div>
+                      <p className="mt-1.5 text-sm font-medium leading-relaxed">{currentFeedback.explanation}</p>
+                    </div>
+                  )}
+
+                  {errorText && (
+                    <div className="mt-4 rounded-xl border border-violet-200 bg-violet-50 px-4 py-2.5 text-xs font-semibold text-violet-700">
+                      {errorText}
+                    </div>
+                  )}
+
+                  <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
+                    {!currentFeedback && (
+                      <button
+                        onClick={() => void handleSubmitAnswer()}
+                        disabled={!selectedOption || isSubmittingAnswer}
+                        className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition-all hover:from-violet-700 hover:to-indigo-700 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        {isSubmittingAnswer && <Loader2 className="h-4 w-4 animate-spin" />}
+                        Submit Answer
+                      </button>
+                    )}
+
+                    {currentFeedback && (
+                      <button
+                        onClick={handleContinue}
+                        className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition-all hover:from-violet-700 hover:to-indigo-700"
+                      >
+                        {queuedQuestion ? 'Next Question' : 'View Summary'}
+                        <ArrowRight className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </motion.section>
+            )}
+
+            {showSummary && summary && (
+              <motion.section
+                key="skill-assessment-summary"
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -12 }}
+                className="space-y-5"
+              >
+                <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+                  <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                    <h3 className="text-xl font-extrabold tracking-tight text-slate-900">Diagnostic Summary</h3>
+                    <div className="inline-flex items-center gap-2 rounded-full border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-bold text-violet-700">
+                      <Target className="h-3.5 w-3.5" />
+                      {summary.score}/{summary.total} ({scorePercent}%)
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Assessment Details</p>
+                      <div className="mt-2 space-y-2 text-sm font-semibold text-slate-700">
+                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">Subject: {summary.subject}</div>
+                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">Weak Area: {summary.topic}</div>
+                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">Level: {summary.level}</div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Weak Areas</p>
+                      <ul className="mt-2 space-y-2">
+                        {weakAreas.map((area) => (
+                          <li key={area} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
+                            {area}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">7-Day Study Plan</p>
+                    <ul className="mt-3 space-y-2">
+                      {studyPlan.length === 0 && (
+                        <li className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700">
+                          A personalized study plan was not returned. Please restart the assessment to regenerate it.
+                        </li>
+                      )}
+
+                      {studyPlan.map((entry) => (
+                        <li key={`${entry.day}-${entry.focus}`} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700">
+                          <span className="font-bold text-slate-900">{entry.day}:</span> {entry.focus}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Recommended Resources</p>
+                    <ul className="mt-3 space-y-2">
+                      {studyResources.length === 0 && (
+                        <li className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700">
+                          No resource links were generated for this attempt.
+                        </li>
+                      )}
+
+                      {studyResources.map((resource) => (
+                        <li key={`${resource.url}-${resource.title}`} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700">
+                          <a
+                            href={resource.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="font-semibold text-violet-700 underline decoration-violet-200 underline-offset-2 hover:text-violet-800"
+                          >
+                            {resource.title}
+                          </a>
+                          <span className="ml-1 text-xs font-semibold text-slate-500">({resource.source})</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
+                    <button
+                      onClick={restartToSetup}
+                      className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2.5 text-sm font-bold text-white transition-all hover:from-violet-700 hover:to-indigo-700"
+                    >
+                      <RefreshCcw className="h-4 w-4" />
+                      Restart Assessment
+                    </button>
+                  </div>
+                </div>
+              </motion.section>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
+    </section>
+  );
+};
+
 /* ═══════════════════════════════════════════
    Main Page Export
    ═══════════════════════════════════════════ */
 
 export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser, onOpenExamPreparation }) => {
   const [activeFeature, setActiveFeature] = useState<AssistantFeature>('home');
-
-  const [quizMessages, setQuizMessages] = useState<AssistantMessage[]>([]);
-  const [quizInput, setQuizInput] = useState('');
-  const [quizIsTyping, setQuizIsTyping] = useState(false);
-  const [quizSessionClosed, setQuizSessionClosed] = useState(false);
-  const [quizErrorText, setQuizErrorText] = useState<string | null>(null);
-  const [quizCopiedId, setQuizCopiedId] = useState<string | null>(null);
-  const [quizHasStarted, setQuizHasStarted] = useState(false);
 
   const [askMessages, setAskMessages] = useState<AssistantMessage[]>([
     createMessage('assistant', ASK_LEARN_WELCOME_MESSAGE),
@@ -682,75 +1530,8 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser, o
     [currentUser]
   );
 
-  const quizInputPlaceholder = useMemo(() => {
-    if (!quizHasStarted) return 'Start the assessment to begin.';
-    if (!currentUser) return 'Log in as a student or tutor to use Skill Assessment AI.';
-    if (!canQuizChat) return 'Only student and tutor accounts can use Skill Assessment AI.';
-    if (quizSessionClosed) return 'Session ended. Restart session to continue.';
-    return 'Type your answer or request...';
-  }, [canQuizChat, currentUser, quizHasStarted, quizSessionClosed]);
-
-  const quizCanSubmit = Boolean(
-    quizHasStarted &&
-    quizInput.trim() &&
-    !quizIsTyping &&
-    canQuizChat &&
-    !quizSessionClosed
-  );
-
   const askCanSubmit = Boolean(askInput.trim() && !askIsTyping);
   const roadmapCanSubmit = Boolean(roadmapInput.trim() && !roadmapIsTyping);
-
-  useEffect(() => {
-    let isCancelled = false;
-
-    if (activeFeature !== 'skill-assessment' || !quizHasStarted) {
-      return () => {
-        isCancelled = true;
-      };
-    }
-
-    const syncSession = async () => {
-      if (!canQuizChat || !currentUser) {
-        setQuizMessages([createMessage('assistant', QUIZ_OPENING_MESSAGE)]);
-        setQuizSessionClosed(false);
-        setQuizErrorText(null);
-        return;
-      }
-
-      setQuizIsTyping(true);
-      try {
-        const reset = await apiService.resetQuizChatSession({
-          id: currentUser.id,
-          role: currentUser.role,
-        });
-
-        if (isCancelled) return;
-
-        setQuizMessages([createMessage('assistant', reset.reply || QUIZ_OPENING_MESSAGE)]);
-        setQuizSessionClosed(false);
-        setQuizErrorText(null);
-      } catch (error) {
-        if (isCancelled) return;
-
-        const message = error instanceof Error
-          ? error.message
-          : 'Failed to initialize skill assessment session.';
-        setQuizErrorText(message);
-        setQuizMessages([createMessage('assistant', QUIZ_OPENING_MESSAGE)]);
-      } finally {
-        if (!isCancelled) {
-          setQuizIsTyping(false);
-        }
-      }
-    };
-
-    void syncSession();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [activeFeature, canQuizChat, currentUser, quizHasStarted]);
 
   const copyToClipboard = (
     id: string,
@@ -766,66 +1547,6 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser, o
       .catch(() => {
         setErrorText('Unable to copy message to clipboard.');
       });
-  };
-
-  const handleQuizSend = async () => {
-    const trimmedInput = quizInput.trim();
-    if (!trimmedInput || quizIsTyping || !canQuizChat || !currentUser || quizSessionClosed) {
-      return;
-    }
-
-    setQuizMessages((previous) => [...previous, createMessage('user', trimmedInput)]);
-    setQuizInput('');
-    setQuizIsTyping(true);
-    setQuizErrorText(null);
-
-    try {
-      const result = await apiService.sendQuizChatMessage(trimmedInput, {
-        id: currentUser.id,
-        role: currentUser.role,
-      });
-
-      setQuizMessages((previous) => [...previous, createMessage('assistant', result.reply)]);
-      setQuizSessionClosed(Boolean(result.sessionEnded));
-    } catch (error) {
-      const fallbackError = 'Unable to reach AI Assistant. Please try again.';
-      const message = error instanceof Error ? error.message : fallbackError;
-
-      setQuizErrorText(message || fallbackError);
-      setQuizMessages((previous) => [
-        ...previous,
-        createMessage('assistant', 'I hit a temporary issue. Please try again in a moment.'),
-      ]);
-    } finally {
-      setQuizIsTyping(false);
-    }
-  };
-
-  const restartQuizSession = async () => {
-    setQuizMessages([createMessage('assistant', QUIZ_OPENING_MESSAGE)]);
-    setQuizSessionClosed(false);
-    setQuizErrorText(null);
-    setQuizInput('');
-
-    if (!canQuizChat || !currentUser) {
-      setQuizIsTyping(false);
-      return;
-    }
-
-    setQuizIsTyping(true);
-    try {
-      const reset = await apiService.resetQuizChatSession({
-        id: currentUser.id,
-        role: currentUser.role,
-      });
-
-      setQuizMessages([createMessage('assistant', reset.reply || QUIZ_OPENING_MESSAGE)]);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to reset session.';
-      setQuizErrorText(message);
-    } finally {
-      setQuizIsTyping(false);
-    }
   };
 
   const handleAskLearnSend = async () => {
@@ -908,10 +1629,6 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser, o
 
   const goHome = () => {
     setActiveFeature('home');
-  };
-
-  const handleSuggestedPromptQuiz = (prompt: string) => {
-    setQuizInput(prompt);
   };
 
   const handleSuggestedPromptAskLearn = (prompt: string) => {
@@ -1018,131 +1735,20 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser, o
               </motion.section>
             )}
 
-            {/* ═══ SKILL ASSESSMENT – INTRO ═══ */}
-            {activeFeature === 'skill-assessment' && !quizHasStarted && (
-              <motion.section
-                key="skill-assessment-intro"
-                initial={{ opacity: 0, y: 18 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -18 }}
-                transition={{ duration: 0.28, ease: 'easeOut' }}
-                className="h-full overflow-y-auto custom-scrollbar ai-home-bg"
-              >
-                <div className="mx-auto flex h-full w-full max-w-3xl flex-col justify-center gap-8 px-5 py-10 sm:px-8">
-                  <button
-                    onClick={goHome}
-                    className="self-start inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 transition-all hover:border-indigo-200 hover:text-indigo-600 hover:shadow-sm active:scale-[0.97]"
-                  >
-                    <ArrowLeft className="h-4 w-4" />
-                    Back to AI tools
-                  </button>
-
-                  <div className="space-y-5 text-center">
-                    <motion.div
-                      initial={{ scale: 0.8, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      transition={{ type: 'spring', stiffness: 200, damping: 20 }}
-                      className="mx-auto inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-600 shadow-xl shadow-violet-500/25"
-                    >
-                      <BarChart3 className="h-7 w-7 text-white" />
-                    </motion.div>
-                    <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">Skill Assessment AI</h2>
-                    <p className="mx-auto max-w-xl text-sm font-medium leading-relaxed text-slate-500 sm:text-base">
-                      Take an adaptive, AI-driven assessment to discover your strengths and weaknesses, then receive a personalized study plan.
-                    </p>
-                  </div>
-
-                  {/* Steps */}
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    {[
-                      { step: '1', label: 'Choose your subject', icon: Clipboard },
-                      { step: '2', label: 'Take adaptive quiz', icon: Brain },
-                      { step: '3', label: 'Get your study plan', icon: GraduationCap },
-                    ].map(({ step, label, icon: StepIcon }) => (
-                      <motion.div
-                        key={step}
-                        initial={{ opacity: 0, y: 12 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: Number(step) * 0.1 }}
-                        className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-violet-600 to-indigo-600 text-sm font-black text-white shadow-md">
-                            {step}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <StepIcon className="h-4 w-4 text-violet-500" />
-                            <p className="text-sm font-semibold text-slate-700">{label}</p>
-                          </div>
-                        </div>
-                      </motion.div>
-                    ))}
-                  </div>
-
-                  {!canQuizChat && (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-800 flex items-start gap-2.5">
-                      <Lock className="mt-0.5 h-4 w-4 shrink-0" />
-                      <span className="text-xs font-medium">Only logged-in student or tutor accounts can chat with the assessment AI.</span>
-                    </div>
-                  )}
-
-                  <div className="flex justify-center">
-                    <motion.button
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
-                      onClick={() => {
-                        setQuizHasStarted(true);
-                        setQuizErrorText(null);
-                        setQuizInput('');
-                      }}
-                      className="inline-flex items-center gap-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-8 py-3.5 text-sm font-bold text-white shadow-xl shadow-violet-200/50 transition-shadow hover:shadow-2xl hover:shadow-indigo-300/40"
-                    >
-                      Start Assessment
-                      <ArrowRight className="h-4 w-4" />
-                    </motion.button>
-                  </div>
-                </div>
-              </motion.section>
-            )}
-
-            {/* ═══ SKILL ASSESSMENT – CHAT ═══ */}
-            {activeFeature === 'skill-assessment' && quizHasStarted && (
+            {/* ═══ SKILL ASSESSMENT ═══ */}
+            {activeFeature === 'skill-assessment' && (
               <motion.div
-                key="skill-assessment-chat"
+                key="skill-assessment-flow"
                 initial={{ opacity: 0, y: 18 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -18 }}
                 transition={{ duration: 0.28, ease: 'easeOut' }}
                 className="h-full"
               >
-                <AssistantChatPanel
-                  title="Skill Assessment AI"
-                  subtitle="Adaptive quiz with personalized study plan"
-                  assistantLabel="AI Assistant"
-                  messages={quizMessages}
-                  input={quizInput}
-                  onInputChange={setQuizInput}
-                  onSend={handleQuizSend}
-                  canSubmit={quizCanSubmit}
-                  isTyping={quizIsTyping}
-                  errorText={quizErrorText}
-                  canChat={canQuizChat}
-                  lockMessage="Only logged-in student or tutor accounts can use Skill Assessment AI chat."
-                  inputPlaceholder={quizInputPlaceholder}
+                <SkillAssessmentPanel
+                  currentUser={currentUser}
+                  canQuizChat={canQuizChat}
                   onBack={goHome}
-                  onRestart={restartQuizSession}
-                  restartLabel="Restart Session"
-                  copiedId={quizCopiedId}
-                  onCopy={(id, text) => copyToClipboard(id, text, setQuizCopiedId, setQuizErrorText)}
-                  disableInput={!quizHasStarted || quizSessionClosed}
-                  completionText={quizSessionClosed ? 'Study session completed.' : null}
-                  completionCtaLabel={quizSessionClosed ? 'Start New Session' : undefined}
-                  onCompletionCta={quizSessionClosed ? restartQuizSession : undefined}
-                  accentColor="violet"
-                  accentGradient="from-violet-600 to-indigo-600"
-                  icon={BarChart3}
-                  suggestedPrompts={SKILL_ASSESSMENT_PROMPTS}
-                  onSuggestedPrompt={handleSuggestedPromptQuiz}
                 />
               </motion.div>
             )}

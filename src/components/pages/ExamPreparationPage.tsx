@@ -31,6 +31,13 @@ type ExamPreparationConfig = {
   questionCount: ExamPreparationQuestionCount;
 };
 
+const INITIAL_EXAM_CONFIG: ExamPreparationConfig = {
+  subject: '',
+  topic: '',
+  difficulty: 'medium',
+  questionCount: 10,
+};
+
 type AnswerRecord = {
   questionId: string;
   selectedOption: ExamPreparationOptionLabel;
@@ -67,12 +74,7 @@ const buildFallbackTips = (weakAreas: string[]): string[] => {
 };
 
 export const ExamPreparationPage: React.FC<ExamPreparationPageProps> = ({ onBack }) => {
-  const [config, setConfig] = useState<ExamPreparationConfig>({
-    subject: '',
-    topic: '',
-    difficulty: 'medium',
-    questionCount: 10,
-  });
+  const [config, setConfig] = useState<ExamPreparationConfig>(INITIAL_EXAM_CONFIG);
 
   const [questionSet, setQuestionSet] = useState<ExamPreparationSetResponse | null>(null);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
@@ -160,31 +162,54 @@ export const ExamPreparationPage: React.FC<ExamPreparationPageProps> = ({ onBack
     setImprovementTips(null);
   };
 
-  const generateQuestionSet = async () => {
-    if (!config.subject.trim() || !config.topic.trim()) {
+  const clearCurrentTestUi = () => {
+    setQuestionSet(null);
+    resetAttempt();
+  };
+
+  const restartToSetup = () => {
+    setConfig(INITIAL_EXAM_CONFIG);
+    setIsFetchingTips(false);
+    clearCurrentTestUi();
+  };
+
+  const getValidatedConfig = (): {
+    subject: string;
+    topic: string;
+    difficulty: ExamPreparationDifficulty;
+    questionCount: ExamPreparationQuestionCount;
+  } | null => {
+    const subject = config.subject.trim();
+    const topic = config.topic.trim();
+
+    if (!subject || !topic) {
       setSetError('Please provide both subject and topic to generate your exam practice set.');
+      return null;
+    }
+
+    return {
+      subject,
+      topic,
+      difficulty: config.difficulty,
+      questionCount: config.questionCount,
+    };
+  };
+
+  const generateQuestionSet = async () => {
+    const validatedConfig = getValidatedConfig();
+    if (!validatedConfig) {
       return;
     }
+
+    clearCurrentTestUi();
 
     setIsGeneratingSet(true);
     setSetError(null);
 
     try {
-      const generated = await apiService.generateExamPreparationSet({
-        subject: config.subject.trim(),
-        topic: config.topic.trim(),
-        difficulty: config.difficulty,
-        questionCount: config.questionCount,
-      });
+      const generated = await apiService.generateExamPreparationSet(validatedConfig);
 
       setQuestionSet(generated);
-      setCurrentQuestionIndex(0);
-      setSelectedOption(null);
-      setCurrentFeedback(null);
-      setAnswers([]);
-      setShowSummary(false);
-      setTipsError(null);
-      setImprovementTips(null);
     } catch (error) {
       setSetError(getErrorMessage(error, 'Unable to generate exam preparation questions right now.'));
     } finally {
@@ -320,12 +345,11 @@ export const ExamPreparationPage: React.FC<ExamPreparationPageProps> = ({ onBack
                     </button>
 
                     <button
-                      onClick={() => void generateQuestionSet()}
-                      disabled={isGeneratingSet}
+                      onClick={restartToSetup}
                       className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-fuchsia-600 to-rose-600 px-3 py-2 text-xs font-bold text-white shadow-sm transition-all hover:from-fuchsia-700 hover:to-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {isGeneratingSet ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                      Generate New Set
+                      <Sparkles className="h-3.5 w-3.5" />
+                      Generate New Test
                     </button>
                   </div>
                 )}
@@ -448,7 +472,7 @@ export const ExamPreparationPage: React.FC<ExamPreparationPageProps> = ({ onBack
                             className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-fuchsia-600 to-rose-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-rose-200 transition-all hover:from-fuchsia-700 hover:to-rose-700 disabled:cursor-not-allowed disabled:opacity-65"
                           >
                             {isGeneratingSet ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                            {isGeneratingSet ? 'AI is generating your exam set...' : 'Generate Exam Set'}
+                            {isGeneratingSet ? 'AI is generating your new test...' : 'Generate Exam Test'}
                           </button>
                         </div>
                       </div>
@@ -634,12 +658,11 @@ export const ExamPreparationPage: React.FC<ExamPreparationPageProps> = ({ onBack
                           </button>
 
                           <button
-                            onClick={() => void generateQuestionSet()}
-                            disabled={isGeneratingSet}
+                            onClick={restartToSetup}
                             className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-fuchsia-600 to-rose-600 px-4 py-2.5 text-sm font-bold text-white transition-all hover:from-fuchsia-700 hover:to-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            {isGeneratingSet ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                            Generate New Set
+                            <Sparkles className="h-4 w-4" />
+                            Generate New Test
                           </button>
                         </div>
                       </div>

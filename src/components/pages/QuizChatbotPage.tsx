@@ -1518,6 +1518,7 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser, o
   const [roadmapIsTyping, setRoadmapIsTyping] = useState(false);
   const [roadmapErrorText, setRoadmapErrorText] = useState<string | null>(null);
   const [roadmapCopiedId, setRoadmapCopiedId] = useState<string | null>(null);
+  const [roadmapReferences, setRoadmapReferences] = useState<Array<{ title: string; reason?: string; url: string }>>([]);
 
   const canQuizChat = Boolean(currentUser && (currentUser.role === 'student' || currentUser.role === 'tutor'));
 
@@ -1605,7 +1606,15 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser, o
         aiMode: 'roadmap_finder',
       });
 
-      setRoadmapMessages((previous) => [...previous, createMessage('assistant', result.reply)]);
+      // result may be either { reply } or { reply, references }
+      const assistantText = typeof result === 'string' ? result : (result.reply || '');
+      setRoadmapMessages((previous) => [...previous, createMessage('assistant', assistantText)]);
+
+      if (result && typeof result === 'object' && Array.isArray((result as any).references)) {
+        setRoadmapReferences((result as any).references.map((r: any) => ({ title: r.title || r.name || r.label, reason: r.reason || '', url: r.url || r.link })));
+      } else {
+        setRoadmapReferences([]);
+      }
     } catch (error) {
       const fallbackError = 'Unable to reach Roadmap Finder. Please try again.';
       const message = error instanceof Error ? error.message : fallbackError;
@@ -1750,6 +1759,23 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser, o
                   canQuizChat={canQuizChat}
                   onBack={goHome}
                 />
+                {roadmapReferences.length > 0 && (
+                  <div className="mx-auto mt-4 max-w-4xl px-6">
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">References</p>
+                      <ul className="mt-3 space-y-2">
+                        {roadmapReferences.map((ref) => (
+                          <li key={`${ref.url}-${ref.title}`} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700">
+                            <a href={ref.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-emerald-700 underline decoration-emerald-100 underline-offset-2 hover:text-emerald-800">
+                              {ref.title}
+                            </a>
+                            <div className="mt-1 text-xs text-slate-500">{ref.reason}</div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                )}
               </motion.div>
             )}
 

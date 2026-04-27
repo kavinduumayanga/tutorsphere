@@ -49,7 +49,8 @@ export class FaqChatbotService {
     }
 
     if (mode === 'roadmap_finder') {
-      return this.roadmapFinderService.getReply(sanitizedMessage, context);
+      // Return structured reply with optional references for roadmap mode
+      return this.roadmapFinderService.getStructuredReply(sanitizedMessage, context) as any;
     }
 
     return this.tutorSphereAssistantService.getReply(sanitizedMessage, context);

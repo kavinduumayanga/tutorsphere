@@ -1010,4 +1010,99 @@ export class RoadmapFinderService {
 
     return safeReply;
   }
+
+  /**
+   * Returns a structured roadmap reply along with parsed trusted references.
+   * The shape is { reply: string, references: TrustedResource[] }
+   */
+  async getStructuredReply(sanitizedMessage: string, context: FaqChatContext = {}): Promise<{ reply: string; references: TrustedResource[] }> {
+    const safeContext = toSafeContext(context);
+    const targetRole = extractTargetRole(sanitizedMessage);
+    const resolvedRole = resolveRoadmapRoleProfile(sanitizedMessage, targetRole);
+
+    if (!resolvedRole) {
+      if (NON_TECH_ROLE_PATTERN.test(sanitizedMessage)) {
+        return { reply: ROADMAP_OUT_OF_SCOPE_MESSAGE, references: [] };
+      }
+
+      if (!isRoadmapRequest(sanitizedMessage) && !TECH_ROLE_HINT_PATTERN.test(sanitizedMessage)) {
+        return { reply: ROADMAP_OUT_OF_SCOPE_MESSAGE, references: [] };
+      }
+
+      return { reply: ROADMAP_OUT_OF_SCOPE_MESSAGE, references: [] };
+    }
+
+    const { profile: roleProfile, requestedRole } = resolvedRole;
+    const roadmapFallback = buildRoadmapFallback(roleProfile, requestedRole || roleProfile.canonicalRole);
+    const composedUserPrompt = [
+      'You are operating in Roadmap Finder mode.',
+      'Treat this request as a fresh roadmap request. Do not reuse any previous role context.',
+      `UserContext: ${JSON.stringify(safeContext)}`,
+      `TargetRole: ${requestedRole}`,
+      `RoleProfile: ${JSON.stringify(roleProfile)}`,
+      `UserRequest: ${sanitizedMessage}`,
+      `Use exactly these section headers: ${ROADMAP_SECTION_HEADERS.join(' | ')}`,
+      'The response must be detailed, actionable, and include beginner, intermediate, and advanced progression.',
+      'Include concrete projects, tools, portfolio/certification suggestions, job preparation, and optional specialization paths.',
+      'Section 9 must be the final section titled exactly "9. Trusted Resources".',
+      'Trusted Resources must contain 5 to 8 lines only, each in this exact format: Resource Title — One-sentence reason: URL',
+      'Use only high-quality and authoritative resources relevant to the requested role; avoid random/low-quality blogs.',
+      'Include TutorSphere local courses/resources only when relevant and available in platform context.',
+      'Do not end with "If you want, I can...".',
+    ].join('\n\n');
+
+    const rawReply = await azureOpenAiClient.chat(
+      [
+        {
+          role: 'system',
+          content: ROADMAP_SYSTEM_PROMPT,
+        },
+        {
+          role: 'user',
+          content: composedUserPrompt,
+        },
+      ],
+      {
+        temperature: 0.35,
+        maxTokens: 900,
+      }
+    );
+
+    const safeReply = sanitizeAssistantReply(rawReply);
+    if (!safeReply) {
+      const fallbackResources = getTrustedResourcesForRole(roleProfile, requestedRole || roleProfile.canonicalRole).slice(0, 6);
+      return { reply: roadmapFallback, references: fallbackResources };
+    }
+
+    if (!isStructuredRoadmap(safeReply)) {
+      const fallbackResources = getTrustedResourcesForRole(roleProfile, requestedRole || roleProfile.canonicalRole).slice(0, 6);
+      return { reply: roadmapFallback, references: fallbackResources };
+    }
+
+    // Parse the '9. Trusted Resources' section into structured items
+    const trustedSectionMatch = String(safeReply || '').match(/9\.\s*Trusted Resources\s*\n([\s\S]*)$/i);
+    let parsedResources: TrustedResource[] = [];
+    if (trustedSectionMatch?.[1]) {
+      const lines = trustedSectionMatch[1]
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .map((line) => line.replace(/^[-•\d.)\s]+/, '').trim());
+
+      for (const line of lines) {
+        // Expecting format: Title — reason: URL
+        const match = line.match(/^([^—:]+)\s*(?:—|-)\s*([^:]+):\s*(https?:\/\/\S+)$/);
+        if (match) {
+          parsedResources.push({ title: match[1].trim(), reason: match[2].trim(), url: match[3].trim() });
+        }
+      }
+    }
+
+    // If parsing failed, fall back to curated role resources
+    if (parsedResources.length === 0) {
+      parsedResources = getTrustedResourcesForRole(roleProfile, requestedRole || roleProfile.canonicalRole).slice(0, 6);
+    }
+
+    return { reply: safeReply, references: parsedResources };
+  }
 }

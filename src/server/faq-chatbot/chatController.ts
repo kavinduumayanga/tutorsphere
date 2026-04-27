@@ -13,7 +13,7 @@ router.post('/chat', async (req, res) => {
       return res.status(400).json({ error: 'message must be a string.' });
     }
 
-    const reply = await faqChatbotService.getReply(message, {
+    const replyOrStructured = await faqChatbotService.getReply(message, {
       currentTab: typeof context?.currentTab === 'string' ? context.currentTab : undefined,
       userRole: typeof context?.userRole === 'string' ? context.userRole : undefined,
       userName: typeof context?.userName === 'string' ? context.userName : undefined,
@@ -23,7 +23,13 @@ router.post('/chat', async (req, res) => {
           : undefined,
     });
 
-    return res.json({ reply });
+    // Support both legacy string reply and structured roadmap reply
+    if (typeof replyOrStructured === 'string') {
+      return res.json({ reply: replyOrStructured });
+    }
+
+    // structured object expected to have { reply: string, references?: TrustedResource[] }
+    return res.json(replyOrStructured);
   } catch (error) {
     console.error('FAQ chatbot /chat error:', error);
     return res.status(500).json({ error: 'Failed to process FAQ chatbot request.' });

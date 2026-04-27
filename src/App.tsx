@@ -1542,6 +1542,20 @@ export default function App() {
     });
   };
 
+  const refreshTutorWithdrawalSummary = async (tutorId: string) => {
+    const normalizedTutorId = String(tutorId || '').trim();
+    if (!normalizedTutorId) {
+      return;
+    }
+
+    try {
+      const summary = await apiService.getWithdrawalSummary(normalizedTutorId);
+      setWithdrawalSummary(summary);
+    } catch (error) {
+      console.error('Failed to refresh withdrawal summary:', error);
+    }
+  };
+
   const loadTutorWithdrawalData = async (tutorId: string) => {
     if (!tutorId) {
       setWithdrawalRequests([]);
@@ -3368,6 +3382,13 @@ export default function App() {
             : booking
         )
       );
+
+      if (currentUser?.role === 'tutor') {
+        const resolvedTutorId = currentTutor?.id || currentUser.id;
+        if (resolvedTutorId && (updates.status !== undefined || updates.paymentStatus !== undefined)) {
+          void refreshTutorWithdrawalSummary(resolvedTutorId);
+        }
+      }
     } catch (error) {
       console.error('Failed to update booking:', error);
       alert('Failed to update booking. Please try again.');
@@ -3652,6 +3673,13 @@ export default function App() {
     try {
       const updatedBooking = await apiService.updateBooking(booking.id, { status: 'cancelled' });
       applyBookingUpdateToState(updatedBooking);
+
+      if (actorRole === 'tutor' && currentUser?.role === 'tutor') {
+        const resolvedTutorId = currentTutor?.id || currentUser.id;
+        if (resolvedTutorId) {
+          void refreshTutorWithdrawalSummary(resolvedTutorId);
+        }
+      }
 
       if (actorRole === 'student') {
         const nextPaymentStatus = String(updatedBooking.paymentStatus || booking.paymentStatus || 'pending').trim().toLowerCase();
@@ -4386,7 +4414,7 @@ export default function App() {
   };
 
   const tutorCompletedPaidBookings = useMemo(
-    () => bookings.filter((booking) => booking.status === 'completed' && (booking.paymentStatus || 'pending') === 'paid'),
+    () => bookings.filter((booking) => booking.status === 'completed' && getBookingPaymentStatus(booking) === 'paid'),
     [bookings]
   );
 
@@ -4417,56 +4445,96 @@ export default function App() {
       const parsedBaseAmount = Number((booking as any).baseAmount);
       const parsedPlatformFee = Number((booking as any).platformFee);
       const parsedTotalAmount = Number((booking as any).totalAmount);
+      const parsedStudentPlatformFee = Number((booking as any).studentPlatformFee);
+      const parsedStudentTotalPaid = Number((booking as any).studentTotalPaid);
+      const parsedTutorPlatformFee = Number((booking as any).tutorPlatformFee);
+      const parsedTutorNetEarning = Number((booking as any).tutorNetEarning);
       const parsedSessionAmount = Number(booking.sessionAmount);
 
       const hasBaseAmount = Number.isFinite(parsedBaseAmount) && parsedBaseAmount >= 0;
       const hasPlatformFee = Number.isFinite(parsedPlatformFee) && parsedPlatformFee >= 0;
       const hasTotalAmount = Number.isFinite(parsedTotalAmount) && parsedTotalAmount >= 0;
+      const hasStudentPlatformFee = Number.isFinite(parsedStudentPlatformFee) && parsedStudentPlatformFee >= 0;
+      const hasStudentTotalPaid = Number.isFinite(parsedStudentTotalPaid) && parsedStudentTotalPaid >= 0;
+      const hasTutorPlatformFee = Number.isFinite(parsedTutorPlatformFee) && parsedTutorPlatformFee >= 0;
+      const hasTutorNetEarning = Number.isFinite(parsedTutorNetEarning) && parsedTutorNetEarning >= 0;
       const hasLegacySessionAmount = Number.isFinite(parsedSessionAmount) && parsedSessionAmount >= 0;
 
       if (hasBaseAmount) {
         const baseAmount = roundMoney(parsedBaseAmount);
-        const platformFee = hasPlatformFee
-          ? roundMoney(parsedPlatformFee)
-          : hasTotalAmount
-            ? roundMoney(Math.max(0, parsedTotalAmount - baseAmount))
+        const studentPlatformFee = hasStudentPlatformFee
+          ? roundMoney(parsedStudentPlatformFee)
+          : hasPlatformFee
+            ? roundMoney(parsedPlatformFee)
             : roundMoney(baseAmount * PLATFORM_FEE_RATE);
-        const totalAmount = hasTotalAmount
-          ? roundMoney(parsedTotalAmount)
-          : roundMoney(baseAmount + platformFee);
+        const studentTotalPaid = hasStudentTotalPaid
+          ? roundMoney(parsedStudentTotalPaid)
+          : hasTotalAmount
+            ? roundMoney(parsedTotalAmount)
+            : roundMoney(baseAmount + studentPlatformFee);
+        const tutorPlatformFee = hasTutorPlatformFee ? roundMoney(parsedTutorPlatformFee) : studentPlatformFee;
+        const tutorNetEarning = hasTutorNetEarning
+          ? roundMoney(parsedTutorNetEarning)
+          : roundMoney(Math.max(0, baseAmount - tutorPlatformFee));
+
+        return {
+          baseAmount,
+          platformFee: studentPlatformFee,
+          totalAmount: studentTotalPaid,
+          tutorPlatformFee,
+          tutorNetEarning,
+        };
+      }
+
+      if ((hasTotalAmount || hasStudentTotalPaid) && (hasPlatformFee || hasStudentPlatformFee)) {
+        const totalAmount = hasStudentTotalPaid
+          ? roundMoney(parsedStudentTotalPaid)
+          : roundMoney(parsedTotalAmount);
+        const platformFee = hasStudentPlatformFee
+          ? roundMoney(parsedStudentPlatformFee)
+          : roundMoney(parsedPlatformFee);
+        const baseAmount = roundMoney(Math.max(0, totalAmount - platformFee));
+        const tutorPlatformFee = hasTutorPlatformFee ? roundMoney(parsedTutorPlatformFee) : platformFee;
+        const tutorNetEarning = hasTutorNetEarning
+          ? roundMoney(parsedTutorNetEarning)
+          : roundMoney(Math.max(0, baseAmount - tutorPlatformFee));
 
         return {
           baseAmount,
           platformFee,
           totalAmount,
-        };
-      }
-
-      if (hasTotalAmount && hasPlatformFee) {
-        const totalAmount = roundMoney(parsedTotalAmount);
-        const platformFee = roundMoney(parsedPlatformFee);
-        return {
-          baseAmount: roundMoney(Math.max(0, totalAmount - platformFee)),
-          platformFee,
-          totalAmount,
+          tutorPlatformFee,
+          tutorNetEarning,
         };
       }
 
       if (hasLegacySessionAmount) {
         const legacyBaseAmount = roundMoney(parsedSessionAmount);
+        const legacyPlatformFee = roundMoney(legacyBaseAmount * PLATFORM_FEE_RATE);
+        const legacyTotalAmount = roundMoney(legacyBaseAmount + legacyPlatformFee);
+        const legacyNet = roundMoney(Math.max(0, legacyBaseAmount - legacyPlatformFee));
+
         return {
           baseAmount: legacyBaseAmount,
-          platformFee: 0,
-          totalAmount: legacyBaseAmount,
+          platformFee: legacyPlatformFee,
+          totalAmount: legacyTotalAmount,
+          tutorPlatformFee: legacyPlatformFee,
+          tutorNetEarning: legacyNet,
         };
       }
 
       const fallbackDurationHours = resolveSessionDurationHours(booking);
       const fallbackBaseAmount = roundMoney(fallbackTutorHourlyRate * fallbackDurationHours);
+      const fallbackPlatformFee = roundMoney(fallbackBaseAmount * PLATFORM_FEE_RATE);
+      const fallbackTotalAmount = roundMoney(fallbackBaseAmount + fallbackPlatformFee);
+      const fallbackNet = roundMoney(Math.max(0, fallbackBaseAmount - fallbackPlatformFee));
+
       return {
         baseAmount: fallbackBaseAmount,
-        platformFee: 0,
-        totalAmount: fallbackBaseAmount,
+        platformFee: fallbackPlatformFee,
+        totalAmount: fallbackTotalAmount,
+        tutorPlatformFee: fallbackPlatformFee,
+        tutorNetEarning: fallbackNet,
       };
     };
 
@@ -4484,8 +4552,8 @@ export default function App() {
 
       const bookingFinancials = resolveSessionFinancialBreakdown(booking);
       const amount = bookingFinancials.baseAmount;
-      const platformFee = status === 'paid' ? bookingFinancials.platformFee : 0;
-      const netEarning = status === 'paid' ? bookingFinancials.baseAmount : 0;
+      const platformFee = status === 'paid' ? bookingFinancials.tutorPlatformFee : 0;
+      const netEarning = status === 'paid' ? bookingFinancials.tutorNetEarning : 0;
 
       const paidTimestamp = Date.parse(String(booking.paidAt || ''));
       const timestamp = Number.isNaN(paidTimestamp) ? getBookingSortTimestamp(booking) : paidTimestamp;

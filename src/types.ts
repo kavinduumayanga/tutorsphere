@@ -159,6 +159,10 @@ export interface Booking {
   baseAmount?: number;
   platformFee?: number;
   totalAmount?: number;
+  studentPlatformFee?: number;
+  studentTotalPaid?: number;
+  tutorPlatformFee?: number;
+  tutorNetEarning?: number;
   sessionAmount?: number;
   rescheduleRequest?: BookingRescheduleRequest;
   sessionResources?: BookingSessionResource[];

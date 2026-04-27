@@ -23,6 +23,10 @@ export interface IBooking extends Document {
   baseAmount?: number;
   platformFee?: number;
   totalAmount?: number;
+  studentPlatformFee?: number;
+  studentTotalPaid?: number;
+  tutorPlatformFee?: number;
+  tutorNetEarning?: number;
   sessionAmount?: number;
   rescheduleRequest?: {
     requestedDate: string;
@@ -101,6 +105,10 @@ const BookingSchema: Schema = new Schema({
   baseAmount: { type: Number },
   platformFee: { type: Number },
   totalAmount: { type: Number },
+  studentPlatformFee: { type: Number },
+  studentTotalPaid: { type: Number },
+  tutorPlatformFee: { type: Number },
+  tutorNetEarning: { type: Number },
   sessionAmount: { type: Number },
   rescheduleRequest: { type: BookingRescheduleRequestSchema },
   sessionResources: { type: [BookingSessionResourceSchema], default: [] },

@@ -958,15 +958,25 @@ const calculateBookingFeeBreakdown = (baseAmountValue: unknown): {
   baseAmount: number;
   platformFee: number;
   totalAmount: number;
+  studentPlatformFee: number;
+  studentTotalPaid: number;
+  tutorPlatformFee: number;
+  tutorNetEarning: number;
 } => {
   const baseAmount = roundCurrency(toFinitePrice(baseAmountValue));
-  const platformFee = roundCurrency(baseAmount * BOOKING_PLATFORM_SERVICE_FEE_RATE);
-  const totalAmount = roundCurrency(baseAmount + platformFee);
+  const studentPlatformFee = roundCurrency(baseAmount * BOOKING_PLATFORM_SERVICE_FEE_RATE);
+  const studentTotalPaid = roundCurrency(baseAmount + studentPlatformFee);
+  const tutorPlatformFee = roundCurrency(baseAmount * BOOKING_PLATFORM_SERVICE_FEE_RATE);
+  const tutorNetEarning = roundCurrency(Math.max(0, baseAmount - tutorPlatformFee));
 
   return {
     baseAmount,
-    platformFee,
-    totalAmount,
+    platformFee: studentPlatformFee,
+    totalAmount: studentTotalPaid,
+    studentPlatformFee,
+    studentTotalPaid,
+    tutorPlatformFee,
+    tutorNetEarning,
   };
 };
 
@@ -974,67 +984,32 @@ const resolveBookingFinancialBreakdown = (booking: Record<string, unknown>, fall
   baseAmount: number;
   platformFee: number;
   totalAmount: number;
+  studentPlatformFee: number;
+  studentTotalPaid: number;
+  tutorPlatformFee: number;
+  tutorNetEarning: number;
 } => {
   const parsedBaseAmount = Number(booking?.baseAmount);
-  const parsedPlatformFee = Number(booking?.platformFee);
-  const parsedTotalAmount = Number(booking?.totalAmount);
+  const parsedStudentPlatformFee = Number(booking?.studentPlatformFee ?? booking?.platformFee);
+  const parsedStudentTotalPaid = Number(booking?.studentTotalPaid ?? booking?.totalAmount);
   const parsedLegacySessionAmount = Number(booking?.sessionAmount);
 
   const hasBaseAmount = Number.isFinite(parsedBaseAmount) && parsedBaseAmount >= 0;
-  const hasPlatformFee = Number.isFinite(parsedPlatformFee) && parsedPlatformFee >= 0;
-  const hasTotalAmount = Number.isFinite(parsedTotalAmount) && parsedTotalAmount >= 0;
+  const hasStudentPlatformFee = Number.isFinite(parsedStudentPlatformFee) && parsedStudentPlatformFee >= 0;
+  const hasStudentTotalPaid = Number.isFinite(parsedStudentTotalPaid) && parsedStudentTotalPaid >= 0;
   const hasLegacySessionAmount = Number.isFinite(parsedLegacySessionAmount) && parsedLegacySessionAmount >= 0;
 
   if (hasBaseAmount) {
-    const baseAmount = roundCurrency(parsedBaseAmount);
-    if (hasPlatformFee && hasTotalAmount) {
-      return {
-        baseAmount,
-        platformFee: roundCurrency(parsedPlatformFee),
-        totalAmount: roundCurrency(parsedTotalAmount),
-      };
-    }
-
-    if (hasTotalAmount && !hasPlatformFee) {
-      const totalAmount = roundCurrency(parsedTotalAmount);
-      return {
-        baseAmount,
-        platformFee: roundCurrency(Math.max(0, totalAmount - baseAmount)),
-        totalAmount,
-      };
-    }
-
-    if (!hasTotalAmount && hasPlatformFee) {
-      const platformFee = roundCurrency(parsedPlatformFee);
-      return {
-        baseAmount,
-        platformFee,
-        totalAmount: roundCurrency(baseAmount + platformFee),
-      };
-    }
-
-    return calculateBookingFeeBreakdown(baseAmount);
+    return calculateBookingFeeBreakdown(parsedBaseAmount);
   }
 
-  if (hasTotalAmount && hasPlatformFee) {
-    const totalAmount = roundCurrency(parsedTotalAmount);
-    const platformFee = roundCurrency(parsedPlatformFee);
-    const baseAmount = roundCurrency(Math.max(0, totalAmount - platformFee));
-    return {
-      baseAmount,
-      platformFee,
-      totalAmount,
-    };
+  if (hasStudentTotalPaid && hasStudentPlatformFee) {
+    const derivedBaseAmount = Math.max(0, parsedStudentTotalPaid - parsedStudentPlatformFee);
+    return calculateBookingFeeBreakdown(derivedBaseAmount);
   }
 
   if (hasLegacySessionAmount) {
-    // Legacy bookings saved the tutor amount in sessionAmount with no platform surcharge.
-    const legacyBaseAmount = roundCurrency(parsedLegacySessionAmount);
-    return {
-      baseAmount: legacyBaseAmount,
-      platformFee: 0,
-      totalAmount: legacyBaseAmount,
-    };
+    return calculateBookingFeeBreakdown(parsedLegacySessionAmount);
   }
 
   return calculateBookingFeeBreakdown(fallbackBaseAmount);
@@ -1172,6 +1147,10 @@ const calculateTutorSessionNetEarningsForWithdrawal = async (tutorId: string): P
     baseAmount: 1,
     platformFee: 1,
     totalAmount: 1,
+    studentPlatformFee: 1,
+    studentTotalPaid: 1,
+    tutorPlatformFee: 1,
+    tutorNetEarning: 1,
     sessionAmount: 1,
     sessionDurationHours: 1,
   });
@@ -1189,7 +1168,7 @@ const calculateTutorSessionNetEarningsForWithdrawal = async (tutorId: string): P
         : hourlyRate;
 
     const breakdown = resolveBookingFinancialBreakdown(booking, fallbackBaseAmount);
-    totalTutorSessionEarnings += breakdown.baseAmount;
+    totalTutorSessionEarnings += Math.max(0, breakdown.tutorNetEarning);
   }
 
   return roundCurrency(Math.max(0, totalTutorSessionEarnings));
@@ -1214,11 +1193,23 @@ const calculateTutorCourseNetEarningsForWithdrawal = async (tutorId: string): Pr
   let netEarnings = 0;
   for (const enrollment of enrollments) {
     const paymentStatus = String((enrollment as any)?.paymentStatus || '').trim().toLowerCase();
-    if (paymentStatus && paymentStatus !== 'paid') {
+    const parsedAmountPaid = Number((enrollment as any)?.amountPaid);
+    const parsedFinalPaidAmount = Number((enrollment as any)?.finalPaidAmount);
+    const hasRecordedPayment =
+      (Number.isFinite(parsedAmountPaid) && parsedAmountPaid > 0) ||
+      (Number.isFinite(parsedFinalPaidAmount) && parsedFinalPaidAmount > 0);
+    const isPaid = paymentStatus === 'paid' || (!paymentStatus && hasRecordedPayment);
+
+    if (!isPaid) {
       continue;
     }
 
-    let amountPaid = Number((enrollment as any)?.amountPaid);
+    let amountPaid = Number.isFinite(parsedAmountPaid) && parsedAmountPaid > 0
+      ? parsedAmountPaid
+      : Number.isFinite(parsedFinalPaidAmount) && parsedFinalPaidAmount > 0
+        ? parsedFinalPaidAmount
+        : Number.NaN;
+
     if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
       const course = courseById.get(enrollment.courseId);
       const fallbackPrice = toFinitePrice((course as any)?.price);
@@ -1839,6 +1830,10 @@ async function normalizeBookingFinancialBreakdowns() {
         { baseAmount: { $exists: false } },
         { platformFee: { $exists: false } },
         { totalAmount: { $exists: false } },
+        { studentPlatformFee: { $exists: false } },
+        { studentTotalPaid: { $exists: false } },
+        { tutorPlatformFee: { $exists: false } },
+        { tutorNetEarning: { $exists: false } },
       ],
     }, {
       id: 1,
@@ -1848,6 +1843,10 @@ async function normalizeBookingFinancialBreakdowns() {
       baseAmount: 1,
       platformFee: 1,
       totalAmount: 1,
+      studentPlatformFee: 1,
+      studentTotalPaid: 1,
+      tutorPlatformFee: 1,
+      tutorNetEarning: 1,
     });
 
     if (!bookingsNeedingNormalization.length) {
@@ -1887,18 +1886,34 @@ async function normalizeBookingFinancialBreakdowns() {
         baseAmount: breakdown.baseAmount,
         platformFee: breakdown.platformFee,
         totalAmount: breakdown.totalAmount,
+        studentPlatformFee: breakdown.studentPlatformFee,
+        studentTotalPaid: breakdown.studentTotalPaid,
+        tutorPlatformFee: breakdown.tutorPlatformFee,
+        tutorNetEarning: breakdown.tutorNetEarning,
       } as Record<string, number>;
 
       const currentBaseAmount = Number((booking as any)?.baseAmount);
       const currentPlatformFee = Number((booking as any)?.platformFee);
       const currentTotalAmount = Number((booking as any)?.totalAmount);
+      const currentStudentPlatformFee = Number((booking as any)?.studentPlatformFee);
+      const currentStudentTotalPaid = Number((booking as any)?.studentTotalPaid);
+      const currentTutorPlatformFee = Number((booking as any)?.tutorPlatformFee);
+      const currentTutorNetEarning = Number((booking as any)?.tutorNetEarning);
       const hasMatchingAmounts =
         Number.isFinite(currentBaseAmount) &&
         roundCurrency(currentBaseAmount) === updateSet.baseAmount &&
         Number.isFinite(currentPlatformFee) &&
         roundCurrency(currentPlatformFee) === updateSet.platformFee &&
         Number.isFinite(currentTotalAmount) &&
-        roundCurrency(currentTotalAmount) === updateSet.totalAmount;
+        roundCurrency(currentTotalAmount) === updateSet.totalAmount &&
+        Number.isFinite(currentStudentPlatformFee) &&
+        roundCurrency(currentStudentPlatformFee) === updateSet.studentPlatformFee &&
+        Number.isFinite(currentStudentTotalPaid) &&
+        roundCurrency(currentStudentTotalPaid) === updateSet.studentTotalPaid &&
+        Number.isFinite(currentTutorPlatformFee) &&
+        roundCurrency(currentTutorPlatformFee) === updateSet.tutorPlatformFee &&
+        Number.isFinite(currentTutorNetEarning) &&
+        roundCurrency(currentTutorNetEarning) === updateSet.tutorNetEarning;
 
       if (hasMatchingAmounts) {
         continue;
@@ -6598,7 +6613,7 @@ async function startServer() {
       const baseAmount = bookingFeeBreakdown.baseAmount;
       const platformFee = bookingFeeBreakdown.platformFee;
       const totalAmount = bookingFeeBreakdown.totalAmount;
-      const sessionAmount = totalAmount;
+      const sessionAmount = bookingFeeBreakdown.studentTotalPaid;
 
       const hasConflict = await hasTutorBookingConflict({
         tutorId,
@@ -6642,6 +6657,10 @@ async function startServer() {
         baseAmount,
         platformFee,
         totalAmount,
+        studentPlatformFee: bookingFeeBreakdown.studentPlatformFee,
+        studentTotalPaid: bookingFeeBreakdown.studentTotalPaid,
+        tutorPlatformFee: bookingFeeBreakdown.tutorPlatformFee,
+        tutorNetEarning: bookingFeeBreakdown.tutorNetEarning,
         sessionAmount,
         sessionResources: [],
         hiddenForTutor: false,
@@ -7163,6 +7182,10 @@ async function startServer() {
       delete updateSet.baseAmount;
       delete updateSet.platformFee;
       delete updateSet.totalAmount;
+      delete updateSet.studentPlatformFee;
+      delete updateSet.studentTotalPaid;
+      delete updateSet.tutorPlatformFee;
+      delete updateSet.tutorNetEarning;
       delete updateSet.sessionDurationHours;
 
       if (req.body?.tutorId !== undefined) {

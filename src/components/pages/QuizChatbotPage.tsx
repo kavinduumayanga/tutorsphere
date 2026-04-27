@@ -10,6 +10,7 @@ import {
   Check,
   ChevronRight,
   Clipboard,
+  ClipboardCheck,
   Copy,
   GraduationCap,
   Lightbulb,
@@ -45,6 +46,7 @@ type AssistantMessage = {
 
 interface QuizChatbotPageProps {
   currentUser: AppUser | null;
+  onOpenExamPreparation?: () => void;
 }
 
 interface AssistantChatPanelProps {
@@ -81,7 +83,7 @@ interface AssistantChatPanelProps {
 }
 
 type FeatureCard = {
-  id: Exclude<AssistantFeature, 'home'>;
+  id: Exclude<AssistantFeature, 'home'> | 'exam-preparation';
   title: string;
   description: string;
   cta: string;
@@ -139,6 +141,19 @@ const AI_FEATURE_CARDS: FeatureCard[] = [
     accentText: 'text-emerald-600',
     accentBorder: 'border-emerald-200',
     decorativeIcon: Rocket,
+  },
+  {
+    id: 'exam-preparation',
+    title: 'Exam Preparation AI',
+    description:
+      'Practice exam-style questions and improve your performance with instant feedback.',
+    cta: 'Start Practice',
+    icon: ClipboardCheck,
+    accent: 'from-fuchsia-600 to-rose-600',
+    accentBg: 'bg-fuchsia-50',
+    accentText: 'text-fuchsia-600',
+    accentBorder: 'border-fuchsia-200',
+    decorativeIcon: Target,
   },
 ];
 
@@ -629,7 +644,7 @@ const AssistantChatPanel: React.FC<AssistantChatPanelProps> = ({
    Main Page Export
    ═══════════════════════════════════════════ */
 
-export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser }) => {
+export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser, onOpenExamPreparation }) => {
   const [activeFeature, setActiveFeature] = useState<AssistantFeature>('home');
 
   const [quizMessages, setQuizMessages] = useState<AssistantMessage[]>([]);
@@ -938,13 +953,13 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
                         AI Assistant
                       </h1>
                       <p className="mx-auto max-w-2xl text-sm font-medium leading-relaxed text-slate-500 sm:text-base">
-                        Choose a tool below to assess your skills, learn with AI, or discover your career path.
+                        Choose a tool below to assess your skills, learn with AI, prepare with exam practice, or discover your career path.
                       </p>
                     </div>
                   </div>
 
                   {/* Feature Cards */}
-                  <div className="grid gap-4 sm:gap-5 md:grid-cols-3">
+                  <div className="grid gap-4 sm:gap-5 md:grid-cols-2 xl:grid-cols-4">
                     {AI_FEATURE_CARDS.map((card, index) => {
                       const Icon = card.icon;
                       const DecorativeIcon = card.decorativeIcon;
@@ -957,7 +972,13 @@ export const QuizChatbotPage: React.FC<QuizChatbotPageProps> = ({ currentUser })
                           transition={{ delay: index * 0.08, type: 'spring', stiffness: 200, damping: 22 }}
                           whileHover={{ y: -6, transition: { type: 'spring', stiffness: 300, damping: 18 } }}
                           whileTap={{ scale: 0.98 }}
-                          onClick={() => setActiveFeature(card.id)}
+                          onClick={() => {
+                            if (card.id === 'exam-preparation') {
+                              onOpenExamPreparation?.();
+                              return;
+                            }
+                            setActiveFeature(card.id);
+                          }}
                           className={`group relative text-left overflow-hidden rounded-2xl border ${card.accentBorder} bg-white p-6 shadow-md transition-shadow hover:shadow-xl sm:p-7`}
                         >
                           {/* Decorative background icon */}

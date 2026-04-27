@@ -24,7 +24,10 @@ type AzureChatResponse = {
   };
 };
 
-const normalizeEndpoint = (value: string): string => value.replace(/\/+$/, '');
+const normalizeEndpoint = (value: string): string =>
+  value
+    .replace(/\/+$/, '')
+    .replace(/\/openai\/?$/i, '');
 
 const getRequiredEnv = (name: string): string => {
   const value = process.env[name];
@@ -66,7 +69,13 @@ export class AzureOpenAiClient {
 
     if (!response.ok) {
       const remoteError = data?.error?.message || response.statusText;
-      throw new Error(`Azure OpenAI request failed: ${remoteError}`);
+      const requestId =
+        response.headers.get('x-ms-request-id') ||
+        response.headers.get('apim-request-id') ||
+        response.headers.get('x-request-id') ||
+        '';
+      const requestIdSuffix = requestId ? ` [requestId: ${requestId}]` : '';
+      throw new Error(`Azure OpenAI request failed (${response.status}): ${remoteError}${requestIdSuffix}`);
     }
 
     const content = data?.choices?.[0]?.message?.content?.trim();

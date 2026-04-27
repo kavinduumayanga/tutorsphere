@@ -36,6 +36,7 @@ import { examPreparationAiRouter } from "./src/server/exam-preparation-ai/chatCo
 import { trustedResourcesAiRouter } from "./src/server/trusted-resources-ai/chatController.js";
 import { authRouter } from "./src/server/auth/authRoutes.js";
 import { messagingRouter } from "./src/server/messages/messageRoutes.js";
+import { tutorRevenueInsightsAiService } from "./src/server/revenue-insights/service.js";
 import {
   hashPassword,
   shouldUpgradePasswordHash,
@@ -69,6 +70,7 @@ const __dirname = path.dirname(__filename);
 const APP_ROOT = path.basename(__dirname) === 'dist' ? path.resolve(__dirname, '..') : __dirname;
 const REMEMBER_ME_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const WITHDRAWAL_PLATFORM_FEE_RATE = 0.12;
+const BOOKING_PLATFORM_SERVICE_FEE_RATE = 0.12;
 
 const AZURE_BLOB_CONTAINER_PROFILE_IMAGES = String(process.env.AZURE_BLOB_CONTAINER_PROFILE_IMAGES || '').trim();
 const AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS = String(process.env.AZURE_BLOB_CONTAINER_COURSE_THUMBNAILS || '').trim();
@@ -714,7 +716,9 @@ type BookingReceiptPdfInput = {
   sessionTime: string;
   durationLabel: string;
   hourlyRateLabel: string;
-  totalPaidLabel: string;
+  tutorFeeLabel: string;
+  platformFeeLabel: string;
+  totalAmountLabel: string;
   paymentStatusLabel: string;
   transactionReference: string;
   generatedDateLabel: string;
@@ -920,7 +924,9 @@ const buildBookingReceiptPdf = (input: BookingReceiptPdfInput): Buffer => {
   drawField('Hourly Rate', input.hourlyRateLabel);
 
   drawSectionHeader('Payment Details');
-  drawField('Total Paid Amount', input.totalPaidLabel);
+  drawField('Tutor Fee', input.tutorFeeLabel);
+  drawField(`Platform Fee (${Math.round(BOOKING_PLATFORM_SERVICE_FEE_RATE * 100)}%)`, input.platformFeeLabel);
+  drawField('Total Amount', input.totalAmountLabel);
   drawField('Payment Status', input.paymentStatusLabel);
   drawField('Transaction Reference ID', input.transactionReference);
   drawField('Generated Date', input.generatedDateLabel);
@@ -947,6 +953,67 @@ const toFinitePrice = (value: unknown): number => {
 
 const roundCurrency = (value: number): number => {
   return Math.round(value * 100) / 100;
+};
+
+const calculateBookingFeeBreakdown = (baseAmountValue: unknown): {
+  baseAmount: number;
+  platformFee: number;
+  totalAmount: number;
+  studentPlatformFee: number;
+  studentTotalPaid: number;
+  tutorPlatformFee: number;
+  tutorNetEarning: number;
+} => {
+  const baseAmount = roundCurrency(toFinitePrice(baseAmountValue));
+  const studentPlatformFee = roundCurrency(baseAmount * BOOKING_PLATFORM_SERVICE_FEE_RATE);
+  const studentTotalPaid = roundCurrency(baseAmount + studentPlatformFee);
+  const tutorPlatformFee = roundCurrency(baseAmount * BOOKING_PLATFORM_SERVICE_FEE_RATE);
+  const tutorNetEarning = roundCurrency(Math.max(0, baseAmount - tutorPlatformFee));
+
+  return {
+    baseAmount,
+    platformFee: studentPlatformFee,
+    totalAmount: studentTotalPaid,
+    studentPlatformFee,
+    studentTotalPaid,
+    tutorPlatformFee,
+    tutorNetEarning,
+  };
+};
+
+const resolveBookingFinancialBreakdown = (booking: Record<string, unknown>, fallbackBaseAmount = 0): {
+  baseAmount: number;
+  platformFee: number;
+  totalAmount: number;
+  studentPlatformFee: number;
+  studentTotalPaid: number;
+  tutorPlatformFee: number;
+  tutorNetEarning: number;
+} => {
+  const parsedBaseAmount = Number(booking?.baseAmount);
+  const parsedStudentPlatformFee = Number(booking?.studentPlatformFee ?? booking?.platformFee);
+  const parsedStudentTotalPaid = Number(booking?.studentTotalPaid ?? booking?.totalAmount);
+  const parsedLegacySessionAmount = Number(booking?.sessionAmount);
+
+  const hasBaseAmount = Number.isFinite(parsedBaseAmount) && parsedBaseAmount >= 0;
+  const hasStudentPlatformFee = Number.isFinite(parsedStudentPlatformFee) && parsedStudentPlatformFee >= 0;
+  const hasStudentTotalPaid = Number.isFinite(parsedStudentTotalPaid) && parsedStudentTotalPaid >= 0;
+  const hasLegacySessionAmount = Number.isFinite(parsedLegacySessionAmount) && parsedLegacySessionAmount >= 0;
+
+  if (hasBaseAmount) {
+    return calculateBookingFeeBreakdown(parsedBaseAmount);
+  }
+
+  if (hasStudentTotalPaid && hasStudentPlatformFee) {
+    const derivedBaseAmount = Math.max(0, parsedStudentTotalPaid - parsedStudentPlatformFee);
+    return calculateBookingFeeBreakdown(derivedBaseAmount);
+  }
+
+  if (hasLegacySessionAmount) {
+    return calculateBookingFeeBreakdown(parsedLegacySessionAmount);
+  }
+
+  return calculateBookingFeeBreakdown(fallbackBaseAmount);
 };
 
 const resolveCourseIsFree = (value: unknown, fallbackPrice: number): boolean => {
@@ -1073,19 +1140,39 @@ const resolveEffectiveWithdrawalStatus = (request: { status?: unknown; payoutMet
 const calculateTutorSessionNetEarningsForWithdrawal = async (tutorId: string): Promise<number> => {
   const tutor = await Tutor.findOne({ id: tutorId });
   const hourlyRate = toFinitePrice((tutor as any)?.pricePerHour);
-  if (hourlyRate <= 0) {
-    return 0;
-  }
-
-  const completedPaidSessions = await Booking.countDocuments({
+  const completedPaidSessions = await Booking.find({
     tutorId,
     status: 'completed',
     paymentStatus: 'paid',
+  }, {
+    baseAmount: 1,
+    platformFee: 1,
+    totalAmount: 1,
+    studentPlatformFee: 1,
+    studentTotalPaid: 1,
+    tutorPlatformFee: 1,
+    tutorNetEarning: 1,
+    sessionAmount: 1,
+    sessionDurationHours: 1,
   });
 
-  const gross = completedPaidSessions * hourlyRate;
-  const net = gross - gross * WITHDRAWAL_PLATFORM_FEE_RATE;
-  return roundCurrency(Math.max(0, net));
+  let totalTutorSessionEarnings = 0;
+
+  for (const bookingDoc of completedPaidSessions) {
+    const booking = typeof (bookingDoc as any)?.toObject === 'function'
+      ? (bookingDoc as any).toObject()
+      : (bookingDoc as any);
+    const parsedDurationHours = Number((booking as any)?.sessionDurationHours);
+    const fallbackBaseAmount =
+      Number.isFinite(parsedDurationHours) && parsedDurationHours > 0
+        ? roundCurrency(hourlyRate * parsedDurationHours)
+        : hourlyRate;
+
+    const breakdown = resolveBookingFinancialBreakdown(booking, fallbackBaseAmount);
+    totalTutorSessionEarnings += Math.max(0, breakdown.tutorNetEarning);
+  }
+
+  return roundCurrency(Math.max(0, totalTutorSessionEarnings));
 };
 
 const calculateTutorCourseNetEarningsForWithdrawal = async (tutorId: string): Promise<number> => {
@@ -1107,11 +1194,23 @@ const calculateTutorCourseNetEarningsForWithdrawal = async (tutorId: string): Pr
   let netEarnings = 0;
   for (const enrollment of enrollments) {
     const paymentStatus = String((enrollment as any)?.paymentStatus || '').trim().toLowerCase();
-    if (paymentStatus && paymentStatus !== 'paid') {
+    const parsedAmountPaid = Number((enrollment as any)?.amountPaid);
+    const parsedFinalPaidAmount = Number((enrollment as any)?.finalPaidAmount);
+    const hasRecordedPayment =
+      (Number.isFinite(parsedAmountPaid) && parsedAmountPaid > 0) ||
+      (Number.isFinite(parsedFinalPaidAmount) && parsedFinalPaidAmount > 0);
+    const isPaid = paymentStatus === 'paid' || (!paymentStatus && hasRecordedPayment);
+
+    if (!isPaid) {
       continue;
     }
 
-    let amountPaid = Number((enrollment as any)?.amountPaid);
+    let amountPaid = Number.isFinite(parsedAmountPaid) && parsedAmountPaid > 0
+      ? parsedAmountPaid
+      : Number.isFinite(parsedFinalPaidAmount) && parsedFinalPaidAmount > 0
+        ? parsedFinalPaidAmount
+        : Number.NaN;
+
     if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
       const course = courseById.get(enrollment.courseId);
       const fallbackPrice = toFinitePrice((course as any)?.price);
@@ -1725,6 +1824,117 @@ async function normalizeBookingPaymentStates() {
   }
 }
 
+async function normalizeBookingFinancialBreakdowns() {
+  try {
+    const bookingsNeedingNormalization = await Booking.find({
+      $or: [
+        { baseAmount: { $exists: false } },
+        { platformFee: { $exists: false } },
+        { totalAmount: { $exists: false } },
+        { studentPlatformFee: { $exists: false } },
+        { studentTotalPaid: { $exists: false } },
+        { tutorPlatformFee: { $exists: false } },
+        { tutorNetEarning: { $exists: false } },
+      ],
+    }, {
+      id: 1,
+      tutorId: 1,
+      sessionDurationHours: 1,
+      sessionAmount: 1,
+      baseAmount: 1,
+      platformFee: 1,
+      totalAmount: 1,
+      studentPlatformFee: 1,
+      studentTotalPaid: 1,
+      tutorPlatformFee: 1,
+      tutorNetEarning: 1,
+    });
+
+    if (!bookingsNeedingNormalization.length) {
+      return;
+    }
+
+    const tutorIds = Array.from(
+      new Set(
+        bookingsNeedingNormalization
+          .map((booking) => String((booking as any)?.tutorId || '').trim())
+          .filter(Boolean)
+      )
+    );
+
+    const tutors = tutorIds.length > 0
+      ? await Tutor.find({ id: { $in: tutorIds } }, { id: 1, pricePerHour: 1 })
+      : [];
+    const tutorRateById = new Map<string, number>(
+      tutors.map((tutor) => [String((tutor as any)?.id || '').trim(), toFinitePrice((tutor as any)?.pricePerHour)])
+    );
+
+    let updatedCount = 0;
+    for (const bookingDoc of bookingsNeedingNormalization) {
+      const booking = typeof (bookingDoc as any)?.toObject === 'function'
+        ? (bookingDoc as any).toObject()
+        : (bookingDoc as any);
+      const tutorId = String((booking as any)?.tutorId || '').trim();
+      const tutorRate = tutorRateById.get(tutorId) || 0;
+      const parsedDurationHours = Number((booking as any)?.sessionDurationHours);
+      const fallbackBaseAmount =
+        Number.isFinite(parsedDurationHours) && parsedDurationHours > 0 && tutorRate > 0
+          ? roundCurrency(tutorRate * parsedDurationHours)
+          : 0;
+      const breakdown = resolveBookingFinancialBreakdown(booking, fallbackBaseAmount);
+
+      const updateSet = {
+        baseAmount: breakdown.baseAmount,
+        platformFee: breakdown.platformFee,
+        totalAmount: breakdown.totalAmount,
+        studentPlatformFee: breakdown.studentPlatformFee,
+        studentTotalPaid: breakdown.studentTotalPaid,
+        tutorPlatformFee: breakdown.tutorPlatformFee,
+        tutorNetEarning: breakdown.tutorNetEarning,
+      } as Record<string, number>;
+
+      const currentBaseAmount = Number((booking as any)?.baseAmount);
+      const currentPlatformFee = Number((booking as any)?.platformFee);
+      const currentTotalAmount = Number((booking as any)?.totalAmount);
+      const currentStudentPlatformFee = Number((booking as any)?.studentPlatformFee);
+      const currentStudentTotalPaid = Number((booking as any)?.studentTotalPaid);
+      const currentTutorPlatformFee = Number((booking as any)?.tutorPlatformFee);
+      const currentTutorNetEarning = Number((booking as any)?.tutorNetEarning);
+      const hasMatchingAmounts =
+        Number.isFinite(currentBaseAmount) &&
+        roundCurrency(currentBaseAmount) === updateSet.baseAmount &&
+        Number.isFinite(currentPlatformFee) &&
+        roundCurrency(currentPlatformFee) === updateSet.platformFee &&
+        Number.isFinite(currentTotalAmount) &&
+        roundCurrency(currentTotalAmount) === updateSet.totalAmount &&
+        Number.isFinite(currentStudentPlatformFee) &&
+        roundCurrency(currentStudentPlatformFee) === updateSet.studentPlatformFee &&
+        Number.isFinite(currentStudentTotalPaid) &&
+        roundCurrency(currentStudentTotalPaid) === updateSet.studentTotalPaid &&
+        Number.isFinite(currentTutorPlatformFee) &&
+        roundCurrency(currentTutorPlatformFee) === updateSet.tutorPlatformFee &&
+        Number.isFinite(currentTutorNetEarning) &&
+        roundCurrency(currentTutorNetEarning) === updateSet.tutorNetEarning;
+
+      if (hasMatchingAmounts) {
+        continue;
+      }
+
+      await Booking.updateOne(
+        { _id: (bookingDoc as any)._id },
+        { $set: updateSet }
+      );
+      updatedCount += 1;
+    }
+
+    if (updatedCount > 0) {
+      console.log(`Normalized booking financial breakdowns for ${updatedCount} records`);
+    }
+  } catch (error) {
+    console.log('Booking financial breakdown normalization skipped or failed:', (error as Error).message);
+  }
+}
+
 async function normalizeBookingVisibilityFlags() {
   try {
     await Booking.updateMany(
@@ -1865,6 +2075,9 @@ async function startServer() {
 
   // Keep legacy bookings compatible with payment-aware booking workflows.
   await normalizeBookingPaymentStates();
+
+  // Keep legacy bookings compatible with the booking fee breakdown model.
+  await normalizeBookingFinancialBreakdowns();
 
   // Ensure booking visibility flags exist for soft-hide session cards.
   await normalizeBookingVisibilityFlags();
@@ -2937,6 +3150,46 @@ async function startServer() {
         .map((tutor) => String((tutor as any).id || '').trim())
         .filter(Boolean);
 
+      const blockingBookings = tutorIds.length > 0
+        ? await Booking.find(
+            {
+              tutorId: { $in: tutorIds },
+              paymentStatus: { $nin: ['failed', 'refunded'] },
+              $or: [
+                { status: { $in: ['pending', 'confirmed'] } },
+                { 'rescheduleRequest.status': 'pending' },
+              ],
+            },
+            {
+              id: 1,
+              tutorId: 1,
+              slotId: 1,
+              date: 1,
+              sessionDateKey: 1,
+              timeSlot: 1,
+              status: 1,
+              paymentStatus: 1,
+              rescheduleRequest: 1,
+            }
+          )
+        : [];
+
+      const bookingsByTutorId = new Map<string, Array<Record<string, unknown>>>();
+      for (const bookingDoc of blockingBookings) {
+        const booking =
+          typeof (bookingDoc as any)?.toObject === 'function'
+            ? (bookingDoc as any).toObject()
+            : (bookingDoc as any);
+        const bookingTutorId = String((booking as any)?.tutorId || '').trim();
+        if (!bookingTutorId) {
+          continue;
+        }
+        if (!bookingsByTutorId.has(bookingTutorId)) {
+          bookingsByTutorId.set(bookingTutorId, []);
+        }
+        bookingsByTutorId.get(bookingTutorId)?.push(booking);
+      }
+
       const linkedUsers = tutorIds.length > 0
         ? await User.find({ id: { $in: tutorIds } }, { id: 1, avatar: 1 })
         : [];
@@ -2959,6 +3212,24 @@ async function startServer() {
               : { ...(tutorSource as any) };
 
           const tutorId = String((tutor as any)?.id || '').trim();
+          const tutorBookings = tutorId ? (bookingsByTutorId.get(tutorId) || []) : [];
+          const availabilityWithLocks = applyBookingLocksToTutorAvailability(
+            (tutor as any)?.availability,
+            tutorBookings
+          );
+          (tutor as any).availability = availabilityWithLocks.slotsForCurrentWeek;
+
+          if (availabilityWithLocks.hasLegacyChanges && tutorId) {
+            try {
+              await Tutor.updateOne(
+                { id: tutorId },
+                { $set: { availability: availabilityWithLocks.normalizedAllSlots } }
+              );
+            } catch (legacySlotUpdateError) {
+              console.warn('Legacy availability normalization writeback warning:', legacySlotUpdateError);
+            }
+          }
+
           const linkedUser = tutorId ? userById.get(tutorId) : undefined;
           const resolvedAvatar = await resolveTutorAvatarResponseUrl(req, tutor as any, linkedUser);
 
@@ -2984,11 +3255,53 @@ async function startServer() {
       const tutor = await Tutor.findOne({ id: req.params.id });
 
       if (tutor) {
+        const tutorBookings = await Booking.find(
+          {
+            tutorId: req.params.id,
+            paymentStatus: { $nin: ['failed', 'refunded'] },
+            $or: [
+              { status: { $in: ['pending', 'confirmed'] } },
+              { 'rescheduleRequest.status': 'pending' },
+            ],
+          },
+          {
+            id: 1,
+            tutorId: 1,
+            slotId: 1,
+            date: 1,
+            sessionDateKey: 1,
+            timeSlot: 1,
+            status: 1,
+            paymentStatus: 1,
+            rescheduleRequest: 1,
+          }
+        );
         const linkedUser = await User.findOne({ id: req.params.id }, { id: 1, avatar: 1, role: 1 });
         const tutorResponse =
           typeof (tutor as any).toObject === 'function'
             ? (tutor as any).toObject()
             : tutor;
+
+        const availabilityWithLocks = applyBookingLocksToTutorAvailability(
+          (tutorResponse as any)?.availability,
+          tutorBookings.map((bookingDoc) =>
+            typeof (bookingDoc as any)?.toObject === 'function'
+              ? (bookingDoc as any).toObject()
+              : (bookingDoc as any)
+          )
+        );
+        (tutorResponse as any).availability = availabilityWithLocks.slotsForCurrentWeek;
+
+        if (availabilityWithLocks.hasLegacyChanges) {
+          try {
+            await Tutor.updateOne(
+              { id: req.params.id },
+              { $set: { availability: availabilityWithLocks.normalizedAllSlots } }
+            );
+          } catch (legacySlotUpdateError) {
+            console.warn('Legacy availability normalization writeback warning:', legacySlotUpdateError);
+          }
+        }
 
         const resolvedAvatar = await resolveTutorAvatarResponseUrl(
           req,
@@ -3091,6 +3404,12 @@ async function startServer() {
         tutorData.qualifications ?? tutorData.education ?? ''
       ).trim();
       const normalizedTutorBio = String(tutorData.bio ?? '').trim();
+      const availabilityInput = normalizeAndValidateWeeklyAvailabilityInput(
+        Array.isArray(tutorData.availability) ? tutorData.availability : []
+      );
+      if (availabilityInput.error) {
+        return res.status(400).json({ error: availabilityInput.error });
+      }
 
       const tutor = new Tutor({
         id: tutorId,
@@ -3104,7 +3423,7 @@ async function startServer() {
         rating: Number.isFinite(parsedTutorRating) ? Math.max(0, Math.min(5, parsedTutorRating)) : 0,
         reviewCount: Number.isFinite(parsedTutorReviewCount) ? Math.max(0, Math.round(parsedTutorReviewCount)) : 0,
         bio: normalizedTutorBio,
-        availability: Array.isArray(tutorData.availability) ? tutorData.availability : [],
+        availability: availabilityInput.slots,
         isVerified: Boolean(tutorData.isVerified),
       });
       await tutor.save();
@@ -3176,8 +3495,79 @@ async function startServer() {
         incomingTutorData.pricePerHour = toFinitePrice(incomingTutorData.pricePerHour);
       }
 
+      if (Object.prototype.hasOwnProperty.call(incomingTutorData, 'aiPricingState')) {
+        const rawAiPricingState = incomingTutorData.aiPricingState;
+        const normalizedAiPricingState: Record<string, unknown> = {};
+
+        if (!rawAiPricingState || typeof rawAiPricingState !== 'object' || Array.isArray(rawAiPricingState)) {
+          delete (incomingTutorData as any).aiPricingState;
+        } else {
+          const parsedAppliedRate = toFinitePrice((rawAiPricingState as any).lastAppliedSuggestedRate);
+          if (parsedAppliedRate > 0) {
+            normalizedAiPricingState.lastAppliedSuggestedRate = roundCurrency(parsedAppliedRate);
+          }
+
+          const rawAppliedAt = String((rawAiPricingState as any).lastSuggestionAppliedAt || '').trim();
+          if (rawAppliedAt && !Number.isNaN(Date.parse(rawAppliedAt))) {
+            normalizedAiPricingState.lastSuggestionAppliedAt = new Date(rawAppliedAt).toISOString();
+          }
+
+          const rawSnapshot = (rawAiPricingState as any).lastAnalyzedSnapshot;
+          if (rawSnapshot && typeof rawSnapshot === 'object' && !Array.isArray(rawSnapshot)) {
+            const clampRate = (value: unknown): number => {
+              const parsed = Number(value);
+              if (!Number.isFinite(parsed)) {
+                return 0;
+              }
+              return roundCurrency(Math.max(0, Math.min(1, parsed)));
+            };
+
+            const clampCount = (value: unknown): number => {
+              const parsed = Number(value);
+              if (!Number.isFinite(parsed) || parsed <= 0) {
+                return 0;
+              }
+              return Math.round(parsed);
+            };
+
+            const clampRating = (value: unknown): number => {
+              const parsed = Number(value);
+              if (!Number.isFinite(parsed)) {
+                return 0;
+              }
+              return roundCurrency(Math.max(0, Math.min(5, parsed)));
+            };
+
+            normalizedAiPricingState.lastAnalyzedSnapshot = {
+              bookingDemandLast30Days: clampCount((rawSnapshot as any).bookingDemandLast30Days),
+              completedSessions: clampCount((rawSnapshot as any).completedSessions),
+              cancelledSessions: clampCount((rawSnapshot as any).cancelledSessions),
+              completionRate: clampRate((rawSnapshot as any).completionRate),
+              cancellationRate: clampRate((rawSnapshot as any).cancellationRate),
+              conversionRate: clampRate((rawSnapshot as any).conversionRate),
+              averageRating: clampRating((rawSnapshot as any).averageRating),
+              totalReviewCount: clampCount((rawSnapshot as any).totalReviewCount),
+            };
+          }
+
+          if (Object.keys(normalizedAiPricingState).length > 0) {
+            incomingTutorData.aiPricingState = normalizedAiPricingState;
+          } else {
+            delete (incomingTutorData as any).aiPricingState;
+          }
+        }
+      }
+
       if (Object.prototype.hasOwnProperty.call(incomingTutorData, 'bio')) {
         incomingTutorData.bio = String(incomingTutorData.bio ?? '').trim();
+      }
+
+      if (Object.prototype.hasOwnProperty.call(incomingTutorData, 'availability')) {
+        const availabilityInput = normalizeAndValidateWeeklyAvailabilityInput(incomingTutorData.availability);
+        if (availabilityInput.error) {
+          return res.status(400).json({ error: availabilityInput.error });
+        }
+        incomingTutorData.availability = availabilityInput.slots;
       }
 
       if (tutor) {
@@ -3221,6 +3611,12 @@ async function startServer() {
         );
         const tutorQualifications = String(incomingTutorData.qualifications ?? '').trim();
         const tutorBio = String(incomingTutorData.bio ?? '').trim();
+        const availabilityInput = normalizeAndValidateWeeklyAvailabilityInput(
+          Array.isArray(incomingTutorData.availability) ? incomingTutorData.availability : []
+        );
+        if (availabilityInput.error) {
+          return res.status(400).json({ error: availabilityInput.error });
+        }
 
         tutor = new Tutor({
           id: user.id,
@@ -3234,7 +3630,7 @@ async function startServer() {
           rating: Number.isFinite(parsedTutorRating) ? Math.max(0, Math.min(5, parsedTutorRating)) : 0,
           reviewCount: Number.isFinite(parsedTutorReviewCount) ? Math.max(0, Math.round(parsedTutorReviewCount)) : 0,
           bio: tutorBio,
-          availability: Array.isArray(incomingTutorData.availability) ? incomingTutorData.availability : [],
+          availability: availabilityInput.slots,
           isVerified: Boolean(incomingTutorData.isVerified),
         });
 
@@ -5144,14 +5540,152 @@ async function startServer() {
     return { startMinutes, endMinutes };
   };
 
-  const parseSessionStartDateTime = (dateValue: unknown, timeSlotValue: unknown): Date | null => {
-    const rawDate = String(dateValue || '').trim();
-    if (!rawDate) {
+  const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+  const CONFLICT_ERROR_MESSAGE = 'This time slot is already booked. Please choose another time.';
+
+  const normalizeWeekdayKey = (value: unknown): 'Sun' | 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat' | null => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized) {
       return null;
     }
 
-    const date = new Date(rawDate);
-    if (Number.isNaN(date.getTime())) {
+    if (normalized.startsWith('sun')) return 'Sun';
+    if (normalized.startsWith('mon')) return 'Mon';
+    if (normalized.startsWith('tue')) return 'Tue';
+    if (normalized.startsWith('wed')) return 'Wed';
+    if (normalized.startsWith('thu')) return 'Thu';
+    if (normalized.startsWith('fri')) return 'Fri';
+    if (normalized.startsWith('sat')) return 'Sat';
+    return null;
+  };
+
+  const toDateKey = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const parseDateKeyToDate = (value: unknown): Date | null => {
+    const dateKey = String(value || '').trim();
+    const match = dateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) {
+      return null;
+    }
+
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+      return null;
+    }
+
+    const date = new Date(year, month - 1, day, 0, 0, 0, 0);
+    if (
+      date.getFullYear() !== year ||
+      date.getMonth() !== month - 1 ||
+      date.getDate() !== day
+    ) {
+      return null;
+    }
+
+    return date;
+  };
+
+  const normalizeDateKey = (value: unknown): string | null => {
+    const raw = String(value || '').trim();
+    if (!raw) {
+      return null;
+    }
+
+    if (DATE_KEY_PATTERN.test(raw)) {
+      return raw;
+    }
+
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) {
+      return null;
+    }
+
+    return toDateKey(parsed);
+  };
+
+  const getWeekStartDate = (anchor: Date): Date => {
+    const date = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate(), 0, 0, 0, 0);
+    const day = date.getDay();
+    const mondayOffset = day === 0 ? -6 : 1 - day;
+    date.setDate(date.getDate() + mondayOffset);
+    return date;
+  };
+
+  const getCurrentWeekBounds = (anchor: Date = new Date()): {
+    weekStartDate: Date;
+    weekEndDate: Date;
+    weekStartKey: string;
+    weekEndKey: string;
+  } => {
+    const weekStartDate = getWeekStartDate(anchor);
+    const weekEndDate = new Date(weekStartDate);
+    weekEndDate.setDate(weekEndDate.getDate() + 6);
+    weekEndDate.setHours(23, 59, 59, 999);
+    return {
+      weekStartDate,
+      weekEndDate,
+      weekStartKey: toDateKey(weekStartDate),
+      weekEndKey: toDateKey(weekEndDate),
+    };
+  };
+
+  const getDateKeyForWeekday = (weekStartDate: Date, dayKey: 'Sun' | 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat'): string => {
+    const dayOffsetByKey: Record<'Sun' | 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat', number> = {
+      Mon: 0,
+      Tue: 1,
+      Wed: 2,
+      Thu: 3,
+      Fri: 4,
+      Sat: 5,
+      Sun: 6,
+    };
+    const slotDate = new Date(weekStartDate);
+    slotDate.setDate(slotDate.getDate() + dayOffsetByKey[dayKey]);
+    slotDate.setHours(0, 0, 0, 0);
+    return toDateKey(slotDate);
+  };
+
+  const formatDateLabelFromDateKey = (dateKey: string): string => {
+    const parsed = parseDateKeyToDate(dateKey);
+    if (!parsed) {
+      return dateKey;
+    }
+
+    return parsed.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+  };
+
+  const resolveSessionDateKey = (dateValue: unknown, dateKeyValue?: unknown): string | null => {
+    const fromDateKey = normalizeDateKey(dateKeyValue);
+    if (fromDateKey) {
+      return fromDateKey;
+    }
+    return normalizeDateKey(dateValue);
+  };
+
+  const parseSessionStartDateTime = (
+    dateValue: unknown,
+    timeSlotValue: unknown,
+    dateKeyValue?: unknown
+  ): Date | null => {
+    const dateKey = resolveSessionDateKey(dateValue, dateKeyValue);
+    if (!dateKey) {
+      return null;
+    }
+
+    const date = parseDateKeyToDate(dateKey);
+    if (!date) {
       return null;
     }
 
@@ -5172,6 +5706,228 @@ async function startServer() {
     b: { startMinutes: number; endMinutes: number }
   ): boolean => {
     return a.startMinutes < b.endMinutes && b.startMinutes < a.endMinutes;
+  };
+
+  const parseTutorSlotTimeRange = (startValue: unknown, endValue: unknown): { startMinutes: number; endMinutes: number } | null => {
+    const startMinutes = parseBookingTimeTokenToMinutes(startValue);
+    const endMinutes = parseBookingTimeTokenToMinutes(endValue);
+    if (startMinutes === null || endMinutes === null || endMinutes <= startMinutes) {
+      return null;
+    }
+    return { startMinutes, endMinutes };
+  };
+
+  const normalizeTutorAvailabilitySlots = (
+    availabilityValue: unknown,
+    anchorDate: Date = new Date()
+  ): { slots: Array<Record<string, unknown>>; hasChanges: boolean } => {
+    if (!Array.isArray(availabilityValue)) {
+      return { slots: [], hasChanges: false };
+    }
+
+    const { weekStartDate, weekStartKey } = getCurrentWeekBounds(anchorDate);
+    let hasChanges = false;
+    const normalizedSlots: Array<Record<string, unknown>> = [];
+
+    for (const rawSlot of availabilityValue) {
+      const id = String((rawSlot as any)?.id || '').trim();
+      const dayKey = normalizeWeekdayKey((rawSlot as any)?.day);
+      const startTime = String((rawSlot as any)?.startTime || '').trim();
+      const endTime = String((rawSlot as any)?.endTime || '').trim();
+      const parsedRange = parseTutorSlotTimeRange(startTime, endTime);
+
+      if (!id || !dayKey || !parsedRange) {
+        hasChanges = true;
+        continue;
+      }
+
+      let dateKey =
+        normalizeDateKey((rawSlot as any)?.dateKey) ||
+        normalizeDateKey((rawSlot as any)?.date) ||
+        '';
+      if (!dateKey) {
+        dateKey = getDateKeyForWeekday(weekStartDate, dayKey);
+        hasChanges = true;
+      }
+
+      let weekStartKeyForSlot =
+        normalizeDateKey((rawSlot as any)?.weekStartKey) ||
+        normalizeDateKey((rawSlot as any)?.weekStart) ||
+        '';
+      if (!weekStartKeyForSlot) {
+        const slotDate = parseDateKeyToDate(dateKey);
+        weekStartKeyForSlot = slotDate ? toDateKey(getWeekStartDate(slotDate)) : weekStartKey;
+        hasChanges = true;
+      }
+
+      const normalizedSlot = {
+        ...(typeof rawSlot === 'object' && rawSlot ? (rawSlot as Record<string, unknown>) : {}),
+        id,
+        day: dayKey,
+        startTime: `${String(Math.floor(parsedRange.startMinutes / 60)).padStart(2, '0')}:${String(parsedRange.startMinutes % 60).padStart(2, '0')}`,
+        endTime: `${String(Math.floor(parsedRange.endMinutes / 60)).padStart(2, '0')}:${String(parsedRange.endMinutes % 60).padStart(2, '0')}`,
+        dateKey,
+        weekStartKey: weekStartKeyForSlot,
+        isBooked: Boolean((rawSlot as any)?.isBooked),
+      };
+
+      normalizedSlots.push(normalizedSlot);
+    }
+
+    return { slots: normalizedSlots, hasChanges };
+  };
+
+  const collectBlockingBookingRanges = (bookings: Array<Record<string, unknown>>): Array<{
+    bookingId: string;
+    slotId: string;
+    dateKey: string;
+    startMinutes: number;
+    endMinutes: number;
+  }> => {
+    const ranges: Array<{
+      bookingId: string;
+      slotId: string;
+      dateKey: string;
+      startMinutes: number;
+      endMinutes: number;
+    }> = [];
+
+    for (const booking of bookings) {
+      const bookingId = String((booking as any)?.id || '').trim();
+      const slotId = String((booking as any)?.slotId || '').trim();
+      const status = normalizeBookingStatus((booking as any)?.status);
+      const paymentStatus = normalizeBookingPaymentStatus((booking as any)?.paymentStatus);
+
+      if ((status !== 'pending' && status !== 'confirmed') || paymentStatus === 'failed' || paymentStatus === 'refunded') {
+        continue;
+      }
+
+      const dateKey = resolveSessionDateKey((booking as any)?.date, (booking as any)?.sessionDateKey);
+      const timeRange = parseBookingTimeRange((booking as any)?.timeSlot);
+      if (dateKey && timeRange) {
+        ranges.push({
+          bookingId,
+          slotId,
+          dateKey,
+          startMinutes: timeRange.startMinutes,
+          endMinutes: timeRange.endMinutes,
+        });
+      }
+
+      const request = (booking as any)?.rescheduleRequest;
+      const requestStatus = String(request?.status || '').trim().toLowerCase();
+      if (requestStatus === 'pending') {
+        const requestedDateKey = resolveSessionDateKey(request?.requestedDate, request?.requestedDateKey);
+        const requestedRange = parseBookingTimeRange(request?.requestedTimeSlot);
+        const requestedSlotId = String(request?.requestedSlotId || slotId).trim();
+        if (requestedDateKey && requestedRange) {
+          ranges.push({
+            bookingId,
+            slotId: requestedSlotId,
+            dateKey: requestedDateKey,
+            startMinutes: requestedRange.startMinutes,
+            endMinutes: requestedRange.endMinutes,
+          });
+        }
+      }
+    }
+
+    return ranges;
+  };
+
+  const applyBookingLocksToTutorAvailability = (
+    availabilityValue: unknown,
+    bookings: Array<Record<string, unknown>>,
+    anchorDate: Date = new Date()
+  ): { slotsForCurrentWeek: Array<Record<string, unknown>>; normalizedAllSlots: Array<Record<string, unknown>>; hasLegacyChanges: boolean } => {
+    const normalizedAvailability = normalizeTutorAvailabilitySlots(availabilityValue, anchorDate);
+    const { weekStartKey, weekEndKey } = getCurrentWeekBounds(anchorDate);
+    const blockedRanges = collectBlockingBookingRanges(bookings);
+
+    const slotsForCurrentWeek = normalizedAvailability.slots
+      .filter((slot) => {
+        const dateKey = String((slot as any)?.dateKey || '').trim();
+        if (!dateKey) {
+          return false;
+        }
+        return dateKey >= weekStartKey && dateKey <= weekEndKey;
+      })
+      .map((slot) => {
+        const dateKey = String((slot as any)?.dateKey || '').trim();
+        const slotRange = parseTutorSlotTimeRange((slot as any)?.startTime, (slot as any)?.endTime);
+        const isBooked = Boolean(
+          slotRange &&
+            blockedRanges.some((range) =>
+              range.dateKey === dateKey &&
+              bookingTimeRangesOverlap(slotRange, {
+                startMinutes: range.startMinutes,
+                endMinutes: range.endMinutes,
+              })
+            )
+        );
+
+        return {
+          ...slot,
+          weekStartKey,
+          isBooked,
+        };
+      });
+
+    return {
+      slotsForCurrentWeek,
+      normalizedAllSlots: normalizedAvailability.slots,
+      hasLegacyChanges: normalizedAvailability.hasChanges,
+    };
+  };
+
+  const normalizeAndValidateWeeklyAvailabilityInput = (
+    availabilityValue: unknown,
+    anchorDate: Date = new Date()
+  ): { slots: Array<Record<string, unknown>>; error?: string } => {
+    const normalized = normalizeTutorAvailabilitySlots(availabilityValue, anchorDate);
+    const { weekStartKey, weekEndKey } = getCurrentWeekBounds(anchorDate);
+
+    const weeklySlots = normalized.slots.filter((slot) => {
+      const dateKey = String((slot as any)?.dateKey || '').trim();
+      return Boolean(dateKey) && dateKey >= weekStartKey && dateKey <= weekEndKey;
+    });
+
+    if (weeklySlots.length !== normalized.slots.length) {
+      return {
+        slots: [],
+        error: 'Availability slots must be configured within the current week.',
+      };
+    }
+
+    const slotsByDateKey = new Map<string, Array<{ startMinutes: number; endMinutes: number }>>();
+    for (const slot of weeklySlots) {
+      const dateKey = String((slot as any)?.dateKey || '').trim();
+      const slotRange = parseTutorSlotTimeRange((slot as any)?.startTime, (slot as any)?.endTime);
+      if (!dateKey || !slotRange) {
+        return { slots: [], error: 'Each availability slot must have a valid date and time range.' };
+      }
+
+      if (!slotsByDateKey.has(dateKey)) {
+        slotsByDateKey.set(dateKey, []);
+      }
+
+      const existingForDate = slotsByDateKey.get(dateKey) || [];
+      const overlaps = existingForDate.some((existingRange) => bookingTimeRangesOverlap(existingRange, slotRange));
+      if (overlaps) {
+        return { slots: [], error: `Time slots overlap on ${formatDateLabelFromDateKey(dateKey)}.` };
+      }
+
+      existingForDate.push(slotRange);
+      slotsByDateKey.set(dateKey, existingForDate);
+    }
+
+    return {
+      slots: weeklySlots.map((slot) => ({
+        ...slot,
+        weekStartKey,
+        isBooked: false,
+      })),
+    };
   };
 
   const resolveSessionRoleForRequest = async (
@@ -5203,64 +5959,914 @@ async function startServer() {
   const hasTutorBookingConflict = async (input: {
     tutorId: string;
     date: string;
+    sessionDateKey?: string;
     slotId?: string;
     timeSlot?: string;
     excludeBookingId?: string;
   }): Promise<boolean> => {
     const tutorId = String(input.tutorId || '').trim();
     const date = String(input.date || '').trim();
+    const sessionDateKey = String(input.sessionDateKey || '').trim();
     const slotId = String(input.slotId || '').trim();
     const timeSlot = String(input.timeSlot || '').trim();
     const excludeBookingId = String(input.excludeBookingId || '').trim();
 
-    if (!tutorId || !date) {
+    const targetDateKey = resolveSessionDateKey(date, sessionDateKey);
+    if (!tutorId || !targetDateKey) {
       return false;
     }
 
+    const targetRange = parseBookingTimeRange(timeSlot);
+
     const baseQuery: Record<string, any> = {
       tutorId,
-      date,
-      status: { $in: ['pending', 'confirmed'] },
       paymentStatus: { $nin: ['failed', 'refunded'] },
+      $or: [
+        { status: { $in: ['pending', 'confirmed'] } },
+        { 'rescheduleRequest.status': 'pending' },
+      ],
     };
 
     if (excludeBookingId) {
       baseQuery.id = { $ne: excludeBookingId };
     }
 
-    if (slotId) {
-      const slotConflict = await Booking.findOne({
-        ...baseQuery,
-        slotId,
+    const existingBookings = await Booking.find(baseQuery, {
+      id: 1,
+      slotId: 1,
+      date: 1,
+      sessionDateKey: 1,
+      timeSlot: 1,
+      status: 1,
+      paymentStatus: 1,
+      rescheduleRequest: 1,
+    });
+
+    const blockingRanges = collectBlockingBookingRanges(
+      existingBookings.map((bookingDoc) =>
+        typeof (bookingDoc as any)?.toObject === 'function'
+          ? (bookingDoc as any).toObject()
+          : (bookingDoc as any)
+      )
+    );
+
+    if (!targetRange) {
+      if (!slotId) {
+        return false;
+      }
+
+      return blockingRanges.some((range) => range.slotId === slotId && range.dateKey === targetDateKey);
+    }
+
+    const targetSlotRange = {
+      startMinutes: targetRange.startMinutes,
+      endMinutes: targetRange.endMinutes,
+    };
+
+    return blockingRanges.some((range) =>
+      range.dateKey === targetDateKey &&
+      bookingTimeRangesOverlap(targetSlotRange, {
+        startMinutes: range.startMinutes,
+        endMinutes: range.endMinutes,
+      })
+    );
+  };
+
+  type RevenueTransactionStatus = 'paid' | 'pending' | 'refunded_or_cancelled';
+
+  type RevenueHistoryRow = {
+    id: string;
+    timestamp: number;
+    dateLabel: string;
+    itemName: string;
+    studentName: string;
+    paymentType: 'session booking' | 'course purchase';
+    amount: number;
+    platformFee: number;
+    netEarning: number;
+    status: RevenueTransactionStatus;
+    paymentReference?: string;
+  };
+
+  type RevenueCsvRow = {
+    date: string;
+    sessionOrCourse: string;
+    student: string;
+    paymentType: 'session booking' | 'course purchase' | 'withdrawal' | 'refund';
+    amount: number;
+    platformFee: number;
+    netEarning: number;
+    status: string;
+    withdrawnAmount?: number;
+  };
+
+  type RevenueMonthlyEarnings = {
+    month: string;
+    monthKey: string;
+    sessionNetEarnings: number;
+    courseNetEarnings: number;
+    totalNetEarnings: number;
+  };
+
+  type RevenueTaxMonth = {
+    month: string;
+    monthKey: string;
+    sessionIncome: number;
+    courseSales: number;
+    platformFees: number;
+    refunds: number;
+    withdrawals: number;
+    netTaxableIncome: number;
+  };
+
+  type TutorRevenueSnapshot = {
+    generatedAt: string;
+    summary: {
+      totalEarnings: number;
+      availableBalance: number;
+      completedSessionEarnings: number;
+      pendingEarnings: number;
+      withdrawnAmount: number;
+      remainingBalance: number;
+      pendingWithdrawalAmount: number;
+      monthlyEarnings: RevenueMonthlyEarnings[];
+      paymentHistory: RevenueHistoryRow[];
+    };
+    forecasting: {
+      windows: Array<{
+        days: 30 | 60 | 90;
+        projectedNetEarning: number;
+        historicalProjection: number;
+        upcomingConfirmedNet: number;
+        confidence: 'low' | 'medium' | 'high';
+      }>;
+      fallback: boolean;
+      fallbackMessage?: string;
+      methodology: string;
+    };
+    pricingSuggestion: {
+      currentHourlyRate: number;
+      suggestedHourlyRate: number;
+      suggestedRange: { min: number; max: number };
+      direction: 'increase' | 'decrease' | 'keep';
+      reason: string;
+      confidence: 'low' | 'medium' | 'high';
+      metrics: {
+        bookingDemandLast30Days: number;
+        completedSessions: number;
+        cancelledSessions: number;
+        cancellationRate: number;
+        completionRate: number;
+        conversionRate: number;
+        averageRating: number;
+        totalReviewCount: number;
+      };
+    };
+    taxPrep: {
+      monthlySummaries: RevenueTaxMonth[];
+      totals: {
+        sessionIncome: number;
+        courseSales: number;
+        platformFees: number;
+        refunds: number;
+        withdrawals: number;
+        netTaxableIncome: number;
+      };
+    };
+    aiInsights: {
+      assistant: string;
+      source: 'azure' | 'fallback';
+      forecastSummary: string;
+      pricingSummary: string;
+      taxSummary: string;
+      actionItems: string[];
+      warning?: string;
+    };
+    csvRows: RevenueCsvRow[];
+  };
+
+  const toTimestampSafe = (value: unknown): number | null => {
+    const timestamp = Date.parse(String(value || ''));
+    return Number.isNaN(timestamp) ? null : timestamp;
+  };
+
+  const clampNumber = (value: number, min: number, max: number): number => {
+    return Math.max(min, Math.min(max, value));
+  };
+
+  const getMonthKeyFromTimestamp = (timestamp: number): string => {
+    const date = new Date(timestamp);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  };
+
+  const getMonthLabelFromKey = (monthKey: string): string => {
+    const [year, month] = monthKey.split('-').map((token) => Number(token));
+    if (!Number.isFinite(year) || !Number.isFinite(month)) {
+      return monthKey;
+    }
+
+    return new Date(year, month - 1, 1).toLocaleDateString('en-US', {
+      month: 'short',
+      year: 'numeric',
+    });
+  };
+
+  const toRevenueTransactionStatus = (bookingStatus: string, paymentStatus: string): RevenueTransactionStatus => {
+    if (bookingStatus === 'cancelled' || paymentStatus === 'failed' || paymentStatus === 'refunded') {
+      return 'refunded_or_cancelled';
+    }
+
+    if (bookingStatus === 'completed' && paymentStatus === 'paid') {
+      return 'paid';
+    }
+
+    return 'pending';
+  };
+
+  const normalizeEnrollmentPaymentStatus = (value: unknown): 'pending' | 'paid' | 'failed' | 'refunded' | 'cancelled' => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'paid') return 'paid';
+    if (normalized === 'failed') return 'failed';
+    if (normalized === 'refunded') return 'refunded';
+    if (normalized === 'cancelled') return 'cancelled';
+    return 'pending';
+  };
+
+  const escapeCsvValue = (value: unknown): string => {
+    let normalized = String(value ?? '');
+    if (/^[=+\-@]/.test(normalized)) {
+      normalized = `'${normalized}`;
+    }
+
+    normalized = normalized.replace(/\r?\n/g, ' ').trim();
+
+    if (/[",]/.test(normalized)) {
+      return `"${normalized.replace(/"/g, '""')}"`;
+    }
+
+    return normalized;
+  };
+
+  const buildTutorRevenueSnapshot = async (tutorId: string): Promise<TutorRevenueSnapshot> => {
+    const tutor = await Tutor.findOne({ id: tutorId }, { id: 1, pricePerHour: 1, rating: 1, aiPricingState: 1 });
+    if (!tutor) {
+      throw new Error('Tutor not found.');
+    }
+
+    const [bookings, tutorReviews, withdrawalRequests, tutorCourseIds] = await Promise.all([
+      Booking.find({ tutorId }),
+      Review.find({ tutorId }, { rating: 1 }),
+      WithdrawalRequest.find({ tutorId }),
+      Course.find({ tutorId }).distinct('id'),
+    ]);
+
+    const normalizedTutorCourseIds = (tutorCourseIds as string[]).filter(Boolean);
+    const [courseEnrollments, courses] = normalizedTutorCourseIds.length > 0
+      ? await Promise.all([
+          CourseEnrollment.find({ courseId: { $in: normalizedTutorCourseIds } }),
+          Course.find({ id: { $in: normalizedTutorCourseIds } }, { id: 1, title: 1, isFree: 1, price: 1 }),
+        ])
+      : [[], []];
+
+    const courseById = new Map(
+      courses.map((course) => [String((course as any)?.id || '').trim(), course])
+    );
+
+    const tutorHourlyRate = roundCurrency(toFinitePrice((tutor as any)?.pricePerHour));
+    const now = Date.now();
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const thirtyDaysAgo = now - (30 * DAY_MS);
+
+    let completedSessionNetEarnings = 0;
+    let pendingSessionNetEarnings = 0;
+    let completedCourseNetEarnings = 0;
+    let totalRefunds = 0;
+
+    let totalSessionBookings = 0;
+    let paidSessionBookings = 0;
+    let completedSessions = 0;
+    let cancelledSessions = 0;
+    let bookingDemandLast30Days = 0;
+
+    const monthlyEarningsByKey = new Map<string, { sessionNetEarnings: number; courseNetEarnings: number }>();
+    const monthlyTaxByKey = new Map<string, Omit<RevenueTaxMonth, 'netTaxableIncome'>>();
+    const upcomingConfirmedSessions: Array<{ timestamp: number; tutorNetEarning: number }> = [];
+    const paidEventHistory: Array<{ timestamp: number; netAmount: number }> = [];
+    const paymentHistory: RevenueHistoryRow[] = [];
+    const csvRows: RevenueCsvRow[] = [];
+
+    const ensureMonthlyEarnings = (monthKey: string) => {
+      if (!monthlyEarningsByKey.has(monthKey)) {
+        monthlyEarningsByKey.set(monthKey, {
+          sessionNetEarnings: 0,
+          courseNetEarnings: 0,
+        });
+      }
+      return monthlyEarningsByKey.get(monthKey)!;
+    };
+
+    const ensureMonthlyTax = (monthKey: string) => {
+      if (!monthlyTaxByKey.has(monthKey)) {
+        monthlyTaxByKey.set(monthKey, {
+          month: getMonthLabelFromKey(monthKey),
+          monthKey,
+          sessionIncome: 0,
+          courseSales: 0,
+          platformFees: 0,
+          refunds: 0,
+          withdrawals: 0,
+        });
+      }
+      return monthlyTaxByKey.get(monthKey)!;
+    };
+
+    for (const bookingDoc of bookings) {
+      const booking = typeof (bookingDoc as any)?.toObject === 'function'
+        ? (bookingDoc as any).toObject()
+        : (bookingDoc as any);
+
+      const bookingId = String((booking as any)?.id || '').trim() || String((booking as any)?._id || '').trim();
+      const studentName = String((booking as any)?.studentName || '').trim() || 'Student';
+      const subject = String((booking as any)?.subject || '').trim() || 'Tutoring';
+      const bookingStatus = normalizeBookingStatus((booking as any)?.status);
+      const paymentStatus = normalizeBookingPaymentStatus((booking as any)?.paymentStatus);
+      const sessionStart = parseSessionStartDateTime((booking as any)?.date, (booking as any)?.timeSlot, (booking as any)?.sessionDateKey);
+      const sessionTimestamp = sessionStart ? sessionStart.getTime() : null;
+      const paidTimestamp = toTimestampSafe((booking as any)?.paidAt);
+      const refundedTimestamp = toTimestampSafe((booking as any)?.refundedAt);
+      const createdTimestamp = toTimestampSafe((booking as any)?.createdAt);
+      const eventTimestamp = paidTimestamp || sessionTimestamp || createdTimestamp || now;
+      const eventDate = new Date(eventTimestamp);
+      const eventDateLabel = Number.isNaN(eventDate.getTime())
+        ? 'N/A'
+        : eventDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+      const parsedDurationHours = Number((booking as any)?.sessionDurationHours);
+      const fallbackBaseAmount =
+        Number.isFinite(parsedDurationHours) && parsedDurationHours > 0 && tutorHourlyRate > 0
+          ? roundCurrency(tutorHourlyRate * parsedDurationHours)
+          : tutorHourlyRate;
+      const financials = resolveBookingFinancialBreakdown(booking, fallbackBaseAmount);
+
+      const transactionStatus = toRevenueTransactionStatus(bookingStatus, paymentStatus);
+      const isCompletedPaid = bookingStatus === 'completed' && paymentStatus === 'paid';
+      const isPendingPaid = (bookingStatus === 'pending' || bookingStatus === 'confirmed') && paymentStatus === 'paid';
+      const isRefunded = bookingStatus === 'cancelled' || paymentStatus === 'refunded';
+
+      totalSessionBookings += 1;
+      if (paymentStatus === 'paid') {
+        paidSessionBookings += 1;
+      }
+      if (isCompletedPaid) {
+        completedSessions += 1;
+      }
+      if (bookingStatus === 'cancelled' || paymentStatus === 'refunded') {
+        cancelledSessions += 1;
+      }
+      if (sessionTimestamp && sessionTimestamp >= thirtyDaysAgo && !isRefunded) {
+        bookingDemandLast30Days += 1;
+      }
+
+      if (isCompletedPaid) {
+        completedSessionNetEarnings += financials.tutorNetEarning;
+        paidEventHistory.push({ timestamp: eventTimestamp, netAmount: financials.tutorNetEarning });
+        const monthKey = getMonthKeyFromTimestamp(eventTimestamp);
+        const monthEarnings = ensureMonthlyEarnings(monthKey);
+        monthEarnings.sessionNetEarnings += financials.tutorNetEarning;
+
+        const monthTax = ensureMonthlyTax(monthKey);
+        monthTax.sessionIncome += financials.tutorNetEarning;
+        monthTax.platformFees += financials.tutorPlatformFee;
+      }
+
+      if (isPendingPaid) {
+        pendingSessionNetEarnings += financials.tutorNetEarning;
+        if (sessionTimestamp && sessionTimestamp > now) {
+          upcomingConfirmedSessions.push({
+            timestamp: sessionTimestamp,
+            tutorNetEarning: financials.tutorNetEarning,
+          });
+        }
+      }
+
+      if (isRefunded) {
+        const refundTimestamp = refundedTimestamp || eventTimestamp;
+        const monthKey = getMonthKeyFromTimestamp(refundTimestamp);
+        const monthTax = ensureMonthlyTax(monthKey);
+        monthTax.refunds += financials.studentTotalPaid;
+        totalRefunds += financials.studentTotalPaid;
+      }
+
+      paymentHistory.push({
+        id: `session-${bookingId}`,
+        timestamp: eventTimestamp,
+        dateLabel: eventDateLabel,
+        itemName: `${subject} Session`,
+        studentName,
+        paymentType: 'session booking',
+        amount: financials.baseAmount,
+        platformFee: transactionStatus === 'paid' ? financials.tutorPlatformFee : 0,
+        netEarning: transactionStatus === 'paid' ? financials.tutorNetEarning : 0,
+        status: transactionStatus,
+        paymentReference: String((booking as any)?.paymentReference || '').trim() || undefined,
       });
 
-      if (slotConflict) {
-        return true;
+      const csvPaymentType: RevenueCsvRow['paymentType'] = isRefunded ? 'refund' : 'session booking';
+      const csvStatus =
+        paymentStatus === 'refunded'
+          ? 'refunded'
+          : bookingStatus === 'cancelled'
+            ? 'cancelled'
+            : bookingStatus === 'completed' && paymentStatus === 'paid'
+              ? 'completed'
+              : paymentStatus === 'paid'
+                ? 'paid'
+                : paymentStatus === 'failed'
+                  ? 'failed'
+                  : bookingStatus || 'pending';
+      const csvPlatformFee = transactionStatus === 'paid' ? financials.tutorPlatformFee : 0;
+      const csvNetEarning = transactionStatus === 'paid' ? financials.tutorNetEarning : 0;
+
+      csvRows.push({
+        date: new Date(eventTimestamp).toISOString(),
+        sessionOrCourse: `${subject} Session`,
+        student: studentName,
+        paymentType: csvPaymentType,
+        amount: financials.baseAmount,
+        platformFee: csvPlatformFee,
+        netEarning: csvNetEarning,
+        status: csvStatus,
+      });
+    }
+
+    for (const enrollmentDoc of courseEnrollments) {
+      const enrollment = typeof (enrollmentDoc as any)?.toObject === 'function'
+        ? (enrollmentDoc as any).toObject()
+        : (enrollmentDoc as any);
+      const enrollmentId = String((enrollment as any)?.id || '').trim() || String((enrollment as any)?._id || '').trim();
+      const paymentStatus = normalizeEnrollmentPaymentStatus((enrollment as any)?.paymentStatus);
+      const paidAtTimestamp = toTimestampSafe((enrollment as any)?.paidAt);
+      const enrolledAtTimestamp = toTimestampSafe((enrollment as any)?.enrolledAt);
+      const eventTimestamp = paidAtTimestamp || enrolledAtTimestamp || now;
+      const eventDate = new Date(eventTimestamp);
+      const eventDateLabel = Number.isNaN(eventDate.getTime())
+        ? 'N/A'
+        : eventDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+      let grossAmount = Number((enrollment as any)?.amountPaid);
+      if (!Number.isFinite(grossAmount) || grossAmount <= 0) {
+        grossAmount = Number((enrollment as any)?.finalPaidAmount);
       }
-    }
+      if (!Number.isFinite(grossAmount) || grossAmount <= 0) {
+        const mappedCourse = courseById.get(String((enrollment as any)?.courseId || '').trim());
+        const fallbackPrice = toFinitePrice((mappedCourse as any)?.price);
+        const isFree = resolveCourseIsFree((mappedCourse as any)?.isFree, fallbackPrice);
+        grossAmount = isFree ? 0 : fallbackPrice;
+      }
 
-    const targetRange = parseBookingTimeRange(timeSlot);
-    if (!targetRange) {
-      return false;
-    }
-
-    const existingBookings = await Booking.find(baseQuery, { id: 1, timeSlot: 1 });
-    for (const booking of existingBookings) {
-      if (excludeBookingId && String((booking as any).id || '').trim() === excludeBookingId) {
+      if (!Number.isFinite(grossAmount) || grossAmount <= 0) {
         continue;
       }
 
-      const existingRange = parseBookingTimeRange((booking as any).timeSlot);
-      if (!existingRange) {
-        continue;
+      const roundedGrossAmount = roundCurrency(grossAmount);
+      const tutorPlatformFee = roundCurrency(roundedGrossAmount * WITHDRAWAL_PLATFORM_FEE_RATE);
+      const tutorNetEarning = roundCurrency(Math.max(0, roundedGrossAmount - tutorPlatformFee));
+      const isPaid = paymentStatus === 'paid';
+      const isRefunded = paymentStatus === 'refunded' || paymentStatus === 'cancelled';
+      const transactionStatus: RevenueTransactionStatus = isRefunded
+        ? 'refunded_or_cancelled'
+        : isPaid
+          ? 'paid'
+          : 'pending';
+
+      const courseTitle =
+        String((enrollment as any)?.courseTitle || '').trim() ||
+        String((courseById.get(String((enrollment as any)?.courseId || '').trim()) as any)?.title || '').trim() ||
+        'Course Purchase';
+      const studentName = String((enrollment as any)?.studentName || '').trim() || 'Student';
+
+      if (isPaid) {
+        completedCourseNetEarnings += tutorNetEarning;
+        paidEventHistory.push({ timestamp: eventTimestamp, netAmount: tutorNetEarning });
+        const monthKey = getMonthKeyFromTimestamp(eventTimestamp);
+        const monthEarnings = ensureMonthlyEarnings(monthKey);
+        monthEarnings.courseNetEarnings += tutorNetEarning;
+
+        const monthTax = ensureMonthlyTax(monthKey);
+        monthTax.courseSales += tutorNetEarning;
+        monthTax.platformFees += tutorPlatformFee;
       }
 
-      if (bookingTimeRangesOverlap(targetRange, existingRange)) {
-        return true;
+      if (isRefunded) {
+        const monthKey = getMonthKeyFromTimestamp(eventTimestamp);
+        const monthTax = ensureMonthlyTax(monthKey);
+        monthTax.refunds += roundedGrossAmount;
+        totalRefunds += roundedGrossAmount;
+      }
+
+      paymentHistory.push({
+        id: `course-${enrollmentId}`,
+        timestamp: eventTimestamp,
+        dateLabel: eventDateLabel,
+        itemName: courseTitle,
+        studentName,
+        paymentType: 'course purchase',
+        amount: roundedGrossAmount,
+        platformFee: transactionStatus === 'paid' ? tutorPlatformFee : 0,
+        netEarning: transactionStatus === 'paid' ? tutorNetEarning : 0,
+        status: transactionStatus,
+        paymentReference: String((enrollment as any)?.paymentReference || '').trim() || undefined,
+      });
+
+      const csvPaymentType: RevenueCsvRow['paymentType'] = isRefunded ? 'refund' : 'course purchase';
+      const csvStatus =
+        paymentStatus === 'refunded'
+          ? 'refunded'
+          : paymentStatus === 'cancelled'
+            ? 'cancelled'
+            : paymentStatus === 'paid'
+              ? 'paid'
+              : paymentStatus === 'failed'
+                ? 'failed'
+                : 'pending';
+      const csvPlatformFee = transactionStatus === 'paid' ? tutorPlatformFee : 0;
+      const csvNetEarning = transactionStatus === 'paid' ? tutorNetEarning : 0;
+
+      csvRows.push({
+        date: new Date(eventTimestamp).toISOString(),
+        sessionOrCourse: courseTitle,
+        student: studentName,
+        paymentType: csvPaymentType,
+        amount: roundedGrossAmount,
+        platformFee: csvPlatformFee,
+        netEarning: csvNetEarning,
+        status: csvStatus,
+      });
+    }
+
+    for (const withdrawalDoc of withdrawalRequests) {
+      const withdrawal = typeof (withdrawalDoc as any)?.toObject === 'function'
+        ? (withdrawalDoc as any).toObject()
+        : (withdrawalDoc as any);
+      const withdrawalId = String((withdrawal as any)?.id || '').trim() || String((withdrawal as any)?._id || '').trim();
+      const amount = roundCurrency(toFinitePrice((withdrawal as any)?.amount));
+      const requestedTimestamp =
+        toTimestampSafe((withdrawal as any)?.requestedAt) ||
+        toTimestampSafe((withdrawal as any)?.createdAt) ||
+        now;
+      const monthKey = getMonthKeyFromTimestamp(requestedTimestamp);
+      const monthTax = ensureMonthlyTax(monthKey);
+      monthTax.withdrawals += amount;
+      const withdrawalStatus = String((withdrawal as any)?.status || '').trim().toLowerCase() || 'pending';
+
+      csvRows.push({
+        date: new Date(requestedTimestamp).toISOString(),
+        sessionOrCourse: `Withdrawal Request ${withdrawalId}`,
+        student: '',
+        paymentType: 'withdrawal',
+        amount,
+        platformFee: 0,
+        netEarning: 0,
+        status: withdrawalStatus,
+        withdrawnAmount: amount,
+      });
+    }
+
+    const monthlyEarnings = Array.from(monthlyEarningsByKey.entries())
+      .map(([monthKey, values]) => {
+        const sessionNetEarnings = roundCurrency(values.sessionNetEarnings);
+        const courseNetEarnings = roundCurrency(values.courseNetEarnings);
+        return {
+          month: getMonthLabelFromKey(monthKey),
+          monthKey,
+          sessionNetEarnings,
+          courseNetEarnings,
+          totalNetEarnings: roundCurrency(sessionNetEarnings + courseNetEarnings),
+        };
+      })
+      .sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+
+    const monthlySummaries = Array.from(monthlyTaxByKey.values())
+      .map((entry) => {
+        const sessionIncome = roundCurrency(entry.sessionIncome);
+        const courseSales = roundCurrency(entry.courseSales);
+        const platformFees = roundCurrency(entry.platformFees);
+        const refunds = roundCurrency(entry.refunds);
+        const withdrawals = roundCurrency(entry.withdrawals);
+        const netTaxableIncome = roundCurrency(Math.max(0, sessionIncome + courseSales - platformFees - refunds));
+
+        return {
+          ...entry,
+          sessionIncome,
+          courseSales,
+          platformFees,
+          refunds,
+          withdrawals,
+          netTaxableIncome,
+        };
+      })
+      .sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+
+    const taxTotals = monthlySummaries.reduce(
+      (acc, month) => {
+        acc.sessionIncome += month.sessionIncome;
+        acc.courseSales += month.courseSales;
+        acc.platformFees += month.platformFees;
+        acc.refunds += month.refunds;
+        acc.withdrawals += month.withdrawals;
+        acc.netTaxableIncome += month.netTaxableIncome;
+        return acc;
+      },
+      {
+        sessionIncome: 0,
+        courseSales: 0,
+        platformFees: 0,
+        refunds: 0,
+        withdrawals: 0,
+        netTaxableIncome: 0,
+      }
+    );
+
+    const normalizedTaxTotals = {
+      sessionIncome: roundCurrency(taxTotals.sessionIncome),
+      courseSales: roundCurrency(taxTotals.courseSales),
+      platformFees: roundCurrency(taxTotals.platformFees),
+      refunds: roundCurrency(taxTotals.refunds),
+      withdrawals: roundCurrency(taxTotals.withdrawals),
+      netTaxableIncome: roundCurrency(taxTotals.netTaxableIncome),
+    };
+
+    const recentMonthlyTotals = monthlyEarnings.slice(-6).map((entry) => entry.totalNetEarnings);
+    const averageMonthlyNet = recentMonthlyTotals.length > 0
+      ? roundCurrency(recentMonthlyTotals.reduce((sum, value) => sum + value, 0) / recentMonthlyTotals.length)
+      : 0;
+    const baseDailyRunRate = roundCurrency(averageMonthlyNet / 30);
+    const recentThreeAverage = recentMonthlyTotals.slice(-3);
+    const previousThreeAverage = recentMonthlyTotals.slice(-6, -3);
+    const trendFactor = previousThreeAverage.length > 0 && recentThreeAverage.length > 0
+      ? clampNumber(
+          recentThreeAverage.reduce((sum, value) => sum + value, 0) /
+            Math.max(0.01, previousThreeAverage.reduce((sum, value) => sum + value, 0)),
+          0.75,
+          1.25
+        )
+      : 1;
+
+    const hasEnoughForecastData = paidEventHistory.length >= 2 || upcomingConfirmedSessions.length > 0;
+    const fallbackForecastMessage = hasEnoughForecastData
+      ? undefined
+      : 'Not enough historical paid data was found. Forecast uses a conservative baseline estimate.';
+
+    const forecastWindows = ([30, 60, 90] as const).map((days) => {
+      const windowEnd = now + (days * DAY_MS);
+      const upcomingConfirmedNet = roundCurrency(
+        upcomingConfirmedSessions
+          .filter((entry) => entry.timestamp <= windowEnd)
+          .reduce((sum, entry) => sum + entry.tutorNetEarning, 0)
+      );
+
+      let historicalProjection = roundCurrency(baseDailyRunRate * days * trendFactor);
+      if (!hasEnoughForecastData) {
+        const conservativeMonthlyBase = roundCurrency(Math.max(0, tutorHourlyRate - (tutorHourlyRate * WITHDRAWAL_PLATFORM_FEE_RATE)));
+        historicalProjection = roundCurrency(conservativeMonthlyBase * Math.max(1, Math.round(days / 30)));
+      }
+
+      const projectedNetEarning = roundCurrency(historicalProjection + upcomingConfirmedNet);
+      const confidence: 'low' | 'medium' | 'high' =
+        paidEventHistory.length >= 20
+          ? 'high'
+          : paidEventHistory.length >= 8
+            ? 'medium'
+            : 'low';
+
+      return {
+        days,
+        projectedNetEarning,
+        historicalProjection,
+        upcomingConfirmedNet,
+        confidence,
+      };
+    });
+
+    const totalReviewCount = tutorReviews.length;
+    const averageRating = totalReviewCount > 0
+      ? roundCurrency(
+          tutorReviews.reduce((sum, review) => sum + toFinitePrice((review as any)?.rating), 0) / totalReviewCount
+        )
+      : roundCurrency(toFinitePrice((tutor as any)?.rating));
+    const completionRate = roundCurrency(completedSessions / Math.max(1, totalSessionBookings));
+    const cancellationRate = roundCurrency(cancelledSessions / Math.max(1, totalSessionBookings));
+    const conversionRate = roundCurrency(paidSessionBookings / Math.max(1, totalSessionBookings));
+    const currentPricingSnapshot = {
+      bookingDemandLast30Days,
+      completedSessions,
+      cancelledSessions,
+      completionRate,
+      cancellationRate,
+      conversionRate,
+      averageRating,
+      totalReviewCount,
+    };
+    const tutorAiPricingState = (tutor as any)?.aiPricingState;
+    const rawLastAnalyzedSnapshot =
+      tutorAiPricingState &&
+      typeof tutorAiPricingState === 'object' &&
+      !Array.isArray(tutorAiPricingState)
+        ? (tutorAiPricingState as any).lastAnalyzedSnapshot
+        : undefined;
+    const previousPricingSnapshot =
+      rawLastAnalyzedSnapshot &&
+      typeof rawLastAnalyzedSnapshot === 'object' &&
+      !Array.isArray(rawLastAnalyzedSnapshot)
+        ? {
+            bookingDemandLast30Days: Math.max(0, Math.round(Number((rawLastAnalyzedSnapshot as any).bookingDemandLast30Days || 0))),
+            completedSessions: Math.max(0, Math.round(Number((rawLastAnalyzedSnapshot as any).completedSessions || 0))),
+            cancelledSessions: Math.max(0, Math.round(Number((rawLastAnalyzedSnapshot as any).cancelledSessions || 0))),
+            completionRate: roundCurrency(Math.max(0, Math.min(1, Number((rawLastAnalyzedSnapshot as any).completionRate || 0)))),
+            cancellationRate: roundCurrency(Math.max(0, Math.min(1, Number((rawLastAnalyzedSnapshot as any).cancellationRate || 0)))),
+            conversionRate: roundCurrency(Math.max(0, Math.min(1, Number((rawLastAnalyzedSnapshot as any).conversionRate || 0)))),
+            averageRating: roundCurrency(Math.max(0, Math.min(5, Number((rawLastAnalyzedSnapshot as any).averageRating || 0)))),
+            totalReviewCount: Math.max(0, Math.round(Number((rawLastAnalyzedSnapshot as any).totalReviewCount || 0))),
+          }
+        : null;
+    const lastAppliedSuggestedRate = roundCurrency(toFinitePrice((tutorAiPricingState as any)?.lastAppliedSuggestedRate));
+    const lastSuggestionAppliedAtTimestamp = toTimestampSafe((tutorAiPricingState as any)?.lastSuggestionAppliedAt);
+    const hasAppliedSuggestionSnapshot = Boolean(previousPricingSnapshot && lastSuggestionAppliedAtTimestamp);
+    let hasMeaningfulNewPricingData = true;
+
+    if (hasAppliedSuggestionSnapshot && previousPricingSnapshot) {
+      const bookingDemandDelta = Math.abs(currentPricingSnapshot.bookingDemandLast30Days - previousPricingSnapshot.bookingDemandLast30Days);
+      const completionRateDelta = Math.abs(currentPricingSnapshot.completionRate - previousPricingSnapshot.completionRate);
+      const cancellationRateDelta = Math.abs(currentPricingSnapshot.cancellationRate - previousPricingSnapshot.cancellationRate);
+      const conversionRateDelta = Math.abs(currentPricingSnapshot.conversionRate - previousPricingSnapshot.conversionRate);
+      const ratingDelta = Math.abs(currentPricingSnapshot.averageRating - previousPricingSnapshot.averageRating);
+      const completedSessionsDelta = currentPricingSnapshot.completedSessions - previousPricingSnapshot.completedSessions;
+      const cancelledSessionsDelta = currentPricingSnapshot.cancelledSessions - previousPricingSnapshot.cancelledSessions;
+      const reviewCountDelta = currentPricingSnapshot.totalReviewCount - previousPricingSnapshot.totalReviewCount;
+
+      hasMeaningfulNewPricingData =
+        completedSessionsDelta > 0 ||
+        cancelledSessionsDelta > 0 ||
+        reviewCountDelta > 0 ||
+        bookingDemandDelta >= 3 ||
+        completionRateDelta >= 0.05 ||
+        cancellationRateDelta >= 0.05 ||
+        conversionRateDelta >= 0.05 ||
+        ratingDelta >= 0.2;
+    }
+
+    let pricingDirection: 'increase' | 'decrease' | 'keep' = 'keep';
+    let suggestedHourlyRate = tutorHourlyRate;
+    let pricingReason = 'Performance is stable. Keep the current hourly rate and monitor demand trends.';
+    const rateMatchesLastAppliedSuggestion =
+      lastAppliedSuggestedRate > 0 &&
+      Math.abs(lastAppliedSuggestedRate - tutorHourlyRate) < 0.01;
+
+    if (tutorHourlyRate > 0) {
+      if (hasAppliedSuggestionSnapshot && rateMatchesLastAppliedSuggestion && !hasMeaningfulNewPricingData) {
+        pricingDirection = 'keep';
+        suggestedHourlyRate = tutorHourlyRate;
+        pricingReason = 'Your current rate looks good based on the latest data.';
+      } else {
+        const strongDemand =
+          bookingDemandLast30Days >= 12 &&
+          completionRate >= 0.65 &&
+          cancellationRate <= 0.2 &&
+          averageRating >= 4.3;
+        const moderateDemand =
+          bookingDemandLast30Days >= 6 &&
+          completionRate >= 0.55 &&
+          cancellationRate <= 0.25 &&
+          averageRating >= 4.0;
+        const weakDemand =
+          bookingDemandLast30Days <= 3 ||
+          completionRate < 0.45 ||
+          cancellationRate >= 0.35 ||
+          averageRating < 3.8;
+
+        if (strongDemand) {
+          pricingDirection = 'increase';
+          suggestedHourlyRate = roundCurrency(tutorHourlyRate * 1.12);
+          pricingReason = 'High demand, strong completion, and good ratings support a measured rate increase.';
+        } else if (moderateDemand) {
+          pricingDirection = 'increase';
+          suggestedHourlyRate = roundCurrency(tutorHourlyRate * 1.06);
+          pricingReason = 'Steady demand and healthy outcomes suggest room for a gradual upward adjustment.';
+        } else if (weakDemand) {
+          pricingDirection = 'decrease';
+          suggestedHourlyRate = roundCurrency(tutorHourlyRate * 0.92);
+          pricingReason = 'Lower demand or weaker completion signals suggest testing a slightly more competitive rate.';
+        }
       }
     }
 
-    return false;
+    const pricingConfidence: 'low' | 'medium' | 'high' =
+      totalSessionBookings >= 30 && totalReviewCount >= 12
+        ? 'high'
+        : totalSessionBookings >= 10
+          ? 'medium'
+          : 'low';
+
+    const pricingSuggestion = {
+      currentHourlyRate: tutorHourlyRate,
+      suggestedHourlyRate,
+      suggestedRange: {
+        min: roundCurrency(Math.max(0, suggestedHourlyRate * 0.97)),
+        max: roundCurrency(suggestedHourlyRate * 1.03),
+      },
+      direction: pricingDirection,
+      reason: pricingReason,
+      confidence: pricingConfidence,
+      metrics: {
+        bookingDemandLast30Days,
+        completedSessions,
+        cancelledSessions,
+        cancellationRate,
+        completionRate,
+        conversionRate,
+        averageRating,
+        totalReviewCount,
+      },
+    };
+
+    const completedSessionEarnings = roundCurrency(completedSessionNetEarnings);
+    const completedCourseEarnings = roundCurrency(completedCourseNetEarnings);
+    const computedTotalEarnings = roundCurrency(completedSessionEarnings + completedCourseEarnings);
+
+    const withdrawalSummary = await calculateTutorWithdrawalSummary(tutorId);
+    const totalEarnings = computedTotalEarnings > 0
+      ? computedTotalEarnings
+      : roundCurrency(toFinitePrice(withdrawalSummary.totalEarnings));
+    const withdrawnAmount = roundCurrency(toFinitePrice(withdrawalSummary.withdrawnAmount));
+    const pendingWithdrawalAmount = roundCurrency(toFinitePrice(withdrawalSummary.pendingWithdrawalAmount));
+    const availableBalance = roundCurrency(Math.max(0, toFinitePrice(withdrawalSummary.availableBalance)));
+
+    const latestTaxMonth = monthlySummaries.length > 0
+      ? monthlySummaries[monthlySummaries.length - 1]
+      : null;
+
+    const aiInsights = await tutorRevenueInsightsAiService.generateInsights({
+      tutorName: 'Tutor',
+      currentHourlyRate: tutorHourlyRate,
+      forecast: {
+        windows: forecastWindows.map((entry) => ({
+          days: entry.days,
+          projectedNetEarning: entry.projectedNetEarning,
+          historicalProjection: entry.historicalProjection,
+          upcomingConfirmedNet: entry.upcomingConfirmedNet,
+          confidence: entry.confidence,
+        })),
+        fallback: !hasEnoughForecastData,
+        fallbackMessage: fallbackForecastMessage,
+      },
+      pricing: {
+        currentHourlyRate: pricingSuggestion.currentHourlyRate,
+        suggestedHourlyRate: pricingSuggestion.suggestedHourlyRate,
+        suggestedRange: pricingSuggestion.suggestedRange,
+        direction: pricingSuggestion.direction,
+        confidence: pricingSuggestion.confidence,
+        reason: pricingSuggestion.reason,
+        metrics: pricingSuggestion.metrics,
+      },
+      tax: {
+        latestMonth: latestTaxMonth?.month || 'N/A',
+        latestNetTaxableIncome: roundCurrency(latestTaxMonth?.netTaxableIncome || 0),
+        totalSessionIncome: normalizedTaxTotals.sessionIncome,
+        totalCourseSales: normalizedTaxTotals.courseSales,
+        totalPlatformFees: normalizedTaxTotals.platformFees,
+        totalRefunds: normalizedTaxTotals.refunds,
+        totalWithdrawals: normalizedTaxTotals.withdrawals,
+      },
+    });
+
+    return {
+      generatedAt: new Date().toISOString(),
+      summary: {
+        totalEarnings,
+        availableBalance,
+        completedSessionEarnings,
+        pendingEarnings: roundCurrency(pendingSessionNetEarnings),
+        withdrawnAmount,
+        remainingBalance: availableBalance,
+        pendingWithdrawalAmount,
+        monthlyEarnings,
+        paymentHistory: paymentHistory.sort((a, b) => b.timestamp - a.timestamp),
+      },
+      forecasting: {
+        windows: forecastWindows,
+        fallback: !hasEnoughForecastData,
+        fallbackMessage: fallbackForecastMessage,
+        methodology:
+          'Forecast combines historical monthly net earnings trends with upcoming confirmed paid sessions. Fallback uses conservative baseline estimates when historical data is limited.',
+      },
+      pricingSuggestion,
+      taxPrep: {
+        monthlySummaries,
+        totals: normalizedTaxTotals,
+      },
+      aiInsights,
+      csvRows: csvRows.sort((a, b) => String(b.date).localeCompare(String(a.date))),
+    };
   };
 
   const getBookingSessionResourceContainerCandidates = (resource: unknown): string[] => {
@@ -5452,22 +7058,31 @@ async function startServer() {
 
         const requestStatus = String((request as any)?.status || '').trim().toLowerCase();
         const requestedDate = String((request as any)?.requestedDate || '').trim();
+        const requestedDateKey = resolveSessionDateKey(
+          requestedDate,
+          (request as any)?.requestedDateKey
+        );
+        const requestedDateLabel = requestedDate || (requestedDateKey ? formatDateLabelFromDateKey(requestedDateKey) : '');
         const requestedTimeSlot = String((request as any)?.requestedTimeSlot || '').trim();
         const requestedByTutorId = String((request as any)?.requestedByTutorId || '').trim();
         const requestedAt = String((request as any)?.requestedAt || '').trim();
         const currentDate = String((booking as any)?.date || '').trim();
+        const currentSessionDateKey = resolveSessionDateKey(currentDate, (booking as any)?.sessionDateKey);
         const currentTimeSlot = String((booking as any)?.timeSlot || '').trim();
-        const requestedStart = parseSessionStartDateTime(requestedDate, requestedTimeSlot);
+        const requestedStart = parseSessionStartDateTime(requestedDateLabel, requestedTimeSlot, requestedDateKey);
 
         const isValidPendingRequest =
           requestStatus === 'pending' &&
           currentStatus !== 'cancelled' &&
           currentStatus !== 'completed' &&
-          Boolean(requestedDate) &&
+          Boolean(requestedDateKey) &&
           Boolean(requestedTimeSlot) &&
           Boolean(requestedByTutorId) &&
           Boolean(requestedAt) &&
-          !(requestedDate === currentDate && requestedTimeSlot === currentTimeSlot) &&
+          !(
+            requestedDateKey === currentSessionDateKey &&
+            requestedTimeSlot === currentTimeSlot
+          ) &&
           (!requestedStart || requestedStart.getTime() > now);
 
         if (!isValidPendingRequest) {
@@ -5481,7 +7096,8 @@ async function startServer() {
 
         (booking as any).rescheduleRequest = {
           ...request,
-          requestedDate,
+          requestedDate: requestedDateLabel,
+          requestedDateKey: requestedDateKey || undefined,
           requestedTimeSlot,
           requestedByTutorId,
           requestedAt,
@@ -5504,6 +7120,81 @@ async function startServer() {
     } catch (error) {
       console.error("Get bookings error:", error);
       res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get('/api/revenue/insights', requireTutorSession, async (req, res) => {
+    try {
+      const sessionContext = getSessionAuthContext(req);
+      const requestedTutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
+      const tutorId = requestedTutorId || sessionContext.userId;
+
+      if (!requireSessionUserMatch(sessionContext, res, tutorId, 'You can only access your own revenue insights.')) {
+        return;
+      }
+
+      const snapshot = await buildTutorRevenueSnapshot(tutorId);
+      return res.json(snapshot);
+    } catch (error) {
+      console.error('Get tutor revenue insights error:', error);
+      return res.status(500).json({ error: 'Failed to load tutor revenue insights.' });
+    }
+  });
+
+  app.get('/api/revenue/report.csv', requireTutorSession, async (req, res) => {
+    try {
+      const sessionContext = getSessionAuthContext(req);
+      const requestedTutorId = typeof req.query.tutorId === 'string' ? req.query.tutorId.trim() : '';
+      const tutorId = requestedTutorId || sessionContext.userId;
+
+      if (!requireSessionUserMatch(sessionContext, res, tutorId, 'You can only download your own revenue report.')) {
+        return;
+      }
+
+      const snapshot = await buildTutorRevenueSnapshot(tutorId);
+      const headers = [
+        'DATE',
+        'SESSION/COURSE',
+        'STUDENT',
+        'PAYMENT TYPE',
+        'AMOUNT',
+        'PLATFORM FEE',
+        'NET EARNING',
+        'STATUS',
+        'TOTAL NET EARNINGS',
+        'WITHDRAWN',
+      ];
+      const totalNetEarnings = roundCurrency(toFinitePrice(snapshot.summary.totalEarnings));
+      const withdrawnAmountSummary = roundCurrency(toFinitePrice(snapshot.summary.withdrawnAmount));
+
+      const csvLines = [
+        headers.join(','),
+        ...snapshot.csvRows.map((row) => [
+          escapeCsvValue(row.date),
+          escapeCsvValue(row.sessionOrCourse),
+          escapeCsvValue(row.student),
+          escapeCsvValue(row.paymentType),
+          escapeCsvValue(roundCurrency(toFinitePrice(row.amount))),
+          escapeCsvValue(roundCurrency(toFinitePrice(row.platformFee))),
+          escapeCsvValue(roundCurrency(toFinitePrice(row.netEarning))),
+          escapeCsvValue(row.status),
+          escapeCsvValue(totalNetEarnings),
+          escapeCsvValue(
+            roundCurrency(
+              toFinitePrice(row.paymentType === 'withdrawal' ? (row.withdrawnAmount ?? row.amount) : withdrawnAmountSummary)
+            )
+          ),
+        ].join(',')),
+      ];
+
+      const csvContent = csvLines.join('\n');
+      const reportDate = new Date().toISOString().slice(0, 10);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename=\"tutor-revenue-report-${sanitizeFileSegment(tutorId)}-${reportDate}.csv\"`);
+      return res.send(csvContent);
+    } catch (error) {
+      console.error('Download tutor revenue CSV error:', error);
+      return res.status(500).json({ error: 'Failed to download tutor revenue CSV report.' });
     }
   });
 
@@ -5739,20 +7430,26 @@ async function startServer() {
 
       const durationLabel = durationHours > 0 ? `${durationHours.toFixed(2)} hour(s)` : 'N/A';
 
-      const parsedSessionAmount = Number((booking as any).sessionAmount);
       const parsedTutorRate = Number((tutorProfile as any)?.pricePerHour);
-      const totalPaidAmount =
-        Number.isFinite(parsedSessionAmount) && parsedSessionAmount >= 0
-          ? roundCurrency(parsedSessionAmount)
-          : Number.isFinite(parsedTutorRate) && parsedTutorRate >= 0 && durationHours > 0
-            ? roundCurrency(parsedTutorRate * durationHours)
-            : 0;
+      const fallbackBaseAmount =
+        Number.isFinite(parsedTutorRate) && parsedTutorRate >= 0 && durationHours > 0
+          ? roundCurrency(parsedTutorRate * durationHours)
+          : 0;
+
+      const { baseAmount, platformFee, totalAmount } = resolveBookingFinancialBreakdown(
+        typeof (booking as any)?.toObject === 'function'
+          ? (booking as any).toObject()
+          : (booking as any),
+        fallbackBaseAmount
+      );
 
       const hourlyRateAmount =
-        Number.isFinite(parsedTutorRate) && parsedTutorRate >= 0
-          ? roundCurrency(parsedTutorRate)
-          : totalPaidAmount > 0 && durationHours > 0
-            ? roundCurrency(totalPaidAmount / durationHours)
+        baseAmount > 0 && durationHours > 0
+          ? roundCurrency(baseAmount / durationHours)
+          : Number.isFinite(parsedTutorRate) && parsedTutorRate >= 0
+            ? roundCurrency(parsedTutorRate)
+            : totalAmount > 0 && durationHours > 0
+              ? roundCurrency(totalAmount / durationHours)
             : 0;
 
       const receiptBookingId = toNotificationText((booking as any).id, requestedBookingId);
@@ -5775,7 +7472,9 @@ async function startServer() {
         sessionTime,
         durationLabel,
         hourlyRateLabel: durationHours > 0 || hourlyRateAmount > 0 ? formatLkrCurrency(hourlyRateAmount) : 'N/A',
-        totalPaidLabel: formatLkrCurrency(totalPaidAmount),
+        tutorFeeLabel: formatLkrCurrency(baseAmount),
+        platformFeeLabel: formatLkrCurrency(platformFee),
+        totalAmountLabel: formatLkrCurrency(totalAmount),
         paymentStatusLabel: toTitleCase(paymentStatus),
         transactionReference: receiptTransactionReference,
         generatedDateLabel,
@@ -5812,6 +7511,8 @@ async function startServer() {
       const slotId = String(bookingData.slotId || '').trim();
       const subject = String(bookingData.subject || '').trim();
       const date = String(bookingData.date || '').trim();
+      const sessionDateKey = resolveSessionDateKey(date, bookingData.sessionDateKey);
+      const normalizedDateLabel = date || (sessionDateKey ? formatDateLabelFromDateKey(sessionDateKey) : '');
       const timeSlot = String(bookingData.timeSlot || '').trim();
       const paymentStatus = normalizeBookingPaymentStatus(bookingData.paymentStatus);
       const paymentReference = String(bookingData.paymentReference || '').trim();
@@ -5819,14 +7520,9 @@ async function startServer() {
       const paidAt = String(bookingData.paidAt || '').trim();
       const meetingLink = String(bookingData.meetingLink || '').trim();
       const parsedSessionDurationHours = Number(bookingData.sessionDurationHours);
-      const sessionDurationHours =
+      const requestedSessionDurationHours =
         Number.isFinite(parsedSessionDurationHours) && parsedSessionDurationHours > 0
-          ? Math.round(parsedSessionDurationHours * 100) / 100
-          : undefined;
-      const parsedSessionAmount = Number(bookingData.sessionAmount);
-      const sessionAmount =
-        Number.isFinite(parsedSessionAmount) && parsedSessionAmount >= 0
-          ? Math.round(parsedSessionAmount * 100) / 100
+          ? roundCurrency(parsedSessionDurationHours)
           : undefined;
       let status = normalizeBookingStatus(bookingData.status);
 
@@ -5834,8 +7530,8 @@ async function startServer() {
         return;
       }
 
-      if (!studentId || !tutorId || !slotId || !subject || !date) {
-        return res.status(400).json({ error: 'studentId, tutorId, slotId, subject, and date are required.' });
+      if (!studentId || !tutorId || !slotId || !subject || !sessionDateKey) {
+        return res.status(400).json({ error: 'studentId, tutorId, slotId, subject, and a valid session date are required.' });
       }
 
       if ((status === 'confirmed' || status === 'completed') && paymentStatus !== 'paid') {
@@ -5866,15 +7562,45 @@ async function startServer() {
         status = 'confirmed';
       }
 
+      const tutorProfile = await Tutor.findOne({ id: tutorId }, { pricePerHour: 1 });
+      if (!tutorProfile) {
+        return res.status(404).json({ error: 'Tutor not found.' });
+      }
+
+      const tutorHourlyRate = toFinitePrice((tutorProfile as any)?.pricePerHour);
+      if (tutorHourlyRate <= 0) {
+        return res.status(400).json({ error: 'This tutor does not have a valid hourly rate configured.' });
+      }
+
+      const parsedSelectedTimeRange = parseBookingTimeRange(timeSlot);
+      const derivedDurationFromTimeSlot = parsedSelectedTimeRange
+        ? roundCurrency((parsedSelectedTimeRange.endMinutes - parsedSelectedTimeRange.startMinutes) / 60)
+        : undefined;
+      const sessionDurationHours =
+        derivedDurationFromTimeSlot && derivedDurationFromTimeSlot > 0
+          ? derivedDurationFromTimeSlot
+          : requestedSessionDurationHours;
+
+      if (!sessionDurationHours || sessionDurationHours <= 0) {
+        return res.status(400).json({ error: 'A valid booking duration is required.' });
+      }
+
+      const bookingFeeBreakdown = calculateBookingFeeBreakdown(tutorHourlyRate * sessionDurationHours);
+      const baseAmount = bookingFeeBreakdown.baseAmount;
+      const platformFee = bookingFeeBreakdown.platformFee;
+      const totalAmount = bookingFeeBreakdown.totalAmount;
+      const sessionAmount = bookingFeeBreakdown.studentTotalPaid;
+
       const hasConflict = await hasTutorBookingConflict({
         tutorId,
-        date,
+        date: normalizedDateLabel,
+        sessionDateKey,
         slotId,
         timeSlot,
       });
 
       if (hasConflict) {
-        return res.status(409).json({ error: 'This time slot is already booked.' });
+        return res.status(409).json({ error: CONFLICT_ERROR_MESSAGE });
       }
 
       let resolvedStudentName = studentName;
@@ -5894,7 +7620,8 @@ async function startServer() {
         tutorId,
         slotId,
         subject,
-        date,
+        date: normalizedDateLabel,
+        sessionDateKey,
         timeSlot: timeSlot || undefined,
         meetingLink: meetingLink || undefined,
         status,
@@ -5903,6 +7630,13 @@ async function startServer() {
         paymentFailureReason: paymentStatus === 'failed' ? (paymentFailureReason || 'Payment failed before confirmation.') : undefined,
         paidAt: paymentStatus === 'paid' ? (paidAt || new Date().toISOString()) : undefined,
         sessionDurationHours,
+        baseAmount,
+        platformFee,
+        totalAmount,
+        studentPlatformFee: bookingFeeBreakdown.studentPlatformFee,
+        studentTotalPaid: bookingFeeBreakdown.studentTotalPaid,
+        tutorPlatformFee: bookingFeeBreakdown.tutorPlatformFee,
+        tutorNetEarning: bookingFeeBreakdown.tutorNetEarning,
         sessionAmount,
         sessionResources: [],
         hiddenForTutor: false,
@@ -5915,7 +7649,7 @@ async function startServer() {
       const tutorUser = await User.findOne({ id: tutorId }, { firstName: 1, lastName: 1 });
       const tutorDisplayName = getDisplayNameFromParts(tutorUser?.firstName, tutorUser?.lastName, 'Tutor');
       const studentDisplayName = resolvedStudentName || 'Student';
-      const sessionLabel = formatSessionLabel({ subject, date, timeSlot });
+      const sessionLabel = formatSessionLabel({ subject, date: normalizedDateLabel, timeSlot });
 
       const bookingNotifications: NotificationDraft[] = [];
 
@@ -6045,33 +7779,40 @@ async function startServer() {
         }
 
         const requestedDate = String(incomingRescheduleRequest?.requestedDate || '').trim();
+        const requestedDateKey = resolveSessionDateKey(
+          requestedDate,
+          incomingRescheduleRequest?.requestedDateKey
+        );
+        const requestedDateLabel = requestedDate || (requestedDateKey ? formatDateLabelFromDateKey(requestedDateKey) : '');
         const requestedTimeSlot = String(incomingRescheduleRequest?.requestedTimeSlot || '').trim();
         const requestedSlotId = String(incomingRescheduleRequest?.requestedSlotId || existingBooking.slotId || '').trim();
         const requestedNote = String(incomingRescheduleRequest?.note || '').trim();
 
-        if (!requestedDate || !requestedTimeSlot || !requestedSlotId) {
-          return res.status(400).json({ error: 'requestedDate, requestedTimeSlot, and requestedSlotId are required.' });
+        if (!requestedDateKey || !requestedTimeSlot || !requestedSlotId) {
+          return res.status(400).json({ error: 'requestedDate/requestedDateKey, requestedTimeSlot, and requestedSlotId are required.' });
         }
 
-        const requestedStart = parseSessionStartDateTime(requestedDate, requestedTimeSlot);
+        const requestedStart = parseSessionStartDateTime(requestedDateLabel, requestedTimeSlot, requestedDateKey);
         if (requestedStart && requestedStart.getTime() <= Date.now()) {
           return res.status(400).json({ error: 'Rescheduled session must be in the future.' });
         }
 
         const hasConflict = await hasTutorBookingConflict({
           tutorId: existingBooking.tutorId,
-          date: requestedDate,
+          date: requestedDateLabel,
+          sessionDateKey: requestedDateKey,
           slotId: requestedSlotId,
           timeSlot: requestedTimeSlot,
           excludeBookingId: existingBooking.id,
         });
 
         if (hasConflict) {
-          return res.status(409).json({ error: 'The requested reschedule time conflicts with another booking.' });
+          return res.status(409).json({ error: CONFLICT_ERROR_MESSAGE });
         }
 
         const requestPayload = {
-          requestedDate,
+          requestedDate: requestedDateLabel,
+          requestedDateKey,
           requestedTimeSlot,
           requestedSlotId,
           note: requestedNote || undefined,
@@ -6102,7 +7843,7 @@ async function startServer() {
         const currentSessionLabel = formatSessionLabel(existingBooking);
         const requestedSessionLabel = formatSessionLabel({
           subject: booking.subject,
-          date: requestedDate,
+          date: requestedDateLabel,
           timeSlot: requestedTimeSlot,
         });
 
@@ -6141,32 +7882,36 @@ async function startServer() {
         }
 
         const requestedDate = String(activeRescheduleRequest.requestedDate || '').trim();
+        const requestedDateKey = resolveSessionDateKey(requestedDate, activeRescheduleRequest.requestedDateKey);
+        const requestedDateLabel = requestedDate || (requestedDateKey ? formatDateLabelFromDateKey(requestedDateKey) : '');
         const requestedTimeSlot = String(activeRescheduleRequest.requestedTimeSlot || '').trim();
         const requestedSlotId = String(activeRescheduleRequest.requestedSlotId || existingBooking.slotId || '').trim();
 
         if (incomingRescheduleDecision === 'accept') {
-          const requestedStart = parseSessionStartDateTime(requestedDate, requestedTimeSlot);
+          const requestedStart = parseSessionStartDateTime(requestedDateLabel, requestedTimeSlot, requestedDateKey);
           if (requestedStart && requestedStart.getTime() <= Date.now()) {
             return res.status(400).json({ error: 'This rescheduled time is no longer valid because it is in the past.' });
           }
 
           const hasConflict = await hasTutorBookingConflict({
             tutorId: existingBooking.tutorId,
-            date: requestedDate,
+            date: requestedDateLabel,
+            sessionDateKey: requestedDateKey || undefined,
             slotId: requestedSlotId,
             timeSlot: requestedTimeSlot,
             excludeBookingId: existingBooking.id,
           });
 
           if (hasConflict) {
-            return res.status(409).json({ error: 'The requested reschedule time is no longer available.' });
+            return res.status(409).json({ error: CONFLICT_ERROR_MESSAGE });
           }
 
           const booking = await Booking.findOneAndUpdate(
             { id: req.params.id },
             {
               $set: {
-                date: requestedDate,
+                date: requestedDateLabel,
+                sessionDateKey: requestedDateKey || undefined,
                 timeSlot: requestedTimeSlot,
                 slotId: requestedSlotId,
               },
@@ -6318,12 +8063,17 @@ async function startServer() {
       const nextTutorId = String(req.body?.tutorId ?? existingBooking.tutorId).trim();
       const nextSlotId = String(req.body?.slotId ?? existingBooking.slotId).trim();
       const nextDate = String(req.body?.date ?? existingBooking.date).trim();
+      const nextSessionDateKey = resolveSessionDateKey(
+        nextDate,
+        req.body?.sessionDateKey ?? (existingBooking as any)?.sessionDateKey
+      );
+      const nextDateLabel = nextDate || (nextSessionDateKey ? formatDateLabelFromDateKey(nextSessionDateKey) : '');
       const nextTimeSlot = req.body?.timeSlot !== undefined
         ? String(req.body?.timeSlot || '').trim()
         : String(existingBooking.timeSlot || '').trim();
 
-      if (!nextTutorId || !nextSlotId || !nextDate) {
-        return res.status(400).json({ error: 'tutorId, slotId, and date must be valid values.' });
+      if (!nextTutorId || !nextSlotId || !nextSessionDateKey) {
+        return res.status(400).json({ error: 'tutorId, slotId, and a valid session date must be provided.' });
       }
 
       const normalizedMeetingLink = req.body?.meetingLink !== undefined
@@ -6376,6 +8126,7 @@ async function startServer() {
         req.body?.tutorId !== undefined ||
         req.body?.slotId !== undefined ||
         req.body?.date !== undefined ||
+        req.body?.sessionDateKey !== undefined ||
         req.body?.timeSlot !== undefined ||
         req.body?.status !== undefined ||
         req.body?.paymentStatus !== undefined;
@@ -6383,14 +8134,15 @@ async function startServer() {
       if (scheduleRelevantChange && (status === 'pending' || status === 'confirmed') && paymentStatus !== 'failed' && paymentStatus !== 'refunded') {
         const hasConflict = await hasTutorBookingConflict({
           tutorId: nextTutorId,
-          date: nextDate,
+          date: nextDateLabel,
+          sessionDateKey: nextSessionDateKey,
           slotId: nextSlotId,
           timeSlot: nextTimeSlot,
           excludeBookingId: req.params.id,
         });
 
         if (hasConflict) {
-          return res.status(409).json({ error: 'This time slot is already booked.' });
+          return res.status(409).json({ error: CONFLICT_ERROR_MESSAGE });
         }
       }
 
@@ -6402,6 +8154,15 @@ async function startServer() {
       const updateUnset: Record<string, ''> = {};
       delete updateSet.rescheduleDecision;
       delete updateSet.rescheduleRequest;
+      delete updateSet.sessionAmount;
+      delete updateSet.baseAmount;
+      delete updateSet.platformFee;
+      delete updateSet.totalAmount;
+      delete updateSet.studentPlatformFee;
+      delete updateSet.studentTotalPaid;
+      delete updateSet.tutorPlatformFee;
+      delete updateSet.tutorNetEarning;
+      delete updateSet.sessionDurationHours;
 
       if (req.body?.tutorId !== undefined) {
         updateSet.tutorId = nextTutorId;
@@ -6411,8 +8172,9 @@ async function startServer() {
         updateSet.slotId = nextSlotId;
       }
 
-      if (req.body?.date !== undefined) {
-        updateSet.date = nextDate;
+      if (req.body?.date !== undefined || req.body?.sessionDateKey !== undefined) {
+        updateSet.date = nextDateLabel;
+        updateSet.sessionDateKey = nextSessionDateKey;
       }
 
       if (req.body?.timeSlot !== undefined) {

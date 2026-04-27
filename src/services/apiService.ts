@@ -15,6 +15,7 @@ import {
   AppNotification,
   WithdrawalRequest,
   WithdrawalSummary,
+  TutorRevenueInsights,
   MessageConversation,
   DirectMessage,
   MessageConversationsResponse,
@@ -1093,6 +1094,44 @@ class ApiService {
   async getWithdrawalSummary(tutorId: string): Promise<WithdrawalSummary> {
     const params = new URLSearchParams({ tutorId });
     return this.request(`/withdrawals/summary?${params.toString()}`);
+  }
+
+  async getTutorRevenueInsights(tutorId: string): Promise<TutorRevenueInsights> {
+    const params = new URLSearchParams({ tutorId });
+    return this.request(`/revenue/insights?${params.toString()}`);
+  }
+
+  async downloadTutorRevenueCsv(tutorId: string): Promise<void> {
+    const normalizedTutorId = String(tutorId || '').trim();
+    if (!normalizedTutorId) {
+      throw new Error('Tutor id is required to download revenue CSV.');
+    }
+
+    const response = await this.fetchWithApiFallback(
+      `/revenue/report.csv?tutorId=${encodeURIComponent(normalizedTutorId)}`,
+      undefined,
+      false,
+      ['text/csv']
+    );
+
+    if (!response.ok) {
+      throw await this.createApiError(response, 'Revenue CSV download failed');
+    }
+
+    const blob = await response.blob();
+    const suggestedFileName = getDownloadFileName(response.headers.get('Content-Disposition'));
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download =
+      suggestedFileName ||
+      `tutor-revenue-report-${normalizedTutorId.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => {
+      URL.revokeObjectURL(objectUrl);
+    }, 1200);
   }
 
   async createWithdrawalRequest(payload: {

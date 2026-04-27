@@ -713,7 +713,7 @@ export const StudentResourceLibraryPage: React.FC<StudentResourceLibraryPageProp
               </div>
             </div>
             <h3 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-[1.75rem]">
-              Trusted Resources Finder
+              Trusted Resources Finder AI
             </h3>
             <p className="max-w-3xl text-sm leading-relaxed text-slate-600">
               Enter any subject or topic and get trusted learning resources curated by AI.

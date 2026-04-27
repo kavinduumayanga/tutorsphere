@@ -47,6 +47,15 @@ const timeStringToMinutes = (value: string): number | null => {
   return (hours * 60) + minutes;
 };
 
+const parseSlotTimeRange = (startTime: string, endTime: string): { startMinutes: number; endMinutes: number } | null => {
+  const startMinutes = timeStringToMinutes(startTime);
+  const endMinutes = timeStringToMinutes(endTime);
+  if (startMinutes === null || endMinutes === null || endMinutes <= startMinutes) {
+    return null;
+  }
+  return { startMinutes, endMinutes };
+};
+
 const to12HourLabel = (value: string): string => {
   const minutes = timeStringToMinutes(value);
   if (minutes === null) {
@@ -104,6 +113,129 @@ const adjustEndTimeByStep = (startTime: string, endTime: string, deltaMinutes: n
   return minutesToTimeString(adjusted);
 };
 
+const DAY_ORDER = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
+
+const normalizeDayKey = (value: string | undefined): typeof DAY_ORDER[number] | null => {
+  const cleaned = String(value || '').trim().toLowerCase();
+  if (!cleaned) {
+    return null;
+  }
+  if (cleaned.startsWith('mon')) return 'Mon';
+  if (cleaned.startsWith('tue')) return 'Tue';
+  if (cleaned.startsWith('wed')) return 'Wed';
+  if (cleaned.startsWith('thu')) return 'Thu';
+  if (cleaned.startsWith('fri')) return 'Fri';
+  if (cleaned.startsWith('sat')) return 'Sat';
+  if (cleaned.startsWith('sun')) return 'Sun';
+  return null;
+};
+
+const toDateKey = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const parseDateKey = (value: string | undefined): Date | null => {
+  const normalized = String(value || '').trim();
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  date.setHours(0, 0, 0, 0);
+  return date;
+};
+
+const getWeekStartDate = (anchor: Date): Date => {
+  const normalized = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
+  const day = normalized.getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  normalized.setDate(normalized.getDate() + mondayOffset);
+  normalized.setHours(0, 0, 0, 0);
+  return normalized;
+};
+
+const getDateKeyForDayInWeek = (weekStart: Date, day: typeof DAY_ORDER[number]): string => {
+  const dayOffsetByKey: Record<typeof DAY_ORDER[number], number> = {
+    Mon: 0,
+    Tue: 1,
+    Wed: 2,
+    Thu: 3,
+    Fri: 4,
+    Sat: 5,
+    Sun: 6,
+  };
+  const date = new Date(weekStart);
+  date.setDate(date.getDate() + dayOffsetByKey[day]);
+  date.setHours(0, 0, 0, 0);
+  return toDateKey(date);
+};
+
+const normalizeSlotsForWeek = (
+  slots: TimeSlot[] | undefined,
+  weekStartDate: Date,
+  weekStartKey: string,
+  weekEndKey: string
+): TimeSlot[] => {
+  if (!Array.isArray(slots)) {
+    return [];
+  }
+
+  const normalized = slots
+    .map((slot, index) => {
+      const fallbackDay = normalizeDayKey(slot.day) || 'Mon';
+      const parsedDate = parseDateKey(slot.dateKey);
+      const dateKey = parsedDate ? toDateKey(parsedDate) : getDateKeyForDayInWeek(weekStartDate, fallbackDay);
+      if (dateKey < weekStartKey || dateKey > weekEndKey) {
+        return null;
+      }
+
+      const parsedSlotDate = parseDateKey(dateKey);
+      const slotDay = parsedSlotDate
+        ? (normalizeDayKey(parsedSlotDate.toLocaleDateString('en-US', { weekday: 'short' })) || fallbackDay)
+        : fallbackDay;
+
+      const startTime = String(slot.startTime || '').trim();
+      const endTime = String(slot.endTime || '').trim();
+      const parsedRange = parseSlotTimeRange(startTime, endTime);
+      if (!parsedRange) {
+        return null;
+      }
+
+      return {
+        ...slot,
+        id: String(slot.id || `${slotDay}-${dateKey}-${index}`).trim(),
+        day: slotDay,
+        dateKey,
+        weekStartKey,
+        startTime: `${String(Math.floor(parsedRange.startMinutes / 60)).padStart(2, '0')}:${String(parsedRange.startMinutes % 60).padStart(2, '0')}`,
+        endTime: `${String(Math.floor(parsedRange.endMinutes / 60)).padStart(2, '0')}:${String(parsedRange.endMinutes % 60).padStart(2, '0')}`,
+        isBooked: Boolean(slot.isBooked),
+      };
+    })
+    .filter(Boolean) as TimeSlot[];
+
+  return normalized.sort((a, b) => {
+    const daySort = DAY_ORDER.indexOf((normalizeDayKey(a.day) || 'Mon')) - DAY_ORDER.indexOf((normalizeDayKey(b.day) || 'Mon'));
+    if (daySort !== 0) {
+      return daySort;
+    }
+    return a.startTime.localeCompare(b.startTime);
+  });
+};
+
 interface Props {
   tutor?: Tutor;
   onSaveAvailability: (slots: TimeSlot[]) => Promise<void>;
@@ -111,7 +243,17 @@ interface Props {
 }
 
 export const TutorAvailabilityManagePage: React.FC<Props> = ({ tutor, onSaveAvailability, onBack }) => {
-  const [slots, setSlots] = useState<TimeSlot[]>(tutor?.availability || []);
+  const weekStartDate = useMemo(() => getWeekStartDate(new Date()), []);
+  const weekStartKey = useMemo(() => toDateKey(weekStartDate), [weekStartDate]);
+  const weekEndKey = useMemo(() => {
+    const end = new Date(weekStartDate);
+    end.setDate(end.getDate() + 6);
+    end.setHours(0, 0, 0, 0);
+    return toDateKey(end);
+  }, [weekStartDate]);
+  const [slots, setSlots] = useState<TimeSlot[]>(() =>
+    normalizeSlotsForWeek(tutor?.availability || [], weekStartDate, weekStartKey, weekEndKey)
+  );
   const [saving, setSaving] = useState(false);
   const timeOptionsByValue = useMemo(() => {
     const map = new Map<string, string>();
@@ -122,8 +264,14 @@ export const TutorAvailabilityManagePage: React.FC<Props> = ({ tutor, onSaveAvai
   }, []);
 
   useEffect(() => {
-    setSlots(tutor?.availability || []);
-  }, [tutor]);
+    setSlots(normalizeSlotsForWeek(tutor?.availability || [], weekStartDate, weekStartKey, weekEndKey));
+  }, [tutor, weekStartDate, weekStartKey, weekEndKey]);
+
+  const weekRangeLabel = useMemo(() => {
+    const weekEndDate = new Date(weekStartDate);
+    weekEndDate.setDate(weekEndDate.getDate() + 6);
+    return `${weekStartDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${weekEndDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  }, [weekStartDate]);
 
   if (!tutor) {
     return (
@@ -140,12 +288,15 @@ export const TutorAvailabilityManagePage: React.FC<Props> = ({ tutor, onSaveAvai
     );
   }
 
-  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const days = DAY_ORDER;
 
   const addSlot = (day: string) => {
+    const normalizedDay = normalizeDayKey(day) || 'Mon';
     const newSlot: TimeSlot = {
       id: Math.random().toString(36).substring(7),
-      day,
+      day: normalizedDay,
+      dateKey: getDateKeyForDayInWeek(weekStartDate, normalizedDay),
+      weekStartKey,
       startTime: '09:00',
       endTime: '10:00',
       isBooked: false,
@@ -213,14 +364,18 @@ export const TutorAvailabilityManagePage: React.FC<Props> = ({ tutor, onSaveAvai
       if (!slot.startTime || !slot.endTime) {
         return 'All slots must have a start and end time.';
       }
+      if (!slot.dateKey) {
+        return 'Each slot must belong to a specific day in this week.';
+      }
       if (slot.startTime >= slot.endTime) {
-        return `Start time must be before end time for ${slot.day}.`;
+        return `Start time must be before end time for ${slot.day} (${slot.dateKey}).`;
       }
     }
 
     for (const day of days) {
+      const dayDateKey = getDateKeyForDayInWeek(weekStartDate, day);
       const daySlots = slots
-        .filter(s => s.day === day)
+        .filter((s) => s.day === day && s.dateKey === dayDateKey)
         .slice()
         .sort((a, b) => a.startTime.localeCompare(b.startTime));
 
@@ -243,7 +398,13 @@ export const TutorAvailabilityManagePage: React.FC<Props> = ({ tutor, onSaveAvai
 
     setSaving(true);
     try {
-      await onSaveAvailability(slots);
+      await onSaveAvailability(
+        slots.map((slot) => ({
+          ...slot,
+          dateKey: slot.dateKey || getDateKeyForDayInWeek(weekStartDate, normalizeDayKey(slot.day) || 'Mon'),
+          weekStartKey,
+        }))
+      );
       alert("Availability configured successfully!");
     } catch (e) {
       alert("Failed to save changes");
@@ -267,6 +428,7 @@ export const TutorAvailabilityManagePage: React.FC<Props> = ({ tutor, onSaveAvai
             Manage Availability
           </h2>
           <p className="text-slate-500 mt-2 text-lg">Configure your weekly schedule for school-level tutoring</p>
+          <p className="text-sm font-semibold text-indigo-700 mt-1">Week: {weekRangeLabel}</p>
         </div>
         <button
           onClick={handleSave}
@@ -281,16 +443,21 @@ export const TutorAvailabilityManagePage: React.FC<Props> = ({ tutor, onSaveAvai
       <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm space-y-8">
         <div className="flex items-center gap-3 p-4 bg-indigo-50/50 text-indigo-800 rounded-2xl border border-indigo-100">
           <AlertCircle className="w-5 h-5 text-indigo-600" />
-          <p className="text-sm font-medium">As a school-level tutor, keeping your availability up-to-date helps students find the perfect time for their classes.</p>
+          <p className="text-sm font-medium">These slots apply only to this week. Booked slots are locked and must be recreated next week as a fresh schedule.</p>
         </div>
 
         <div className="space-y-6">
           {days.map(day => {
-            const daySlots = slots.filter(s => s.day === day);
+            const dayDateKey = getDateKeyForDayInWeek(weekStartDate, day);
+            const dayDate = parseDateKey(dayDateKey);
+            const dayLabel = dayDate
+              ? dayDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+              : dayDateKey;
+            const daySlots = slots.filter((s) => s.day === day && s.dateKey === dayDateKey);
             return (
               <div key={day} className="p-6 border border-slate-100 rounded-2xl bg-slate-50 overflow-hidden">
                 <div className="flex justify-between items-center mb-4">
-                  <h3 className="font-bold text-slate-900 text-lg w-24">{day}</h3>
+                  <h3 className="font-bold text-slate-900 text-lg w-24">{day} <span className="text-sm text-slate-500">({dayLabel})</span></h3>
                   <button
                     onClick={() => addSlot(day)}
                     className="flex items-center gap-2 text-sm font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-100/50 hover:bg-indigo-100 px-4 py-2 rounded-xl transition-colors"

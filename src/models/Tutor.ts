@@ -17,10 +17,26 @@ export interface ITutor extends Document {
     day: string;
     startTime: string;
     endTime: string;
+    dateKey?: string;
+    weekStartKey?: string;
     isBooked: boolean;
   }[];
   isVerified: boolean;
   avatar?: string;
+  aiPricingState?: {
+    lastAppliedSuggestedRate?: number;
+    lastSuggestionAppliedAt?: string;
+    lastAnalyzedSnapshot?: {
+      bookingDemandLast30Days?: number;
+      completedSessions?: number;
+      cancelledSessions?: number;
+      completionRate?: number;
+      cancellationRate?: number;
+      conversionRate?: number;
+      averageRating?: number;
+      totalReviewCount?: number;
+    };
+  };
 }
 
 const TutorSchema: Schema = new Schema({
@@ -40,10 +56,26 @@ const TutorSchema: Schema = new Schema({
     day: { type: String, required: true },
     startTime: { type: String, required: true },
     endTime: { type: String, required: true },
+    dateKey: { type: String },
+    weekStartKey: { type: String },
     isBooked: { type: Boolean, required: true, default: false }
   }],
   isVerified: { type: Boolean, required: true, default: false },
-  avatar: { type: String }
+  avatar: { type: String },
+  aiPricingState: {
+    lastAppliedSuggestedRate: { type: Number, default: undefined },
+    lastSuggestionAppliedAt: { type: String, default: undefined },
+    lastAnalyzedSnapshot: {
+      bookingDemandLast30Days: { type: Number, default: undefined },
+      completedSessions: { type: Number, default: undefined },
+      cancelledSessions: { type: Number, default: undefined },
+      completionRate: { type: Number, default: undefined },
+      cancellationRate: { type: Number, default: undefined },
+      conversionRate: { type: Number, default: undefined },
+      averageRating: { type: Number, default: undefined },
+      totalReviewCount: { type: Number, default: undefined },
+    },
+  }
 }, {
   timestamps: true
 });

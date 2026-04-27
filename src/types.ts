@@ -101,6 +101,20 @@ export interface Tutor extends User {
   bio: string;
   availability: TimeSlot[];
   isVerified: boolean;
+  aiPricingState?: {
+    lastAppliedSuggestedRate?: number;
+    lastSuggestionAppliedAt?: string;
+    lastAnalyzedSnapshot?: {
+      bookingDemandLast30Days: number;
+      completedSessions: number;
+      cancelledSessions: number;
+      completionRate: number;
+      cancellationRate: number;
+      conversionRate: number;
+      averageRating: number;
+      totalReviewCount: number;
+    };
+  };
 }
 
 export interface TimeSlot {
@@ -108,6 +122,8 @@ export interface TimeSlot {
   day: string;
   startTime: string;
   endTime: string;
+  dateKey?: string;
+  weekStartKey?: string;
   isBooked: boolean;
 }
 
@@ -125,6 +141,7 @@ export interface BookingSessionResource {
 
 export interface BookingRescheduleRequest {
   requestedDate: string;
+  requestedDateKey?: string;
   requestedTimeSlot: string;
   requestedSlotId?: string;
   note?: string;
@@ -142,6 +159,7 @@ export interface Booking {
   status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
   subject: string;
   date: string;
+  sessionDateKey?: string;
   timeSlot?: string;
   meetingLink?: string;
   expertFeedback?: string;
@@ -152,6 +170,13 @@ export interface Booking {
   refundedAt?: string;
   refundReason?: string;
   sessionDurationHours?: number;
+  baseAmount?: number;
+  platformFee?: number;
+  totalAmount?: number;
+  studentPlatformFee?: number;
+  studentTotalPaid?: number;
+  tutorPlatformFee?: number;
+  tutorNetEarning?: number;
   sessionAmount?: number;
   rescheduleRequest?: BookingRescheduleRequest;
   sessionResources?: BookingSessionResource[];
@@ -311,4 +336,102 @@ export interface WithdrawalSummary {
   withdrawnAmount: number;
   pendingWithdrawalAmount: number;
   availableBalance: number;
+}
+
+export interface TutorRevenueForecastWindow {
+  days: 30 | 60 | 90;
+  projectedNetEarning: number;
+  historicalProjection: number;
+  upcomingConfirmedNet: number;
+  confidence: 'low' | 'medium' | 'high';
+}
+
+export interface TutorRevenuePricingSuggestion {
+  currentHourlyRate: number;
+  suggestedHourlyRate: number;
+  suggestedRange: { min: number; max: number };
+  direction: 'increase' | 'decrease' | 'keep';
+  reason: string;
+  confidence: 'low' | 'medium' | 'high';
+  metrics: {
+    bookingDemandLast30Days: number;
+    completedSessions: number;
+    cancelledSessions: number;
+    cancellationRate: number;
+    completionRate: number;
+    conversionRate: number;
+    averageRating: number;
+    totalReviewCount: number;
+  };
+}
+
+export interface TutorRevenueTaxMonthlySummary {
+  month: string;
+  monthKey: string;
+  sessionIncome: number;
+  courseSales: number;
+  platformFees: number;
+  refunds: number;
+  withdrawals: number;
+  netTaxableIncome: number;
+}
+
+export interface TutorRevenueInsights {
+  generatedAt: string;
+  summary: {
+    totalEarnings: number;
+    availableBalance: number;
+    completedSessionEarnings: number;
+    pendingEarnings: number;
+    withdrawnAmount: number;
+    remainingBalance: number;
+    pendingWithdrawalAmount: number;
+    monthlyEarnings: Array<{
+      month: string;
+      monthKey: string;
+      sessionNetEarnings: number;
+      courseNetEarnings: number;
+      totalNetEarnings: number;
+    }>;
+    paymentHistory: Array<{
+      id: string;
+      timestamp: number;
+      dateLabel: string;
+      itemName: string;
+      studentName: string;
+      paymentType: 'session booking' | 'course purchase';
+      amount: number;
+      platformFee: number;
+      netEarning: number;
+      status: 'paid' | 'pending' | 'refunded_or_cancelled';
+      paymentReference?: string;
+    }>;
+  };
+  forecasting: {
+    windows: TutorRevenueForecastWindow[];
+    fallback: boolean;
+    fallbackMessage?: string;
+    methodology: string;
+  };
+  pricingSuggestion: TutorRevenuePricingSuggestion;
+  taxPrep: {
+    monthlySummaries: TutorRevenueTaxMonthlySummary[];
+    totals: {
+      sessionIncome: number;
+      courseSales: number;
+      platformFees: number;
+      refunds: number;
+      withdrawals: number;
+      netTaxableIncome: number;
+    };
+  };
+  aiInsights: {
+    assistant: string;
+    source: 'azure' | 'fallback';
+    forecastSummary: string;
+    pricingSummary: string;
+    taxSummary: string;
+    actionItems: string[];
+    warning?: string;
+  };
 }

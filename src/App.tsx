@@ -56,7 +56,7 @@ import {
   DEFAULT_COURSE_THUMBNAIL_PLACEHOLDER,
 } from './utils/defaultImages';
 
-import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz, TimeSlot, CourseEnrollment, CourseCoupon, WithdrawalRequest, WithdrawalSummary, AppNotification } from './types';
+import { Tutor, User as AppUser, Question, Booking, Course, Resource, SkillLevel, StudyPlan, Review, Quiz, TimeSlot, CourseEnrollment, CourseCoupon, WithdrawalRequest, WithdrawalSummary, TutorRevenueInsights, AppNotification } from './types';
 import { TutorProfilePage } from './components/pages/TutorProfilePage';
 import { GetStartedSection } from "./components/pages/GetStartedSection";
 import { TutorBookingPage } from './components/pages/TutorBookingPage';
@@ -159,6 +159,12 @@ type RouteTarget = {
 type HistoryMode = 'push' | 'replace';
 type TabNavigationOptions = {
   replace?: boolean;
+};
+
+type PricingSuggestionApplyState = {
+  cycleId: string;
+  appliedRate: number;
+  message: string;
 };
 
 const normalizePathname = (pathname: string): string => {
@@ -759,6 +765,12 @@ export default function App() {
   const [isLoadingWithdrawalData, setIsLoadingWithdrawalData] = useState(false);
   const [isWithdrawalModalOpen, setIsWithdrawalModalOpen] = useState(false);
   const [isSubmittingWithdrawal, setIsSubmittingWithdrawal] = useState(false);
+  const [revenueInsights, setRevenueInsights] = useState<TutorRevenueInsights | null>(null);
+  const [isLoadingRevenueInsights, setIsLoadingRevenueInsights] = useState(false);
+  const [revenueInsightsError, setRevenueInsightsError] = useState<string | null>(null);
+  const [isDownloadingRevenueCsv, setIsDownloadingRevenueCsv] = useState(false);
+  const [isApplyingPricingSuggestion, setIsApplyingPricingSuggestion] = useState(false);
+  const [pricingSuggestionApplyState, setPricingSuggestionApplyState] = useState<PricingSuggestionApplyState | null>(null);
   const [withdrawalForm, setWithdrawalForm] = useState({
     amount: '',
     payoutMethodType: 'bank_transfer' as WithdrawalRequest['payoutMethodType'],
@@ -1542,6 +1554,55 @@ export default function App() {
     });
   };
 
+  const resetRevenueInsightsState = () => {
+    setRevenueInsights(null);
+    setRevenueInsightsError(null);
+    setIsLoadingRevenueInsights(false);
+    setIsApplyingPricingSuggestion(false);
+    setPricingSuggestionApplyState(null);
+  };
+
+  const refreshTutorWithdrawalSummary = async (tutorId: string) => {
+    const normalizedTutorId = String(tutorId || '').trim();
+    if (!normalizedTutorId) {
+      return;
+    }
+
+    try {
+      const summary = await apiService.getWithdrawalSummary(normalizedTutorId);
+      setWithdrawalSummary(summary);
+    } catch (error) {
+      console.error('Failed to refresh withdrawal summary:', error);
+    }
+  };
+
+  const refreshTutorRevenueInsights = async (tutorId: string) => {
+    const normalizedTutorId = String(tutorId || '').trim();
+    if (!normalizedTutorId) {
+      resetRevenueInsightsState();
+      return;
+    }
+
+    setIsLoadingRevenueInsights(true);
+    setRevenueInsightsError(null);
+    try {
+      const insights = await apiService.getTutorRevenueInsights(normalizedTutorId);
+      setRevenueInsights(insights);
+      setPricingSuggestionApplyState((previousState) => {
+        if (!previousState) {
+          return null;
+        }
+
+        return previousState.cycleId === insights.generatedAt ? previousState : null;
+      });
+    } catch (error) {
+      console.error('Failed to refresh tutor revenue insights:', error);
+      setRevenueInsightsError('Revenue insights are temporarily unavailable. Please try again shortly.');
+    } finally {
+      setIsLoadingRevenueInsights(false);
+    }
+  };
+
   const loadTutorWithdrawalData = async (tutorId: string) => {
     if (!tutorId) {
       setWithdrawalRequests([]);
@@ -1652,13 +1713,14 @@ export default function App() {
         setBookings([]);
         setReviews([]);
         setQuestions([]);
-        setCourseEnrollments([]);
-        setUserCourses([]);
-        setWithdrawalRequests([]);
-        resetWithdrawalSummaryState();
-        setIsLoadingWithdrawalData(false);
-        setIsLoadingUserData(false);
-        return;
+      setCourseEnrollments([]);
+      setUserCourses([]);
+      setWithdrawalRequests([]);
+      resetWithdrawalSummaryState();
+      resetRevenueInsightsState();
+      setIsLoadingWithdrawalData(false);
+      setIsLoadingUserData(false);
+      return;
       }
 
       setIsLoadingUserData(true);
@@ -1696,6 +1758,7 @@ export default function App() {
           setUserCourses(enrollments.map((enrollment) => enrollment.courseId));
           setWithdrawalRequests([]);
           resetWithdrawalSummaryState();
+          resetRevenueInsightsState();
           setIsLoadingWithdrawalData(false);
         } else {
           setQuestions([]);
@@ -1704,11 +1767,15 @@ export default function App() {
           if (resolvedTutorId) {
             const tutorEnrollments = await apiService.getCourseEnrollments({ tutorId: resolvedTutorId });
             setCourseEnrollments(tutorEnrollments);
-            await loadTutorWithdrawalData(resolvedTutorId);
+            await Promise.all([
+              loadTutorWithdrawalData(resolvedTutorId),
+              refreshTutorRevenueInsights(resolvedTutorId),
+            ]);
           } else {
             setCourseEnrollments([]);
             setWithdrawalRequests([]);
             resetWithdrawalSummaryState();
+            resetRevenueInsightsState();
             setIsLoadingWithdrawalData(false);
           }
           setUserCourses([]);
@@ -1745,6 +1812,20 @@ export default function App() {
 
     fetchUserData();
   }, [currentUser, currentTutor?.id]);
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== 'tutor' || activeTab !== 'earnings') {
+      return;
+    }
+
+    const resolvedTutorId = currentTutor?.id || currentUser.id;
+    if (!resolvedTutorId) {
+      return;
+    }
+
+    void refreshTutorRevenueInsights(resolvedTutorId);
+    void refreshTutorWithdrawalSummary(resolvedTutorId);
+  }, [activeTab, currentUser, currentTutor?.id]);
 
   useEffect(() => {
     if (activeTab !== 'courseLearning') {
@@ -1791,9 +1872,9 @@ export default function App() {
     bookingIntent: {
       slotId: string;
       sessionDate: string;
+      sessionDateKey: string;
       sessionTime: string;
       sessionDurationHours: number;
-      sessionAmount: number;
       paymentStatus: 'paid' | 'failed';
       paymentReference?: string;
       paymentFailureReason?: string;
@@ -1818,9 +1899,9 @@ export default function App() {
         status: isPaid ? 'confirmed' : 'pending',
         subject: tutor.subjects?.[0] || 'General',
         date: bookingIntent.sessionDate,
+        sessionDateKey: bookingIntent.sessionDateKey,
         timeSlot: bookingIntent.sessionTime,
         sessionDurationHours: bookingIntent.sessionDurationHours,
-        sessionAmount: bookingIntent.sessionAmount,
         meetingLink: undefined,
         paymentStatus: bookingIntent.paymentStatus,
         paymentReference: bookingIntent.paymentReference,
@@ -1835,6 +1916,9 @@ export default function App() {
         normalizeBookingForState(booking),
         ...prevBookings,
       ]);
+
+      await refreshTutorAvailability(tutor.id);
+
       return { ok: true, bookingId: booking.id };
     } catch (error: any) {
       return { ok: false, error: error?.message || 'Failed to save booking.' };
@@ -3269,6 +3353,7 @@ export default function App() {
     }
 
     const requestedDate = String(request.requestedDate || '').trim();
+    const requestedDateKey = String((request as any).requestedDateKey || '').trim();
     const requestedTimeSlot = String(request.requestedTimeSlot || '').trim();
     const requestedAt = String(request.requestedAt || '').trim();
     const requestedByTutorId = String(request.requestedByTutorId || '').trim();
@@ -3292,6 +3377,7 @@ export default function App() {
 
     return {
       requestedDate,
+      requestedDateKey: requestedDateKey || undefined,
       requestedTimeSlot,
       requestedSlotId: requestedSlotId || undefined,
       note: requestedNote || undefined,
@@ -3363,6 +3449,14 @@ export default function App() {
             : booking
         )
       );
+
+      if (currentUser?.role === 'tutor') {
+        const resolvedTutorId = currentTutor?.id || currentUser.id;
+        if (resolvedTutorId && (updates.status !== undefined || updates.paymentStatus !== undefined)) {
+          void refreshTutorWithdrawalSummary(resolvedTutorId);
+          void refreshTutorRevenueInsights(resolvedTutorId);
+        }
+      }
     } catch (error) {
       console.error('Failed to update booking:', error);
       alert('Failed to update booking. Please try again.');
@@ -3409,11 +3503,14 @@ export default function App() {
 
   const parseBookingStartDate = (booking: Booking): Date | null => {
     const rawDate = String(booking.date || '').trim();
-    if (!rawDate) {
+    const rawDateKey = String(booking.sessionDateKey || '').trim();
+    if (!rawDate && !rawDateKey) {
       return null;
     }
 
-    const baseDate = new Date(rawDate);
+    const baseDate = rawDateKey
+      ? new Date(`${rawDateKey}T00:00:00`)
+      : new Date(rawDate);
     if (Number.isNaN(baseDate.getTime())) {
       return null;
     }
@@ -3463,11 +3560,14 @@ export default function App() {
 
   const parseBookingEndDate = (booking: Booking): Date | null => {
     const rawDate = String(booking.date || '').trim();
-    if (!rawDate) {
+    const rawDateKey = String(booking.sessionDateKey || '').trim();
+    if (!rawDate && !rawDateKey) {
       return null;
     }
 
-    const baseDate = new Date(rawDate);
+    const baseDate = rawDateKey
+      ? new Date(`${rawDateKey}T00:00:00`)
+      : new Date(rawDate);
     if (Number.isNaN(baseDate.getTime())) {
       return null;
     }
@@ -3602,6 +3702,22 @@ export default function App() {
     return `${hour12}:${String(minutesRaw).padStart(2, '0')} ${meridiem}`;
   };
 
+  const refreshTutorAvailability = async (tutorId: string): Promise<void> => {
+    const normalizedTutorId = String(tutorId || '').trim();
+    if (!normalizedTutorId) {
+      return;
+    }
+
+    try {
+      const refreshedTutor = await apiService.getTutor(normalizedTutorId);
+      setTutors((prevTutors) =>
+        prevTutors.map((entry) => (entry.id === refreshedTutor.id ? refreshedTutor : entry))
+      );
+    } catch (refreshTutorError) {
+      console.warn('Tutor availability refresh warning:', refreshTutorError);
+    }
+  };
+
   const applyBookingUpdateToState = (updatedBooking: Booking) => {
     setBookings((prevBookings) =>
       prevBookings.map((booking) =>
@@ -3610,6 +3726,8 @@ export default function App() {
           : booking
       )
     );
+
+    void refreshTutorAvailability(updatedBooking.tutorId);
   };
 
   const confirmAndCancelBooking = async () => {
@@ -3623,6 +3741,13 @@ export default function App() {
     try {
       const updatedBooking = await apiService.updateBooking(booking.id, { status: 'cancelled' });
       applyBookingUpdateToState(updatedBooking);
+
+      if (actorRole === 'tutor' && currentUser?.role === 'tutor') {
+        const resolvedTutorId = currentTutor?.id || currentUser.id;
+        if (resolvedTutorId) {
+          void refreshTutorWithdrawalSummary(resolvedTutorId);
+        }
+      }
 
       if (actorRole === 'student') {
         const nextPaymentStatus = String(updatedBooking.paymentStatus || booking.paymentStatus || 'pending').trim().toLowerCase();
@@ -3815,7 +3940,16 @@ export default function App() {
       throw new Error('Rescheduled session must be in the future.');
     }
 
-    const nextSessionEnd = new Date(nextSessionStart.getTime() + 60 * 60 * 1000);
+    const existingSessionStart = parseBookingStartDate(booking);
+    const existingSessionEnd = parseBookingEndDate(booking);
+    const existingDurationMs =
+      existingSessionStart &&
+      existingSessionEnd &&
+      existingSessionEnd.getTime() > existingSessionStart.getTime()
+        ? existingSessionEnd.getTime() - existingSessionStart.getTime()
+        : 60 * 60 * 1000;
+
+    const nextSessionEnd = new Date(nextSessionStart.getTime() + existingDurationMs);
     const nextEndLabel =
       formatTimeLabelFrom24Hour(
         `${String(nextSessionEnd.getHours()).padStart(2, '0')}:${String(nextSessionEnd.getMinutes()).padStart(2, '0')}`
@@ -3836,6 +3970,7 @@ export default function App() {
       const updatedBooking = await apiService.updateBooking(booking.id, {
         rescheduleRequest: {
           requestedDate: formattedDate,
+          requestedDateKey: dateInput,
           requestedTimeSlot,
           requestedSlotId: booking.slotId,
           note: note || undefined,
@@ -4058,6 +4193,120 @@ export default function App() {
     });
   };
 
+  const handleDownloadRevenueCsv = async () => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      alert('Only tutor accounts can download revenue reports.');
+      return;
+    }
+
+    const resolvedTutorId = currentTutor?.id || currentUser.id;
+    if (!resolvedTutorId) {
+      alert('Tutor profile is required to download revenue reports.');
+      return;
+    }
+
+    setIsDownloadingRevenueCsv(true);
+    try {
+      await apiService.downloadTutorRevenueCsv(resolvedTutorId);
+    } catch (error) {
+      console.error('Failed to download revenue CSV:', error);
+      const message = error instanceof Error ? error.message : 'Failed to download revenue CSV report.';
+      setRevenueInsightsError(message);
+      alert(message);
+    } finally {
+      setIsDownloadingRevenueCsv(false);
+    }
+  };
+
+  const handleRetryRevenueInsights = () => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      return;
+    }
+
+    const resolvedTutorId = currentTutor?.id || currentUser.id;
+    if (!resolvedTutorId) {
+      return;
+    }
+
+    void refreshTutorRevenueInsights(resolvedTutorId);
+  };
+
+  const handleApplyPricingSuggestion = async () => {
+    if (!currentUser || currentUser.role !== 'tutor') {
+      alert('Only tutor accounts can apply pricing suggestions.');
+      return;
+    }
+
+    const resolvedTutorId = currentTutor?.id || currentUser.id;
+    if (!resolvedTutorId || !revenueInsights?.pricingSuggestion) {
+      alert('Pricing suggestion is not available right now.');
+      return;
+    }
+
+    const cycleId = String(revenueInsights.generatedAt || '').trim() || `cycle-${Date.now()}`;
+    if (pricingSuggestionApplyState && cycleId && pricingSuggestionApplyState.cycleId === cycleId) {
+      return;
+    }
+
+    const suggestedRate = Math.max(0, Number(revenueInsights.pricingSuggestion.suggestedHourlyRate || 0));
+    const normalizedSuggestedRate = Number.isFinite(suggestedRate)
+      ? Math.round(suggestedRate * 100) / 100
+      : 0;
+    if (normalizedSuggestedRate <= 0) {
+      alert('Suggested rate is invalid. Please refresh AI insights and try again.');
+      return;
+    }
+
+    const appliedAtIso = new Date().toISOString();
+    const pricingMetrics = revenueInsights.pricingSuggestion.metrics;
+    const analyzedSnapshot = {
+      bookingDemandLast30Days: Math.max(0, Math.round(Number(pricingMetrics.bookingDemandLast30Days || 0))),
+      completedSessions: Math.max(0, Math.round(Number(pricingMetrics.completedSessions || 0))),
+      cancelledSessions: Math.max(0, Math.round(Number(pricingMetrics.cancelledSessions || 0))),
+      completionRate: Math.max(0, Math.min(1, Number(pricingMetrics.completionRate || 0))),
+      cancellationRate: Math.max(0, Math.min(1, Number(pricingMetrics.cancellationRate || 0))),
+      conversionRate: Math.max(0, Math.min(1, Number(pricingMetrics.conversionRate || 0))),
+      averageRating: Math.max(0, Math.min(5, Number(pricingMetrics.averageRating || 0))),
+      totalReviewCount: Math.max(0, Math.round(Number(pricingMetrics.totalReviewCount || 0))),
+    };
+
+    const successMessage = `Suggested rate applied successfully. Your hourly rate is now ${formatLkr(normalizedSuggestedRate)}.`;
+
+    setIsApplyingPricingSuggestion(true);
+    try {
+      const updatedTutor = await apiService.updateTutor(resolvedTutorId, {
+        pricePerHour: normalizedSuggestedRate,
+        aiPricingState: {
+          lastAppliedSuggestedRate: normalizedSuggestedRate,
+          lastSuggestionAppliedAt: appliedAtIso,
+          lastAnalyzedSnapshot: analyzedSnapshot,
+        },
+      });
+
+      setTutors((prevTutors) =>
+        prevTutors.map((entry) =>
+          entry.id === resolvedTutorId
+            ? { ...entry, ...updatedTutor, pricePerHour: normalizedSuggestedRate }
+            : entry
+        )
+      );
+      setProfileData((previousProfile) => ({
+        ...previousProfile,
+        pricePerHour: normalizedSuggestedRate,
+      }));
+      setPricingSuggestionApplyState({
+        cycleId,
+        appliedRate: normalizedSuggestedRate,
+        message: successMessage,
+      });
+    } catch (error) {
+      console.error('Failed to apply AI pricing suggestion:', error);
+      alert(error instanceof Error ? error.message : 'Failed to apply pricing suggestion.');
+    } finally {
+      setIsApplyingPricingSuggestion(false);
+    }
+  };
+
   const handleOpenWithdrawalModal = () => {
     setWithdrawalNotice(null);
     resetWithdrawalForm();
@@ -4144,7 +4393,10 @@ export default function App() {
         payoutMethodDetails: payoutDetails,
       });
 
-      await loadTutorWithdrawalData(resolvedTutorId);
+      await Promise.all([
+        loadTutorWithdrawalData(resolvedTutorId),
+        refreshTutorRevenueInsights(resolvedTutorId),
+      ]);
       setIsWithdrawalModalOpen(false);
       resetWithdrawalForm();
 
@@ -4346,14 +4598,131 @@ export default function App() {
     return fallbackAmount > 0 ? 'paid' : 'pending';
   };
 
-  const tutorSessionEarningAmount = Number(currentTutor?.pricePerHour || 0);
-
   const tutorCompletedPaidBookings = useMemo(
-    () => bookings.filter((booking) => booking.status === 'completed' && (booking.paymentStatus || 'pending') === 'paid'),
+    () => bookings.filter((booking) => booking.status === 'completed' && getBookingPaymentStatus(booking) === 'paid'),
     [bookings]
   );
 
   const tutorSessionTransactions = useMemo<TutorTransactionItem[]>(() => {
+    const fallbackTutorHourlyRate = Math.max(0, Number(currentTutor?.pricePerHour || 0));
+
+    const resolveSessionDurationHours = (booking: Booking): number => {
+      const explicitDuration = Number(booking.sessionDurationHours);
+      if (Number.isFinite(explicitDuration) && explicitDuration > 0) {
+        return roundMoney(explicitDuration);
+      }
+
+      const start = parseBookingStartDate(booking);
+      const end = parseBookingEndDate(booking);
+      if (!start || !end) {
+        return 1;
+      }
+
+      const durationMs = end.getTime() - start.getTime();
+      if (!Number.isFinite(durationMs) || durationMs <= 0) {
+        return 1;
+      }
+
+      return roundMoney(durationMs / (1000 * 60 * 60));
+    };
+
+    const resolveSessionFinancialBreakdown = (booking: Booking) => {
+      const parsedBaseAmount = Number((booking as any).baseAmount);
+      const parsedPlatformFee = Number((booking as any).platformFee);
+      const parsedTotalAmount = Number((booking as any).totalAmount);
+      const parsedStudentPlatformFee = Number((booking as any).studentPlatformFee);
+      const parsedStudentTotalPaid = Number((booking as any).studentTotalPaid);
+      const parsedTutorPlatformFee = Number((booking as any).tutorPlatformFee);
+      const parsedTutorNetEarning = Number((booking as any).tutorNetEarning);
+      const parsedSessionAmount = Number(booking.sessionAmount);
+
+      const hasBaseAmount = Number.isFinite(parsedBaseAmount) && parsedBaseAmount >= 0;
+      const hasPlatformFee = Number.isFinite(parsedPlatformFee) && parsedPlatformFee >= 0;
+      const hasTotalAmount = Number.isFinite(parsedTotalAmount) && parsedTotalAmount >= 0;
+      const hasStudentPlatformFee = Number.isFinite(parsedStudentPlatformFee) && parsedStudentPlatformFee >= 0;
+      const hasStudentTotalPaid = Number.isFinite(parsedStudentTotalPaid) && parsedStudentTotalPaid >= 0;
+      const hasTutorPlatformFee = Number.isFinite(parsedTutorPlatformFee) && parsedTutorPlatformFee >= 0;
+      const hasTutorNetEarning = Number.isFinite(parsedTutorNetEarning) && parsedTutorNetEarning >= 0;
+      const hasLegacySessionAmount = Number.isFinite(parsedSessionAmount) && parsedSessionAmount >= 0;
+
+      if (hasBaseAmount) {
+        const baseAmount = roundMoney(parsedBaseAmount);
+        const studentPlatformFee = hasStudentPlatformFee
+          ? roundMoney(parsedStudentPlatformFee)
+          : hasPlatformFee
+            ? roundMoney(parsedPlatformFee)
+            : roundMoney(baseAmount * PLATFORM_FEE_RATE);
+        const studentTotalPaid = hasStudentTotalPaid
+          ? roundMoney(parsedStudentTotalPaid)
+          : hasTotalAmount
+            ? roundMoney(parsedTotalAmount)
+            : roundMoney(baseAmount + studentPlatformFee);
+        const tutorPlatformFee = hasTutorPlatformFee ? roundMoney(parsedTutorPlatformFee) : studentPlatformFee;
+        const tutorNetEarning = hasTutorNetEarning
+          ? roundMoney(parsedTutorNetEarning)
+          : roundMoney(Math.max(0, baseAmount - tutorPlatformFee));
+
+        return {
+          baseAmount,
+          platformFee: studentPlatformFee,
+          totalAmount: studentTotalPaid,
+          tutorPlatformFee,
+          tutorNetEarning,
+        };
+      }
+
+      if ((hasTotalAmount || hasStudentTotalPaid) && (hasPlatformFee || hasStudentPlatformFee)) {
+        const totalAmount = hasStudentTotalPaid
+          ? roundMoney(parsedStudentTotalPaid)
+          : roundMoney(parsedTotalAmount);
+        const platformFee = hasStudentPlatformFee
+          ? roundMoney(parsedStudentPlatformFee)
+          : roundMoney(parsedPlatformFee);
+        const baseAmount = roundMoney(Math.max(0, totalAmount - platformFee));
+        const tutorPlatformFee = hasTutorPlatformFee ? roundMoney(parsedTutorPlatformFee) : platformFee;
+        const tutorNetEarning = hasTutorNetEarning
+          ? roundMoney(parsedTutorNetEarning)
+          : roundMoney(Math.max(0, baseAmount - tutorPlatformFee));
+
+        return {
+          baseAmount,
+          platformFee,
+          totalAmount,
+          tutorPlatformFee,
+          tutorNetEarning,
+        };
+      }
+
+      if (hasLegacySessionAmount) {
+        const legacyBaseAmount = roundMoney(parsedSessionAmount);
+        const legacyPlatformFee = roundMoney(legacyBaseAmount * PLATFORM_FEE_RATE);
+        const legacyTotalAmount = roundMoney(legacyBaseAmount + legacyPlatformFee);
+        const legacyNet = roundMoney(Math.max(0, legacyBaseAmount - legacyPlatformFee));
+
+        return {
+          baseAmount: legacyBaseAmount,
+          platformFee: legacyPlatformFee,
+          totalAmount: legacyTotalAmount,
+          tutorPlatformFee: legacyPlatformFee,
+          tutorNetEarning: legacyNet,
+        };
+      }
+
+      const fallbackDurationHours = resolveSessionDurationHours(booking);
+      const fallbackBaseAmount = roundMoney(fallbackTutorHourlyRate * fallbackDurationHours);
+      const fallbackPlatformFee = roundMoney(fallbackBaseAmount * PLATFORM_FEE_RATE);
+      const fallbackTotalAmount = roundMoney(fallbackBaseAmount + fallbackPlatformFee);
+      const fallbackNet = roundMoney(Math.max(0, fallbackBaseAmount - fallbackPlatformFee));
+
+      return {
+        baseAmount: fallbackBaseAmount,
+        platformFee: fallbackPlatformFee,
+        totalAmount: fallbackTotalAmount,
+        tutorPlatformFee: fallbackPlatformFee,
+        tutorNetEarning: fallbackNet,
+      };
+    };
+
     return bookings.map((booking) => {
       const paymentStatus = getBookingPaymentStatus(booking);
       let status: TutorTransactionStatus;
@@ -4366,9 +4735,10 @@ export default function App() {
         status = 'pending';
       }
 
-      const amount = Math.max(0, tutorSessionEarningAmount);
-      const platformFee = status === 'paid' ? roundMoney(amount * PLATFORM_FEE_RATE) : 0;
-      const netEarning = status === 'paid' ? roundMoney(amount - platformFee) : 0;
+      const bookingFinancials = resolveSessionFinancialBreakdown(booking);
+      const amount = bookingFinancials.baseAmount;
+      const platformFee = status === 'paid' ? bookingFinancials.tutorPlatformFee : 0;
+      const netEarning = status === 'paid' ? bookingFinancials.tutorNetEarning : 0;
 
       const paidTimestamp = Date.parse(String(booking.paidAt || ''));
       const timestamp = Number.isNaN(paidTimestamp) ? getBookingSortTimestamp(booking) : paidTimestamp;
@@ -4391,7 +4761,7 @@ export default function App() {
         paymentReference: booking.paymentReference,
       };
     });
-  }, [bookings, tutorSessionEarningAmount]);
+  }, [bookings, currentTutor?.pricePerHour]);
 
   const tutorCourseTransactions = useMemo<TutorTransactionItem[]>(() => {
     const enrollmentTransactions: TutorTransactionItem[] = [];
@@ -4487,24 +4857,46 @@ export default function App() {
   );
 
   const withdrawalTotalEarnings = useMemo(() => {
+    const insightsTotal = Number(revenueInsights?.summary?.totalEarnings || 0);
+    if (insightsTotal > 0) {
+      return roundMoney(insightsTotal);
+    }
+
     const serverTotal = Number(withdrawalSummary.totalEarnings || 0);
     if (serverTotal > 0 || tutorTotalEarnings <= 0) {
       return roundMoney(serverTotal);
     }
     return roundMoney(tutorTotalEarnings);
-  }, [withdrawalSummary.totalEarnings, tutorTotalEarnings]);
+  }, [revenueInsights?.summary?.totalEarnings, withdrawalSummary.totalEarnings, tutorTotalEarnings]);
 
   const withdrawalWithdrawnAmount = useMemo(
-    () => roundMoney(Math.max(0, Number(withdrawalSummary.withdrawnAmount || 0))),
-    [withdrawalSummary.withdrawnAmount]
+    () =>
+      roundMoney(
+        Math.max(
+          0,
+          Number((revenueInsights?.summary?.withdrawnAmount ?? withdrawalSummary.withdrawnAmount) || 0)
+        )
+      ),
+    [revenueInsights?.summary?.withdrawnAmount, withdrawalSummary.withdrawnAmount]
   );
 
   const withdrawalPendingAmount = useMemo(
-    () => roundMoney(Math.max(0, Number(withdrawalSummary.pendingWithdrawalAmount || 0))),
-    [withdrawalSummary.pendingWithdrawalAmount]
+    () =>
+      roundMoney(
+        Math.max(
+          0,
+          Number((revenueInsights?.summary?.pendingWithdrawalAmount ?? withdrawalSummary.pendingWithdrawalAmount) || 0)
+        )
+      ),
+    [revenueInsights?.summary?.pendingWithdrawalAmount, withdrawalSummary.pendingWithdrawalAmount]
   );
 
   const withdrawalAvailableBalance = useMemo(() => {
+    const insightsAvailable = Number(revenueInsights?.summary?.availableBalance || 0);
+    if (insightsAvailable > 0) {
+      return roundMoney(Math.max(0, insightsAvailable));
+    }
+
     const serverAvailable = Number(withdrawalSummary.availableBalance || 0);
     const hasServerSummary =
       Number(withdrawalSummary.totalEarnings || 0) > 0 ||
@@ -4518,6 +4910,7 @@ export default function App() {
 
     return roundMoney(Math.max(0, withdrawalTotalEarnings - withdrawalWithdrawnAmount - withdrawalPendingAmount));
   }, [
+    revenueInsights?.summary?.availableBalance,
     withdrawalSummary.availableBalance,
     withdrawalSummary.totalEarnings,
     withdrawalSummary.withdrawnAmount,
@@ -6725,6 +7118,16 @@ export default function App() {
               getTransactionStatusPillClassName={getTransactionStatusPillClassName}
               getTransactionStatusLabel={getTransactionStatusLabel}
               isLoadingUserData={isLoadingUserData}
+              revenueInsights={revenueInsights}
+              isLoadingRevenueInsights={isLoadingRevenueInsights}
+              revenueInsightsError={revenueInsightsError}
+              handleDownloadRevenueCsv={handleDownloadRevenueCsv}
+              isDownloadingRevenueCsv={isDownloadingRevenueCsv}
+              handleRetryRevenueInsights={handleRetryRevenueInsights}
+              handleApplyPricingSuggestion={handleApplyPricingSuggestion}
+              isApplyingPricingSuggestion={isApplyingPricingSuggestion}
+              pricingSuggestionApplyState={pricingSuggestionApplyState}
+              currentTutorHourlyRate={Number(currentTutor?.pricePerHour || 0)}
             />
           )}
 

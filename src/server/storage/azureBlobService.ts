@@ -177,6 +177,8 @@ const resolveImageOutput = (
   return { format: 'jpeg', mimeType: 'image/jpeg', extension: '.jpg' };
 };
 
+const ensuredContainers = new Set<string>();
+
 const getBlockBlobClient = async (containerName: string, blobName: string): Promise<BlockBlobClient> => {
   const normalizedContainerName = String(containerName || '').trim();
   if (!normalizedContainerName) {
@@ -185,7 +187,11 @@ const getBlockBlobClient = async (containerName: string, blobName: string): Prom
 
   const blobServiceClient = getBlobServiceClient();
   const containerClient = blobServiceClient.getContainerClient(normalizedContainerName);
-  await containerClient.createIfNotExists();
+
+  if (!ensuredContainers.has(normalizedContainerName)) {
+    await containerClient.createIfNotExists();
+    ensuredContainers.add(normalizedContainerName);
+  }
 
   return containerClient.getBlockBlobClient(blobName);
 };

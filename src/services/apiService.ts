@@ -65,12 +65,21 @@ const getDownloadFileName = (contentDisposition: string | null): string | null =
 type UploadedCourseAsset = {
   path: string;
   url?: string;
+  videoUrl?: string;
   blobUrl?: string;
   blobName?: string;
   containerName?: string;
   originalName: string;
   size: number;
   mimeType: string;
+};
+
+type UploadProgressDetails = {
+  loaded: number;
+  total: number;
+  percent: number;
+  lengthComputable: boolean;
+  fileSizeBytes: number;
 };
 
 type TutorSignupProfile = {
@@ -118,39 +127,122 @@ const shouldRetryApiRequest = (error: unknown): boolean => {
     message.includes('failed to fetch') ||
     message.includes('failed to parse url') ||
     message.includes('invalid url') ||
+    message.includes('response format was invalid') ||
     message.includes('did not match the expected pattern') ||
     message.includes('network') ||
     message.includes('cors')
   );
 };
 
-const uploadResourceWithProgress = (
+const resolveUploadTimeoutMs = (
+  fileSizeBytes: number,
+  options?: {
+    floorMs?: number;
+    ceilingMs?: number;
+    baselineProcessingMs?: number;
+    pessimisticTransferBytesPerSecond?: number;
+  }
+): number => {
+  const safeFileSizeBytes = Math.max(0, Number(fileSizeBytes || 0));
+  const floorMs = Math.max(15000, Number(options?.floorMs || 120000));
+  const ceilingMs = Math.max(floorMs, Number(options?.ceilingMs || 30 * 60 * 1000));
+  const baselineProcessingMs = Math.max(5000, Number(options?.baselineProcessingMs || 60000));
+  const pessimisticTransferBytesPerSecond = Math.max(
+    32 * 1024,
+    Number(options?.pessimisticTransferBytesPerSecond || 256 * 1024)
+  );
+
+  const transferEstimateMs = safeFileSizeBytes > 0
+    ? Math.ceil((safeFileSizeBytes / pessimisticTransferBytesPerSecond) * 1000)
+    : 0;
+  const estimatedTimeoutMs = transferEstimateMs + baselineProcessingMs;
+
+  return Math.max(floorMs, Math.min(ceilingMs, estimatedTimeoutMs));
+};
+
+const uploadAssetWithProgress = (
   fullUrl: string,
   file: File,
-  onProgress?: (progress: number) => void
+  fieldName: string,
+  options?: {
+    uploadLabel?: string;
+    cancelLabel?: string;
+    timeoutMs?: number;
+  },
+  onProgress?: (progress: UploadProgressDetails) => void
 ): Promise<UploadedCourseAsset> => {
   return new Promise((resolve, reject) => {
+    const rejectWithUploadError = (message: string, noRetry = false) => {
+      const error = new Error(message) as Error & { noRetry?: boolean };
+      if (noRetry) {
+        error.noRetry = true;
+      }
+      reject(error);
+    };
+
     const formData = new FormData();
-    formData.append('resource', file);
+    formData.append(fieldName, file);
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', fullUrl, true);
+    xhr.withCredentials = true;
+
+    const uploadLabel = options?.uploadLabel || 'file';
+    const fileSizeBytes = Math.max(0, Number(file.size || 0));
+    const resolvedTimeoutMs = Number(options?.timeoutMs) > 0
+      ? Number(options?.timeoutMs)
+      : resolveUploadTimeoutMs(fileSizeBytes);
+    xhr.timeout = resolvedTimeoutMs;
+    let hasUploadProgressEvent = false;
+
+    console.info('[Upload][Client] Selected file', {
+      uploadLabel,
+      endpoint: fullUrl,
+      fileName: file.name,
+      fileSizeBytes,
+      mimeType: file.type || 'application/octet-stream',
+      timeoutMs: resolvedTimeoutMs,
+    });
 
     xhr.upload.onprogress = (event) => {
-      if (!onProgress || !event.lengthComputable) {
+      if (!onProgress) {
         return;
       }
 
-      const progress = Math.min(100, Math.max(0, Math.round((event.loaded / event.total) * 100)));
-      onProgress(progress);
+      const rawLoaded = Math.max(0, Number(event.loaded || 0));
+      const eventTotal = Math.max(0, Number(event.total || 0));
+      const total = fileSizeBytes > 0 ? fileSizeBytes : eventTotal;
+      const loaded = total > 0 ? Math.min(rawLoaded, total) : rawLoaded;
+      const lengthComputable = total > 0;
+      const percent = lengthComputable
+        ? Math.min(100, Math.max(0, Math.round((loaded / total) * 100)))
+        : 0;
+      if (loaded > 0) {
+        hasUploadProgressEvent = true;
+      }
+
+      onProgress({
+        loaded,
+        total,
+        percent,
+        lengthComputable,
+        fileSizeBytes,
+      });
     };
 
     xhr.onerror = () => {
-      reject(new Error('Load failed while uploading resource file. Please check your server connection and try again.'));
+      rejectWithUploadError(
+        `Load failed while uploading ${options?.uploadLabel || 'file'}. Please check your server connection and try again.`,
+        hasUploadProgressEvent
+      );
+    };
+
+    xhr.ontimeout = () => {
+      rejectWithUploadError(`${uploadLabel} upload timed out. Please try again.`, true);
     };
 
     xhr.onabort = () => {
-      reject(new Error('Resource upload was cancelled.'));
+      rejectWithUploadError(`${options?.cancelLabel || 'Upload'} was cancelled.`, hasUploadProgressEvent);
     };
 
     xhr.onload = () => {
@@ -166,22 +258,32 @@ const uploadResourceWithProgress = (
       if (xhr.status >= 200 && xhr.status < 300) {
         const resolvedPath =
           (parsed && typeof parsed.blobUrl === 'string' && parsed.blobUrl.trim()) ||
+          (parsed && typeof parsed.videoUrl === 'string' && parsed.videoUrl.trim()) ||
           (parsed && typeof parsed.url === 'string' && parsed.url.trim()) ||
           (parsed && typeof parsed.path === 'string' && parsed.path.trim()) ||
           '';
 
         if (!resolvedPath) {
-          reject(new Error('Upload succeeded but response format was invalid.'));
+          rejectWithUploadError('Upload succeeded but response format was invalid.', hasUploadProgressEvent);
           return;
         }
 
-        onProgress?.(100);
         resolve({
           ...(parsed || {}),
           path: resolvedPath,
           url: typeof parsed?.url === 'string' ? parsed.url : resolvedPath,
+          videoUrl: typeof parsed?.videoUrl === 'string' ? parsed.videoUrl : resolvedPath,
           blobUrl: typeof parsed?.blobUrl === 'string' ? parsed.blobUrl : resolvedPath,
         } as UploadedCourseAsset);
+
+        console.info('[Upload][Client] Upload response received', {
+          uploadLabel,
+          status: xhr.status,
+          url: resolvedPath,
+          blobName: typeof parsed?.blobName === 'string' ? parsed.blobName : undefined,
+          mimeType: typeof parsed?.mimeType === 'string' ? parsed.mimeType : undefined,
+          size: typeof parsed?.size === 'number' ? parsed.size : undefined,
+        });
         return;
       }
 
@@ -189,11 +291,32 @@ const uploadResourceWithProgress = (
         (parsed && typeof parsed.error === 'string' && parsed.error) ||
         `API request failed: ${xhr.statusText || `HTTP ${xhr.status}`}`;
 
-      reject(new Error(errorMessage));
+      rejectWithUploadError(errorMessage, hasUploadProgressEvent);
     };
 
     xhr.send(formData);
   });
+};
+
+const uploadResourceWithProgress = (
+  fullUrl: string,
+  file: File,
+  onProgress?: (progress: number) => void
+): Promise<UploadedCourseAsset> => {
+  return uploadAssetWithProgress(
+    fullUrl,
+    file,
+    'resource',
+    {
+      uploadLabel: 'resource file',
+      cancelLabel: 'Resource upload',
+    },
+    onProgress
+      ? (progressDetails) => {
+          onProgress(progressDetails.percent);
+        }
+      : undefined
+  );
 };
 
 type QuizChatSessionStage =
@@ -474,12 +597,27 @@ class ApiService {
 
   private normalizeCourse(course: any): Course {
     const modules = Array.isArray(course?.modules)
-      ? course.modules.map((module: any) => ({
-        ...module,
-        resources: (Array.isArray(module?.resources) ? module.resources : [])
-          .map((resource: any, index: number) => this.normalizeCourseModuleResource(resource, index))
-          .filter((resource: CourseModuleResource | null): resource is CourseModuleResource => Boolean(resource)),
-      }))
+      ? course.modules.map((module: any, moduleIndex: number) => {
+        const normalizedId = String(module?.id ?? '').trim() || `module-${moduleIndex + 1}`;
+        const normalizedTitle = String(module?.title ?? '').trim();
+        const normalizedVideoUrl = String(module?.videoUrl ?? module?.url ?? module?.path ?? '').trim();
+        const normalizedVideoBlobName = String(module?.videoBlobName ?? module?.blobName ?? '').trim();
+        const normalizedVideoMimeType = String(module?.videoMimeType ?? module?.mimeType ?? '').trim();
+        const parsedVideoSize = Number(module?.videoSize ?? module?.size);
+
+        return {
+          ...module,
+          id: normalizedId,
+          title: normalizedTitle,
+          videoUrl: normalizedVideoUrl,
+          videoBlobName: normalizedVideoBlobName || undefined,
+          videoMimeType: normalizedVideoMimeType || undefined,
+          videoSize: Number.isFinite(parsedVideoSize) && parsedVideoSize >= 0 ? parsedVideoSize : undefined,
+          resources: (Array.isArray(module?.resources) ? module.resources : [])
+            .map((resource: any, index: number) => this.normalizeCourseModuleResource(resource, index))
+            .filter((resource: CourseModuleResource | null): resource is CourseModuleResource => Boolean(resource)),
+        };
+      })
       : [];
 
     return {
@@ -855,22 +993,92 @@ class ApiService {
     return this.normalizeCourse(updatedCourse);
   }
 
-  async uploadCourseThumbnail(file: File): Promise<UploadedCourseAsset> {
-    const formData = new FormData();
-    formData.append('thumbnail', file);
-    return this.request('/uploads/course-thumbnail', {
-      method: 'POST',
-      body: formData,
-    });
+  async uploadCourseThumbnail(
+    file: File,
+    onProgress?: (progress: UploadProgressDetails) => void
+  ): Promise<UploadedCourseAsset> {
+    const baseCandidates = getApiBaseCandidates();
+    let lastError: unknown;
+
+    for (const baseUrl of baseCandidates) {
+      try {
+        return await uploadAssetWithProgress(
+          `${baseUrl}/uploads/course-thumbnail`,
+          file,
+          'thumbnail',
+          {
+            uploadLabel: 'course thumbnail',
+            cancelLabel: 'Thumbnail upload',
+            timeoutMs: resolveUploadTimeoutMs(file.size, {
+              floorMs: 60000,
+              ceilingMs: 5 * 60 * 1000,
+              baselineProcessingMs: 30000,
+              pessimisticTransferBytesPerSecond: 128 * 1024,
+            }),
+          },
+          onProgress
+        );
+      } catch (error) {
+        lastError = error;
+        const noRetry = Boolean((error as any)?.noRetry);
+        if (noRetry) {
+          throw error;
+        }
+        if (!shouldRetryApiRequest(error)) {
+          throw error;
+        }
+      }
+    }
+
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+
+    throw new Error('Failed to upload course thumbnail.');
   }
 
-  async uploadCourseModuleVideo(file: File): Promise<UploadedCourseAsset> {
-    const formData = new FormData();
-    formData.append('video', file);
-    return this.request('/uploads/course-video', {
-      method: 'POST',
-      body: formData,
-    });
+  async uploadCourseModuleVideo(
+    file: File,
+    onProgress?: (progress: UploadProgressDetails) => void
+  ): Promise<UploadedCourseAsset> {
+    const baseCandidates = getApiBaseCandidates();
+    let lastError: unknown;
+
+    for (const baseUrl of baseCandidates) {
+      try {
+        return await uploadAssetWithProgress(
+          `${baseUrl}/uploads/course-video`,
+          file,
+          'video',
+          {
+            uploadLabel: 'course video',
+            cancelLabel: 'Video upload',
+            timeoutMs: resolveUploadTimeoutMs(file.size, {
+              floorMs: 5 * 60 * 1000,
+              ceilingMs: 20 * 60 * 1000,
+              baselineProcessingMs: 3 * 60 * 1000,
+              pessimisticTransferBytesPerSecond: 192 * 1024,
+            }),
+          },
+          onProgress
+        );
+      } catch (error) {
+        lastError = error;
+        const noRetry = Boolean((error as any)?.noRetry);
+        if (noRetry) {
+          throw error;
+        }
+        if (!shouldRetryApiRequest(error)) {
+          throw error;
+        }
+      }
+    }
+
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+
+    throw new Error('Failed to upload course video.');
   }
 
   async uploadCourseModuleResource(file: File): Promise<UploadedCourseAsset> {

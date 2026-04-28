@@ -3,7 +3,7 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs/promises";
-import { Readable } from "stream";
+import { Readable, PassThrough } from "stream";
 import { randomBytes } from "crypto";
 import dotenv from "dotenv";
 import multer from "multer";
@@ -129,6 +129,29 @@ const resolveBlobNameFromMetadataOrUrl = (
 
 const isHttpUrl = (value: string): boolean => /^https?:\/\//i.test(value.trim());
 
+const VIDEO_MIME_TYPE_BY_EXTENSION: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.ogg': 'video/ogg',
+  '.mov': 'video/quicktime',
+  '.m4v': 'video/x-m4v',
+};
+
+const resolveUploadMimeType = (fileName: string, mimeType: string): string => {
+  const normalizedMimeType = String(mimeType || '').trim().toLowerCase();
+  if (normalizedMimeType && normalizedMimeType !== 'application/octet-stream') {
+    return normalizedMimeType;
+  }
+
+  const extension = path.extname(String(fileName || '').trim()).toLowerCase();
+  const fallbackMimeType = VIDEO_MIME_TYPE_BY_EXTENSION[extension];
+  if (fallbackMimeType) {
+    return fallbackMimeType;
+  }
+
+  return normalizedMimeType || 'application/octet-stream';
+};
+
 type UploadResponseFileMeta = {
   originalname: string;
   size: number;
@@ -140,8 +163,10 @@ const toUploadedAssetResponse = (
   file: UploadResponseFileMeta,
   containerName?: string
 ) => ({
+  success: true,
   path: uploaded.blobUrl,
   url: uploaded.blobUrl,
+  videoUrl: uploaded.blobUrl,
   blobUrl: uploaded.blobUrl,
   blobName: uploaded.blobName,
   containerName: String(containerName || '').trim() || undefined,
@@ -206,7 +231,50 @@ type StreamUploadConfig = {
   genericErrorMessage: string;
   containerName: string;
   containerEnvKey: string;
+  requestTimeoutMs?: number;
   isAllowedFile: (file: FileValidationShape) => boolean;
+};
+
+const ONE_MB = 1024 * 1024;
+const LARGE_UPLOAD_TUNING_THRESHOLD_BYTES = 256 * ONE_MB;
+
+const resolveAdaptiveUploadTuning = (
+  requestContentLengthBytes: number,
+  tuning: { blockSizeBytes: number; maxConcurrency: number }
+) => {
+  if (!Number.isFinite(requestContentLengthBytes) || requestContentLengthBytes < LARGE_UPLOAD_TUNING_THRESHOLD_BYTES) {
+    return tuning;
+  }
+
+  return {
+    blockSizeBytes: Math.max(tuning.blockSizeBytes, 16 * ONE_MB),
+    maxConcurrency: Math.min(12, Math.max(tuning.maxConcurrency, 8)),
+  };
+};
+
+const verifyBlobExistsWithTimeout = async (
+  blobName: string,
+  containerName: string,
+  timeoutMs = 8000
+): Promise<boolean> => {
+  const boundedTimeoutMs = Math.max(1000, Number(timeoutMs) || 8000);
+  const timeoutPromise = new Promise<boolean>((resolve) => {
+    setTimeout(() => resolve(false), boundedTimeoutMs);
+  });
+
+  try {
+    return await Promise.race([
+      blobExists(blobName, containerName),
+      timeoutPromise,
+    ]);
+  } catch (error) {
+    console.warn('[Upload][Server] Blob verification warning', {
+      blobName,
+      containerName,
+      error,
+    });
+    return false;
+  }
 };
 
 const createStreamUploadHandler = (config: StreamUploadConfig) => {
@@ -214,7 +282,31 @@ const createStreamUploadHandler = (config: StreamUploadConfig) => {
     try {
       const containerName = getRequiredContainerName(config.containerName, config.containerEnvKey);
       const maxFileSizeBytes = config.maxFileSizeMB * 1024 * 1024;
-      const { blockSizeBytes, maxConcurrency } = getLargeUploadTuning();
+      const baseUploadTuning = getLargeUploadTuning();
+      const requestContentLengthBytes = Number(req.headers['content-length'] || 0);
+      const { blockSizeBytes, maxConcurrency } = resolveAdaptiveUploadTuning(
+        requestContentLengthBytes,
+        baseUploadTuning
+      );
+      const busboyFileHwmBytes = Math.min(Math.max(blockSizeBytes, ONE_MB), 4 * ONE_MB);
+      console.info(`[Upload][Server] ${config.fieldName} request received`, {
+        requestContentLengthBytes,
+        blockSizeBytes,
+        maxConcurrency,
+        containerName,
+      });
+
+      const requestTimeoutMs =
+        Number.isFinite(Number(config.requestTimeoutMs)) && Number(config.requestTimeoutMs) > 0
+          ? Number(config.requestTimeoutMs)
+          : 30 * 60 * 1000;
+
+      // Per-file Azure upload timeout: generous but prevents infinite hangs.
+      // Scale with file size: minimum 2 minutes, add ~1 min per 100MB, max 25 minutes.
+      const azureUploadTimeoutMs = Math.min(
+        25 * 60 * 1000,
+        Math.max(2 * 60 * 1000, Math.ceil((requestContentLengthBytes / (100 * ONE_MB)) * 60 * 1000) + 2 * 60 * 1000)
+      );
 
       let hasTargetFile = false;
       let receivedBytes = 0;
@@ -222,10 +314,29 @@ const createStreamUploadHandler = (config: StreamUploadConfig) => {
       let asyncUploadFailure: Error | null = null;
       let uploadPromise: Promise<{ blobUrl: string; blobName: string }> | null = null;
       let uploadFileMeta: UploadResponseFileMeta | null = null;
+      const uploadStartedAtMs = Date.now();
 
       const uploadResult = await new Promise<{ uploaded: { blobUrl: string; blobName: string }; fileMeta: UploadResponseFileMeta }>((resolve, reject) => {
+        let settled = false;
+        const finishResolve = (value: { uploaded: { blobUrl: string; blobName: string }; fileMeta: UploadResponseFileMeta }) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          resolve(value);
+        };
+        const finishReject = (error: unknown) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          reject(error);
+        };
+
         const busboy = Busboy({
           headers: req.headers,
+          highWaterMark: ONE_MB,
+          fileHwm: busboyFileHwmBytes,
           limits: {
             files: 1,
             fileSize: maxFileSizeBytes,
@@ -233,9 +344,23 @@ const createStreamUploadHandler = (config: StreamUploadConfig) => {
           },
         });
 
+        const requestTimeout = setTimeout(() => {
+          console.warn(`[Upload][Server] ${config.fieldName} request-level timeout fired after ${Date.now() - uploadStartedAtMs}ms`);
+          finishReject(new Error(`${config.fieldName} upload request timed out while processing the stream.`));
+          try {
+            req.unpipe(busboy as any);
+          } catch {
+            // no-op
+          }
+          req.destroy();
+        }, requestTimeoutMs);
+
+        const clearRequestTimeout = () => clearTimeout(requestTimeout);
+
         busboy.on('file', (fieldName: string, file: Readable, info: any) => {
           const originalname = String(info?.filename || 'file').trim() || 'file';
           const mimetype = String(info?.mimeType || info?.mimetype || 'application/octet-stream').trim() || 'application/octet-stream';
+          const resolvedMimeType = resolveUploadMimeType(originalname, mimetype);
 
           if (fieldName !== config.fieldName) {
             file.resume();
@@ -243,7 +368,7 @@ const createStreamUploadHandler = (config: StreamUploadConfig) => {
           }
 
           hasTargetFile = true;
-          const validationFile: FileValidationShape = { originalname, mimetype };
+          const validationFile: FileValidationShape = { originalname, mimetype: resolvedMimeType };
           if (!config.isAllowedFile(validationFile)) {
             parseFailure = new Error(config.invalidTypeMessage);
             file.resume();
@@ -252,9 +377,25 @@ const createStreamUploadHandler = (config: StreamUploadConfig) => {
 
           uploadFileMeta = {
             originalname,
-            mimetype,
+            mimetype: resolvedMimeType,
             size: 0,
           };
+
+          console.info(`[Upload][Server] ${config.fieldName} stream piping to Azure`, {
+            originalname,
+            mimeType: resolvedMimeType,
+            requestContentLengthBytes,
+            blockSizeBytes,
+            maxConcurrency,
+            containerName,
+            azureUploadTimeoutMs,
+          });
+
+          // Use a PassThrough stream to decouple busboy's file stream lifecycle
+          // from the Azure SDK's consumption. This prevents the Azure SDK from
+          // missing the 'end' event on small files where busboy may close the
+          // stream before the SDK has fully set up its internal read pipeline.
+          const passthrough = new PassThrough();
 
           file.on('data', (chunk: Buffer) => {
             receivedBytes += chunk.length;
@@ -266,40 +407,94 @@ const createStreamUploadHandler = (config: StreamUploadConfig) => {
 
           file.on('error', (error) => {
             asyncUploadFailure = error instanceof Error ? error : new Error(config.genericErrorMessage);
+            passthrough.destroy(error instanceof Error ? error : new Error(config.genericErrorMessage));
           });
 
-          uploadPromise = uploadLargeFileStream(
-            file,
-            originalname,
-            containerName,
-            mimetype,
-            { blockSizeBytes, maxConcurrency }
-          );
+          file.pipe(passthrough);
+
+          // Wrap the Azure upload in a race with a per-file timeout so it can't hang forever.
+          const azureUploadTimeout = new Promise<never>((_, timeoutReject) => {
+            setTimeout(() => {
+              const elapsed = Date.now() - uploadStartedAtMs;
+              console.error(`[Upload][Server] ${config.fieldName} Azure upload timed out after ${elapsed}ms`);
+              timeoutReject(new Error(`Azure upload timed out after ${Math.round(elapsed / 1000)}s. The file may be too large or the storage service is unresponsive.`));
+            }, azureUploadTimeoutMs);
+          });
+
+          uploadPromise = Promise.race([
+            uploadLargeFileStream(
+              passthrough,
+              originalname,
+              containerName,
+              resolvedMimeType,
+              { blockSizeBytes, maxConcurrency }
+            ),
+            azureUploadTimeout,
+          ]);
 
           uploadPromise.catch((error) => {
             asyncUploadFailure = error instanceof Error ? error : new Error(config.genericErrorMessage);
           });
         });
 
-        busboy.on('error', (error) => reject(error));
+        busboy.on('error', (error) => {
+          clearRequestTimeout();
+          finishReject(error);
+        });
+
+        req.on('aborted', () => {
+          clearRequestTimeout();
+          finishReject(new Error('Upload request was aborted by the client.'));
+        });
+
+        // Node.js 16+ emits 'close' instead of 'aborted' when the client disconnects.
+        req.on('close', () => {
+          if (!req.complete && !settled) {
+            clearRequestTimeout();
+            finishReject(new Error('Upload request was closed by the client.'));
+          }
+        });
+
+        req.on('error', (error) => {
+          clearRequestTimeout();
+          finishReject(error);
+        });
 
         busboy.on('finish', () => {
+          console.info(`[Upload][Server] ${config.fieldName} busboy finish event`, {
+            hasTargetFile,
+            receivedBytes,
+            hasUploadPromise: Boolean(uploadPromise),
+            hasParseFailure: Boolean(parseFailure),
+            elapsedMs: Date.now() - uploadStartedAtMs,
+          });
+
           if (parseFailure && !uploadPromise) {
-            return reject(parseFailure);
+            clearRequestTimeout();
+            return finishReject(parseFailure);
           }
 
           if (!hasTargetFile) {
-            return reject(new Error(config.missingFileMessage));
+            clearRequestTimeout();
+            return finishReject(new Error(config.missingFileMessage));
           }
 
           if (!uploadPromise || !uploadFileMeta) {
-            return reject(new Error(config.genericErrorMessage));
+            clearRequestTimeout();
+            return finishReject(new Error(config.genericErrorMessage));
           }
 
           uploadFileMeta.size = receivedBytes;
 
           uploadPromise
             .then(async (uploaded) => {
+              console.info(`[Upload][Server] ${config.fieldName} Azure upload completed`, {
+                blobName: uploaded.blobName,
+                blobUrl: uploaded.blobUrl,
+                uploadedBytes: receivedBytes,
+                durationMs: Date.now() - uploadStartedAtMs,
+              });
+
               if (parseFailure || asyncUploadFailure) {
                 try {
                   await deleteBlobFile(uploaded.blobName, containerName);
@@ -311,34 +506,56 @@ const createStreamUploadHandler = (config: StreamUploadConfig) => {
                   });
                 }
 
-                return reject(parseFailure || asyncUploadFailure || new Error(config.genericErrorMessage));
+                clearRequestTimeout();
+                return finishReject(parseFailure || asyncUploadFailure || new Error(config.genericErrorMessage));
               }
 
-              resolve({
+              clearRequestTimeout();
+              finishResolve({
                 uploaded,
                 fileMeta: uploadFileMeta as UploadResponseFileMeta,
               });
             })
-            .catch((error) => reject(error));
+            .catch((error) => {
+              console.error(`[Upload][Server] ${config.fieldName} Azure upload promise rejected`, {
+                error: error instanceof Error ? error.message : String(error),
+                elapsedMs: Date.now() - uploadStartedAtMs,
+              });
+              clearRequestTimeout();
+              finishReject(error);
+            });
         });
 
         req.pipe(busboy);
       });
 
-      return res.json(toUploadedAssetResponse(uploadResult.uploaded, uploadResult.fileMeta));
+      const uploadResponse = toUploadedAssetResponse(uploadResult.uploaded, uploadResult.fileMeta);
+      console.info(`[Upload][Server] ${config.fieldName} response sent`, {
+        blobName: uploadResponse.blobName,
+        blobUrl: uploadResponse.blobUrl,
+        mimeType: uploadResponse.mimeType,
+        size: uploadResponse.size,
+        durationMs: Date.now() - uploadStartedAtMs,
+      });
+
+      return res.json(uploadResponse);
     } catch (error) {
       const message = error instanceof Error ? error.message : config.genericErrorMessage;
       const isClientError = [
         config.missingFileMessage,
         config.invalidTypeMessage,
         config.sizeExceededMessage,
+        `${config.fieldName} upload request timed out while processing the stream.`,
+        'Upload request was aborted by the client.',
+        'Upload request was closed by the client.',
       ].includes(message);
 
       if (isClientError) {
+        console.warn(`[Upload][Server] ${config.fieldName} client error:`, message);
         return res.status(400).json({ error: message });
       }
 
-      console.error(`${config.fieldName} stream upload error:`, error);
+      console.error(`[Upload][Server] ${config.fieldName} server error:`, error);
       return res.status(500).json({ error: config.genericErrorMessage });
     }
   };
@@ -392,7 +609,7 @@ const isImageUpload = (file: Express.Multer.File): boolean => {
   return ['image/png', 'image/jpeg', 'image/webp', 'image/jpg'].includes(file.mimetype);
 };
 
-const isVideoUpload = (file: Express.Multer.File): boolean => {
+const isVideoUpload = (file: FileValidationShape | Express.Multer.File): boolean => {
   if (file.mimetype.startsWith('video/')) {
     return true;
   }
@@ -1361,6 +1578,28 @@ const normalizeCourseModuleResource = (
   return normalizedResource;
 };
 
+const getFirstNonEmptyString = (...values: unknown[]): string => {
+  for (const value of values) {
+    const normalized = String(value ?? '').trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return '';
+};
+
+const getFirstNonNegativeNumber = (...values: unknown[]): number | undefined => {
+  for (const value of values) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+
+  return undefined;
+};
+
 const normalizeCourseModules = (modules: any): NormalizedCourseModule[] => {
   if (!Array.isArray(modules)) {
     return [];
@@ -1368,18 +1607,36 @@ const normalizeCourseModules = (modules: any): NormalizedCourseModule[] => {
 
   return modules
     .map((module: any) => {
+      const videoUrl = getFirstNonEmptyString(
+        module?.videoUrl,
+        module?.url,
+        module?.path,
+        module?.video?.videoUrl,
+        module?.video?.url,
+        module?.video?.path
+      );
+      const videoBlobName = getFirstNonEmptyString(
+        module?.videoBlobName,
+        module?.blobName,
+        module?.video?.videoBlobName,
+        module?.video?.blobName
+      );
+      const videoMimeType = getFirstNonEmptyString(
+        module?.videoMimeType,
+        module?.mimeType,
+        module?.video?.videoMimeType,
+        module?.video?.mimeType
+      );
+      const videoSize = getFirstNonNegativeNumber(module?.videoSize, module?.size, module?.video?.videoSize, module?.video?.size);
+
       const normalizedModule: NormalizedCourseModule = {
         id: String(module?.id || createEntityId()).trim() || createEntityId(),
         title: String(module?.title || '').trim(),
-        videoUrl: String(module?.videoUrl || '').trim(),
+        videoUrl,
         resources: (Array.isArray(module?.resources) ? module.resources : [])
           .map((resource: any, resourceIndex: number) => normalizeCourseModuleResource(resource, resourceIndex))
           .filter((resource: NormalizedCourseModuleResource | null): resource is NormalizedCourseModuleResource => Boolean(resource)),
       };
-
-      const videoBlobName = String(module?.videoBlobName ?? '').trim();
-      const videoMimeType = String(module?.videoMimeType ?? '').trim();
-      const parsedVideoSize = Number(module?.videoSize);
 
       if (videoBlobName) {
         normalizedModule.videoBlobName = videoBlobName;
@@ -1387,8 +1644,8 @@ const normalizeCourseModules = (modules: any): NormalizedCourseModule[] => {
       if (videoMimeType) {
         normalizedModule.videoMimeType = videoMimeType;
       }
-      if (Number.isFinite(parsedVideoSize) && parsedVideoSize >= 0) {
-        normalizedModule.videoSize = parsedVideoSize;
+      if (videoSize !== undefined) {
+        normalizedModule.videoSize = videoSize;
       }
 
       return normalizedModule;
@@ -1398,9 +1655,16 @@ const normalizeCourseModules = (modules: any): NormalizedCourseModule[] => {
 
 const normalizeCourseForResponse = (course: any) => {
   const plainCourse = typeof course?.toObject === 'function' ? course.toObject() : course;
+  const normalizedModules = normalizeCourseModules(plainCourse?.modules);
   return {
     ...plainCourse,
-    modules: normalizeCourseModules(plainCourse?.modules),
+    modules: normalizedModules.map((module) => ({
+      ...module,
+      url: module.videoUrl,
+      blobName: module.videoBlobName,
+      mimeType: module.videoMimeType,
+      size: module.videoSize,
+    })),
   };
 };
 
@@ -1412,8 +1676,8 @@ const collectCourseVideoBlobNames = (modules: unknown, containerName: string): S
 
   for (const module of modules) {
     const blobName = resolveBlobNameFromMetadataOrUrl(
-      (module as any)?.videoBlobName,
-      (module as any)?.videoUrl,
+      (module as any)?.videoBlobName ?? (module as any)?.blobName,
+      (module as any)?.videoUrl ?? (module as any)?.url ?? (module as any)?.path,
       containerName
     );
 
@@ -2194,6 +2458,13 @@ async function startServer() {
         return res.status(400).json({ error: 'No thumbnail file was uploaded.' });
       }
 
+      const uploadStartedAtMs = Date.now();
+      console.info('[Upload][Server] thumbnail upload started', {
+        originalname: req.file.originalname,
+        size: req.file.size,
+        mimeType: req.file.mimetype,
+      });
+
       const optimizedThumbnail = await optimizeThumbnailImageUpload(req.file);
 
       const containerName = getRequiredContainerName(
@@ -2206,8 +2477,22 @@ async function startServer() {
         containerName,
         optimizedThumbnail.mimetype
       );
+      console.info('[Upload][Server] thumbnail Azure upload completed', {
+        blobName: uploaded.blobName,
+        blobUrl: uploaded.blobUrl,
+        size: optimizedThumbnail.size,
+        durationMs: Date.now() - uploadStartedAtMs,
+      });
 
-      res.json(toUploadedAssetResponse(uploaded, optimizedThumbnail, containerName));
+      const uploadResponse = toUploadedAssetResponse(uploaded, optimizedThumbnail, containerName);
+      console.info('[Upload][Server] thumbnail response sent', {
+        blobName: uploadResponse.blobName,
+        blobUrl: uploadResponse.blobUrl,
+        mimeType: uploadResponse.mimeType,
+        size: uploadResponse.size,
+      });
+
+      res.json(uploadResponse);
     } catch (error) {
       console.error('Course thumbnail upload error:', error);
       res.status(500).json({ error: 'Failed to upload course thumbnail.' });
@@ -8906,9 +9191,16 @@ async function startServer() {
   }
 
   console.log(`[Startup] Starting HTTP listener on 0.0.0.0:${port}...`);
-  app.listen(Number(port), "0.0.0.0", () => {
+  const httpServer = app.listen(Number(port), "0.0.0.0", () => {
     console.log(`[Startup] Server listening on 0.0.0.0:${port}`);
   });
+
+  // Allow long-running upload requests (videos up to 500MB) to complete
+  // without being prematurely killed by Node.js HTTP server timeouts.
+  httpServer.timeout = 30 * 60 * 1000; // 30 minutes
+  httpServer.requestTimeout = 30 * 60 * 1000; // 30 minutes
+  httpServer.headersTimeout = 2 * 60 * 1000; // 2 minutes for headers
+  httpServer.keepAliveTimeout = 5 * 60 * 1000; // 5 minutes keep-alive
 }
 
 startServer().catch((error) => {

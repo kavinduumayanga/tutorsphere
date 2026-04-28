@@ -536,10 +536,20 @@ const createInitialResourceForm = () => ({
 
 type ResourceInputMode = 'url' | 'file';
 type ResourceUploadStatus = 'idle' | 'uploading' | 'uploaded' | 'error';
+type UploadProgressStatus = 'idle' | 'preparing' | 'uploading' | 'processing' | 'uploaded' | 'failed';
 type SessionPersistenceMode = 'session' | 'remember';
 type BookingStatusFilter = 'all' | 'pending' | 'confirmed' | 'completed' | 'cancelled';
 type SessionTimelineFilter = 'all' | 'upcoming' | 'past';
 type NotificationFilter = 'all' | 'unread' | 'read';
+
+type UploadProgressState = {
+  status: UploadProgressStatus;
+  progress: number;
+  message: string;
+  speedBytesPerSecond?: number;
+  uploadedBytes?: number;
+  totalBytes?: number;
+};
 
 type SessionRatingDraft = {
   rating: number;
@@ -571,6 +581,66 @@ type CourseCheckoutSubmission = {
 };
 
 const hasStoredBlobName = (blobName: unknown): boolean => String(blobName || '').trim().length > 0;
+const createInitialUploadProgressState = (): UploadProgressState => ({
+  status: 'idle',
+  progress: 0,
+  message: '',
+  uploadedBytes: 0,
+  totalBytes: 0,
+});
+
+const toCappedInFlightProgress = (percent: number): number => {
+  if (!Number.isFinite(percent)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(99, Math.round(percent)));
+};
+
+const calculateUploadSpeedBytesPerSecond = (loadedBytesDelta: number, elapsedMs: number): number | undefined => {
+  if (elapsedMs <= 0 || loadedBytesDelta < 0) {
+    return undefined;
+  }
+
+  const speed = loadedBytesDelta / (elapsedMs / 1000);
+  if (!Number.isFinite(speed) || speed <= 0) {
+    return undefined;
+  }
+
+  return speed;
+};
+
+const getCourseModuleVideoUrl = (module: Partial<Course['modules'][number]> | null | undefined): string => {
+  if (!module) {
+    return '';
+  }
+
+  const normalizedVideoUrl = String(module.videoUrl || '').trim();
+  if (normalizedVideoUrl) {
+    return normalizedVideoUrl;
+  }
+
+  const legacyUrl = String((module as any).url || '').trim();
+  if (legacyUrl) {
+    return legacyUrl;
+  }
+
+  return String((module as any).path || '').trim();
+};
+
+const getCourseModuleVideoMimeType = (module: Partial<Course['modules'][number]> | null | undefined): string => {
+  if (!module) {
+    return '';
+  }
+
+  const normalizedMimeType = String(module.videoMimeType || '').trim();
+  if (normalizedMimeType) {
+    return normalizedMimeType;
+  }
+
+  return String((module as any).mimeType || '').trim();
+};
+
 const SESSION_STORAGE_KEY = 'session';
 const REMEMBER_ME_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
 const PLATFORM_FEE_RATE = 0.12;
@@ -1155,7 +1225,13 @@ export default function App() {
   const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
   const [isSavingCourse, setIsSavingCourse] = useState(false);
   const [isUploadingCourseThumbnail, setIsUploadingCourseThumbnail] = useState(false);
+  const [courseThumbnailUploadState, setCourseThumbnailUploadState] = useState<UploadProgressState>(
+    createInitialUploadProgressState
+  );
   const [uploadingModuleVideoKey, setUploadingModuleVideoKey] = useState<string | null>(null);
+  const [moduleVideoUploadStateByKey, setModuleVideoUploadStateByKey] = useState<Record<string, UploadProgressState>>(
+    {}
+  );
   const [uploadingModuleResourcesKey, setUploadingModuleResourcesKey] = useState<string | null>(null);
   const [resourceForm, setResourceForm] = useState(createInitialResourceForm);
   const [editingResourceId, setEditingResourceId] = useState<string | null>(null);
@@ -2300,6 +2376,8 @@ export default function App() {
     setUploadingModuleVideoKey(null);
     setUploadingModuleResourcesKey(null);
     setIsUploadingCourseThumbnail(false);
+    setCourseThumbnailUploadState(createInitialUploadProgressState());
+    setModuleVideoUploadStateByKey({});
   };
 
   const handleAddCourseModule = () => {
@@ -2313,25 +2391,134 @@ export default function App() {
     return module.id || `draft-${moduleIndex}`;
   };
 
+  const clearModuleVideoUploadState = (moduleKey: string) => {
+    setModuleVideoUploadStateByKey((prev) => {
+      if (!prev[moduleKey]) {
+        return prev;
+      }
+
+      const next = { ...prev };
+      delete next[moduleKey];
+      return next;
+    });
+  };
+
   const getBaseFileName = (fileName: string): string => {
     return fileName.replace(/\.[^.]+$/, '').trim() || fileName;
   };
 
+  const handleResetCourseThumbnailUploadState = () => {
+    setCourseThumbnailUploadState(createInitialUploadProgressState());
+  };
+
   const handleUploadCourseThumbnail = async (file: File) => {
+    if (isUploadingCourseThumbnail) {
+      return;
+    }
+
     setIsUploadingCourseThumbnail(true);
+    setCourseThumbnailUploadState({
+      status: 'preparing',
+      progress: 0,
+      message: 'Preparing upload...',
+      uploadedBytes: 0,
+      totalBytes: Math.max(0, Number(file.size || 0)),
+      speedBytesPerSecond: undefined,
+    });
+
+    console.info('[Upload][Frontend] Thumbnail upload started', {
+      fileName: file.name,
+      fileSizeBytes: Number(file.size || 0),
+      mimeType: file.type || 'application/octet-stream',
+    });
+
+    let previousLoadedBytes = 0;
+    let previousSampleAtMs = Date.now();
+    let smoothedSpeedBytesPerSecond: number | undefined;
+    let lastLoggedProgressBucket = -1;
+    let didLogProcessingState = false;
 
     try {
-      const uploadedAsset = await apiService.uploadCourseThumbnail(file);
+      const uploadedAsset = await apiService.uploadCourseThumbnail(file, (progressDetails) => {
+        const cappedProgress = toCappedInFlightProgress(progressDetails.percent);
+        const transferCompleted = progressDetails.lengthComputable && progressDetails.loaded >= progressDetails.total;
+        const nowMs = Date.now();
+        const elapsedMs = nowMs - previousSampleAtMs;
+        const loadedDelta = Math.max(0, progressDetails.loaded - previousLoadedBytes);
+        const instantSpeed = elapsedMs >= 250 ? calculateUploadSpeedBytesPerSecond(loadedDelta, elapsedMs) : undefined;
+
+        if (instantSpeed !== undefined) {
+          smoothedSpeedBytesPerSecond = smoothedSpeedBytesPerSecond === undefined
+            ? instantSpeed
+            : (smoothedSpeedBytesPerSecond * 0.75) + (instantSpeed * 0.25);
+          previousLoadedBytes = progressDetails.loaded;
+          previousSampleAtMs = nowMs;
+        }
+
+        const progressBucket = Math.floor(cappedProgress / 10);
+        if (progressBucket !== lastLoggedProgressBucket) {
+          lastLoggedProgressBucket = progressBucket;
+          console.info('[Upload][Frontend] Thumbnail upload progress', {
+            progressPercent: cappedProgress,
+            uploadedBytes: progressDetails.loaded,
+            totalBytes: progressDetails.fileSizeBytes || progressDetails.total || file.size || 0,
+          });
+        }
+        if (transferCompleted && !didLogProcessingState) {
+          didLogProcessingState = true;
+          console.info('[Upload][Frontend] Thumbnail upload waiting for backend confirmation');
+        }
+
+        setCourseThumbnailUploadState({
+          status: transferCompleted ? 'processing' : 'uploading',
+          progress: cappedProgress,
+          speedBytesPerSecond: smoothedSpeedBytesPerSecond,
+          uploadedBytes: Math.max(0, progressDetails.loaded),
+          totalBytes: Math.max(0, progressDetails.fileSizeBytes || progressDetails.total || file.size || 0),
+          message: transferCompleted ? 'Processing/saving...' : `Uploading thumbnail: ${cappedProgress}%`,
+        });
+      });
+
+      const resolvedThumbnailUrl = String(
+        uploadedAsset.path || uploadedAsset.url || uploadedAsset.blobUrl || uploadedAsset.videoUrl || ''
+      ).trim();
+      const resolvedUploadSize = Number.isFinite(Number(uploadedAsset.size))
+        ? Number(uploadedAsset.size)
+        : Number(file.size || 0);
+      const resolvedMimeType = String(uploadedAsset.mimeType || file.type || '').trim();
+
+      if (!resolvedThumbnailUrl) {
+        throw new Error('Upload failed. Please try again.');
+      }
+
       setCourseForm((prev) => ({
         ...prev,
-        thumbnail: uploadedAsset.path,
+        thumbnail: resolvedThumbnailUrl,
         thumbnailBlobName: uploadedAsset.blobName,
-        thumbnailMimeType: uploadedAsset.mimeType,
-        thumbnailSize: uploadedAsset.size,
+        thumbnailMimeType: resolvedMimeType || undefined,
+        thumbnailSize: resolvedUploadSize >= 0 ? resolvedUploadSize : undefined,
       }));
+      setCourseThumbnailUploadState({
+        status: 'uploaded',
+        progress: 100,
+        message: 'Thumbnail uploaded successfully.',
+        speedBytesPerSecond: undefined,
+        uploadedBytes: resolvedUploadSize,
+        totalBytes: resolvedUploadSize,
+      });
     } catch (error) {
       console.error('Failed to upload course thumbnail:', error);
-      const message = error instanceof Error ? error.message : 'Failed to upload course thumbnail.';
+      const message = error instanceof Error && error.message
+        ? error.message
+        : 'Upload failed. Please try again.';
+      setCourseThumbnailUploadState({
+        status: 'failed',
+        progress: 0,
+        message: 'Upload failed. Please try again.',
+        speedBytesPerSecond: undefined,
+        uploadedBytes: 0,
+        totalBytes: Math.max(0, Number(file.size || 0)),
+      });
       alert(message);
     } finally {
       setIsUploadingCourseThumbnail(false);
@@ -2339,6 +2526,10 @@ export default function App() {
   };
 
   const handleUploadModuleVideo = async (moduleIndex: number, file: File) => {
+    if (uploadingModuleVideoKey) {
+      return;
+    }
+
     const module = courseForm.modules[moduleIndex];
     if (!module) {
       return;
@@ -2346,26 +2537,131 @@ export default function App() {
 
     const moduleKey = getEditableModuleKey(module, moduleIndex);
     setUploadingModuleVideoKey(moduleKey);
+    setModuleVideoUploadStateByKey((prev) => ({
+      ...prev,
+      [moduleKey]: {
+        status: 'preparing',
+        progress: 0,
+        message: 'Preparing upload...',
+        uploadedBytes: 0,
+        totalBytes: Math.max(0, Number(file.size || 0)),
+        speedBytesPerSecond: undefined,
+      },
+    }));
+
+    console.info('[Upload][Frontend] Module video upload started', {
+      moduleKey,
+      fileName: file.name,
+      fileSizeBytes: Number(file.size || 0),
+      mimeType: file.type || 'application/octet-stream',
+    });
+
+    let previousLoadedBytes = 0;
+    let previousSampleAtMs = Date.now();
+    let smoothedSpeedBytesPerSecond: number | undefined;
+    let lastLoggedProgressBucket = -1;
+    let didLogProcessingState = false;
 
     try {
-      const uploadedAsset = await apiService.uploadCourseModuleVideo(file);
+      const uploadedAsset = await apiService.uploadCourseModuleVideo(file, (progressDetails) => {
+        const cappedProgress = toCappedInFlightProgress(progressDetails.percent);
+        const transferCompleted = progressDetails.lengthComputable && progressDetails.loaded >= progressDetails.total;
+        const nowMs = Date.now();
+        const elapsedMs = nowMs - previousSampleAtMs;
+        const loadedDelta = Math.max(0, progressDetails.loaded - previousLoadedBytes);
+        const instantSpeed = elapsedMs >= 250 ? calculateUploadSpeedBytesPerSecond(loadedDelta, elapsedMs) : undefined;
+
+        if (instantSpeed !== undefined) {
+          smoothedSpeedBytesPerSecond = smoothedSpeedBytesPerSecond === undefined
+            ? instantSpeed
+            : (smoothedSpeedBytesPerSecond * 0.75) + (instantSpeed * 0.25);
+          previousLoadedBytes = progressDetails.loaded;
+          previousSampleAtMs = nowMs;
+        }
+
+        const progressBucket = Math.floor(cappedProgress / 10);
+        if (progressBucket !== lastLoggedProgressBucket) {
+          lastLoggedProgressBucket = progressBucket;
+          console.info('[Upload][Frontend] Module video upload progress', {
+            moduleKey,
+            progressPercent: cappedProgress,
+            uploadedBytes: progressDetails.loaded,
+            totalBytes: progressDetails.fileSizeBytes || progressDetails.total || file.size || 0,
+          });
+        }
+        if (transferCompleted && !didLogProcessingState) {
+          didLogProcessingState = true;
+          console.info('[Upload][Frontend] Module video upload waiting for backend confirmation', {
+            moduleKey,
+          });
+        }
+
+        setModuleVideoUploadStateByKey((prev) => ({
+          ...prev,
+          [moduleKey]: {
+            status: transferCompleted ? 'processing' : 'uploading',
+            progress: cappedProgress,
+            speedBytesPerSecond: smoothedSpeedBytesPerSecond,
+            uploadedBytes: Math.max(0, progressDetails.loaded),
+            totalBytes: Math.max(0, progressDetails.fileSizeBytes || progressDetails.total || file.size || 0),
+            message: transferCompleted ? 'Saving to cloud storage — please wait...' : `Uploading video: ${cappedProgress}%`,
+          },
+        }));
+      });
+
+      const resolvedVideoUrl = String(
+        uploadedAsset.videoUrl || uploadedAsset.blobUrl || uploadedAsset.url || uploadedAsset.path || ''
+      ).trim();
+      const resolvedUploadSize = Number.isFinite(Number(uploadedAsset.size))
+        ? Number(uploadedAsset.size)
+        : Number(file.size || 0);
+      const resolvedMimeType = String(uploadedAsset.mimeType || file.type || '').trim();
+
+      if (!resolvedVideoUrl) {
+        throw new Error('Upload failed. Please try again.');
+      }
+
       setCourseForm((prev) => ({
         ...prev,
         modules: prev.modules.map((item, index) =>
           index === moduleIndex
             ? {
                 ...item,
-                videoUrl: uploadedAsset.path,
+                videoUrl: resolvedVideoUrl,
                 videoBlobName: uploadedAsset.blobName,
-                videoMimeType: uploadedAsset.mimeType,
-                videoSize: uploadedAsset.size,
+                videoMimeType: resolvedMimeType || undefined,
+                videoSize: resolvedUploadSize >= 0 ? resolvedUploadSize : undefined,
               }
             : item
         ),
       }));
+      setModuleVideoUploadStateByKey((prev) => ({
+        ...prev,
+        [moduleKey]: {
+          status: 'uploaded',
+          progress: 100,
+          message: 'Video uploaded successfully.',
+          speedBytesPerSecond: undefined,
+          uploadedBytes: resolvedUploadSize,
+          totalBytes: resolvedUploadSize,
+        },
+      }));
     } catch (error) {
       console.error('Failed to upload module video:', error);
-      const message = error instanceof Error ? error.message : 'Failed to upload module video.';
+      const message = error instanceof Error && error.message
+        ? error.message
+        : 'Upload failed. Please try again.';
+      setModuleVideoUploadStateByKey((prev) => ({
+        ...prev,
+        [moduleKey]: {
+          status: 'failed',
+          progress: 0,
+          message: 'Upload failed. Please try again.',
+          speedBytesPerSecond: undefined,
+          uploadedBytes: 0,
+          totalBytes: Math.max(0, Number(file.size || 0)),
+        },
+      }));
       alert(message);
     } finally {
       setUploadingModuleVideoKey(null);
@@ -2432,8 +2728,15 @@ export default function App() {
               }
             : { ...module, [field]: value }
           : module
-      ),
+        ),
     }));
+
+    if (field === 'videoUrl') {
+      const module = courseForm.modules[moduleIndex];
+      if (module) {
+        clearModuleVideoUploadState(getEditableModuleKey(module, moduleIndex));
+      }
+    }
   };
 
   const handleUpdateCourseModuleResource = (
@@ -2527,6 +2830,9 @@ export default function App() {
   };
 
   const handleRemoveCourseModule = (moduleIndex: number) => {
+    const module = courseForm.modules[moduleIndex];
+    const moduleKey = module ? getEditableModuleKey(module, moduleIndex) : '';
+
     setCourseForm((prev) => {
       if (prev.modules.length <= 1) {
         return prev;
@@ -2537,9 +2843,19 @@ export default function App() {
         modules: prev.modules.filter((_, index) => index !== moduleIndex),
       };
     });
+
+    if (moduleKey) {
+      clearModuleVideoUploadState(moduleKey);
+      if (uploadingModuleVideoKey === moduleKey) {
+        setUploadingModuleVideoKey(null);
+      }
+    }
   };
 
   const handleEditCourse = (course: Course) => {
+    setCourseThumbnailUploadState(createInitialUploadProgressState());
+    setModuleVideoUploadStateByKey({});
+    setUploadingModuleVideoKey(null);
     setEditingCourseId(course.id);
     setCourseForm({
       title: course.title,
@@ -2554,10 +2870,10 @@ export default function App() {
       modules: course.modules.map((module) => ({
         id: module.id,
         title: module.title,
-        videoUrl: module.videoUrl,
-        videoBlobName: module.videoBlobName,
-        videoMimeType: module.videoMimeType,
-        videoSize: module.videoSize,
+        videoUrl: getCourseModuleVideoUrl(module),
+        videoBlobName: module.videoBlobName || (module as any).blobName,
+        videoMimeType: module.videoMimeType || (module as any).mimeType,
+        videoSize: module.videoSize ?? (Number.isFinite(Number((module as any).size)) ? Number((module as any).size) : undefined),
         resources: normalizeEditableModuleResources(module.resources),
         resourceNameInput: '',
         resourceUrlInput: '',
@@ -5021,7 +5337,7 @@ export default function App() {
     course.isFree || course.price <= 0 ? 'Free' : formatLkr(course.price);
 
   const getEmbeddableVideoUrl = (url: string): string | null => {
-    const trimmed = url.trim();
+    const trimmed = String(url || '').trim();
     if (!trimmed || trimmed === '#') {
       return null;
     }
@@ -5061,7 +5377,18 @@ export default function App() {
     }
   };
 
-  const isDirectVideoFile = (url: string): boolean => /\.(mp4|webm|ogg|mov|m4v)(\?.*)?$/i.test(url.trim());
+  const isDirectVideoFile = (url: string, mimeType?: string): boolean => {
+    const trimmed = String(url || '').trim();
+    if (!trimmed || trimmed === '#') {
+      return false;
+    }
+
+    if (String(mimeType || '').toLowerCase().startsWith('video/')) {
+      return true;
+    }
+
+    return /\.(mp4|webm|ogg|mov|m4v)(\?.*)?$/i.test(trimmed);
+  };
 
   const resolveCourseLearningResourceUrl = (rawUrl: string): string => {
     const trimmed = rawUrl.trim();
@@ -5318,8 +5645,10 @@ export default function App() {
 
         const currentModule = activeLearningCourse.modules.find(m => m.id === activeVideoModuleId) || activeLearningCourse.modules[0];
         const currentModuleIndex = currentModule ? activeLearningCourse.modules.findIndex(m => m.id === currentModule.id) : 0;
-        const embedUrl = currentModule ? getEmbeddableVideoUrl(currentModule.videoUrl) : null;
-        const directVideoFile = currentModule ? isDirectVideoFile(currentModule.videoUrl) : false;
+        const currentModuleVideoUrl = currentModule ? getCourseModuleVideoUrl(currentModule) : '';
+        const currentModuleVideoMimeType = currentModule ? getCourseModuleVideoMimeType(currentModule) : '';
+        const embedUrl = currentModuleVideoUrl ? getEmbeddableVideoUrl(currentModuleVideoUrl) : null;
+        const directVideoFile = currentModule ? isDirectVideoFile(currentModuleVideoUrl, currentModuleVideoMimeType) : false;
         const isCurrentModuleCompleted = currentModule ? activeLearningCompletedSet.has(currentModule.id) : false;
         const hasNextModule = currentModuleIndex < activeLearningCourse.modules.length - 1;
         const hasPrevModule = currentModuleIndex > 0;
@@ -5393,7 +5722,7 @@ export default function App() {
                       {directVideoFile ? (
                         <>
                           <video
-                            src={currentModule.videoUrl}
+                            src={currentModuleVideoUrl}
                             ref={(video) => {
                               videoRef.current = video;
                               if (video) video.playbackRate = Number(playbackSpeed);
@@ -5546,9 +5875,9 @@ export default function App() {
                               <p className="text-sm font-bold text-white">External Video Module</p>
                               <p className="text-sm text-slate-400 mt-1">This module is hosted externally.</p>
                             </div>
-                            {currentModule.videoUrl && currentModule.videoUrl !== '#' && (
+                            {currentModuleVideoUrl && currentModuleVideoUrl !== '#' && (
                               <a
-                                href={currentModule.videoUrl}
+                                href={currentModuleVideoUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-colors"
@@ -6351,7 +6680,9 @@ export default function App() {
                   isSavingCourse={isSavingCourse}
                   isLoading={isLoadingCourses}
                   isUploadingCourseThumbnail={isUploadingCourseThumbnail}
+                  courseThumbnailUploadState={courseThumbnailUploadState}
                   uploadingModuleVideoKey={uploadingModuleVideoKey}
+                  moduleVideoUploadStateByKey={moduleVideoUploadStateByKey}
                   uploadingModuleResourcesKey={uploadingModuleResourcesKey}
                   stemSubjects={STEM_SUBJECTS}
                   onSaveCourse={handleSaveCourse}
@@ -6362,6 +6693,7 @@ export default function App() {
                   onRemoveCourseModule={handleRemoveCourseModule}
                   onUpdateCourseModule={handleUpdateCourseModule}
                   onUploadCourseThumbnail={handleUploadCourseThumbnail}
+                  onResetCourseThumbnailUploadState={handleResetCourseThumbnailUploadState}
                   onUploadModuleVideo={handleUploadModuleVideo}
                   onUploadModuleResources={handleUploadModuleResources}
                   onUpdateCourseModuleResource={handleUpdateCourseModuleResource}

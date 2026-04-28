@@ -76,6 +76,16 @@ type CourseFormData = {
 };
 
 type SortOption = 'newest' | 'popular' | 'rating' | 'title';
+type UploadProgressStatus = 'idle' | 'preparing' | 'uploading' | 'processing' | 'uploaded' | 'failed';
+
+type UploadProgressState = {
+  status: UploadProgressStatus;
+  progress: number;
+  message: string;
+  speedBytesPerSecond?: number;
+  uploadedBytes?: number;
+  totalBytes?: number;
+};
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -90,7 +100,9 @@ export interface TutorCourseManagePageProps {
   isSavingCourse: boolean;
   isLoading: boolean;
   isUploadingCourseThumbnail: boolean;
+  courseThumbnailUploadState: UploadProgressState;
   uploadingModuleVideoKey: string | null;
+  moduleVideoUploadStateByKey: Record<string, UploadProgressState>;
   uploadingModuleResourcesKey: string | null;
   stemSubjects: string[];
   onSaveCourse: (event: React.FormEvent) => Promise<boolean>;
@@ -101,6 +113,7 @@ export interface TutorCourseManagePageProps {
   onRemoveCourseModule: (moduleIndex: number) => void;
   onUpdateCourseModule: (moduleIndex: number, field: 'title' | 'videoUrl' | 'resourceNameInput' | 'resourceUrlInput', value: string) => void;
   onUploadCourseThumbnail: (file: File) => void;
+  onResetCourseThumbnailUploadState: () => void;
   onUploadModuleVideo: (moduleIndex: number, file: File) => void;
   onUploadModuleResources: (moduleIndex: number, fileList: FileList) => void;
   onUpdateCourseModuleResource: (moduleIndex: number, resourceIndex: number, field: 'name' | 'url', value: string) => void;
@@ -217,6 +230,40 @@ const formatDateTimeLabel = (value?: string): string => {
   return date.toLocaleString();
 };
 
+const formatUploadSpeed = (speedBytesPerSecond?: number): string => {
+  const speed = Number(speedBytesPerSecond);
+  if (!Number.isFinite(speed) || speed <= 0) {
+    return '';
+  }
+
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+  let value = speed;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+};
+
+const formatFileSize = (sizeBytes?: number): string => {
+  const size = Number(sizeBytes);
+  if (!Number.isFinite(size) || size < 0) {
+    return '0 B';
+  }
+
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = size;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+};
+
 // ─── Stat Card ────────────────────────────────────────────────────────────────
 
 const StatCard: React.FC<{
@@ -252,7 +299,9 @@ const CourseEditorPanel: React.FC<{
   editingCourseId: string | null;
   isSavingCourse: boolean;
   isUploadingCourseThumbnail: boolean;
+  courseThumbnailUploadState: UploadProgressState;
   uploadingModuleVideoKey: string | null;
+  moduleVideoUploadStateByKey: Record<string, UploadProgressState>;
   uploadingModuleResourcesKey: string | null;
   stemSubjects: string[];
   onSave: (event: React.FormEvent) => Promise<boolean>;
@@ -261,6 +310,7 @@ const CourseEditorPanel: React.FC<{
   onRemoveModule: (idx: number) => void;
   onUpdateModule: (idx: number, field: 'title' | 'videoUrl' | 'resourceNameInput' | 'resourceUrlInput', value: string) => void;
   onUploadThumbnail: (file: File) => void;
+  onResetThumbnailUploadState: () => void;
   onUploadModuleVideo: (idx: number, file: File) => void;
   onUploadModuleResources: (idx: number, files: FileList) => void;
   onUpdateModuleResource: (mIdx: number, rIdx: number, field: 'name' | 'url', value: string) => void;
@@ -274,7 +324,9 @@ const CourseEditorPanel: React.FC<{
   editingCourseId,
   isSavingCourse,
   isUploadingCourseThumbnail,
+  courseThumbnailUploadState,
   uploadingModuleVideoKey,
+  moduleVideoUploadStateByKey,
   uploadingModuleResourcesKey,
   stemSubjects,
   onSave,
@@ -283,6 +335,7 @@ const CourseEditorPanel: React.FC<{
   onRemoveModule,
   onUpdateModule,
   onUploadThumbnail,
+  onResetThumbnailUploadState,
   onUploadModuleVideo,
   onUploadModuleResources,
   onUpdateModuleResource,
@@ -291,6 +344,16 @@ const CourseEditorPanel: React.FC<{
   getEditableModuleKey,
 }) => {
   const [activeSection, setActiveSection] = useState<'basic' | 'thumbnail' | 'pricing' | 'modules'>('basic');
+  const isAnyUploadInProgress =
+    isUploadingCourseThumbnail ||
+    Boolean(uploadingModuleVideoKey) ||
+    Boolean(uploadingModuleResourcesKey) ||
+    courseThumbnailUploadState.status === 'preparing' ||
+    courseThumbnailUploadState.status === 'uploading' ||
+    courseThumbnailUploadState.status === 'processing' ||
+    Object.values(moduleVideoUploadStateByKey).some((state) =>
+      state.status === 'preparing' || state.status === 'uploading' || state.status === 'processing'
+    );
 
   const sections = [
     { key: 'basic' as const, label: 'Basic Info', icon: FileText },
@@ -436,6 +499,7 @@ const CourseEditorPanel: React.FC<{
                             thumbnailSize: undefined,
                           }))
                         }
+                        onInput={onResetThumbnailUploadState}
                         placeholder="https://example.com/thumbnail.jpg"
                         className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm"
                       />
@@ -445,7 +509,13 @@ const CourseEditorPanel: React.FC<{
                       — or —
                     </div>
 
-                    <label className="flex flex-col items-center justify-center gap-3 p-8 rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 hover:border-indigo-300 hover:bg-indigo-50/30 transition-all cursor-pointer group">
+                    <label
+                      className={`flex flex-col items-center justify-center gap-3 p-8 rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 transition-all group ${
+                        isUploadingCourseThumbnail
+                          ? 'cursor-not-allowed opacity-70'
+                          : 'cursor-pointer hover:border-indigo-300 hover:bg-indigo-50/30'
+                      }`}
+                    >
                       <div className="w-14 h-14 rounded-2xl bg-white border border-slate-200 flex items-center justify-center group-hover:border-indigo-300 transition-colors">
                         <Upload className="w-6 h-6 text-slate-400 group-hover:text-indigo-500 transition-colors" />
                       </div>
@@ -457,6 +527,7 @@ const CourseEditorPanel: React.FC<{
                         type="file"
                         accept="image/png,image/jpeg,image/webp"
                         className="hidden"
+                        disabled={isUploadingCourseThumbnail}
                         onChange={(e) => {
                           const file = e.target.files?.[0];
                           if (file) onUploadThumbnail(file);
@@ -465,10 +536,60 @@ const CourseEditorPanel: React.FC<{
                       />
                     </label>
 
-                    {isUploadingCourseThumbnail && (
-                      <div className="flex items-center gap-2 text-sm text-indigo-600 font-bold">
-                        <div className="w-4 h-4 border-2 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
-                        Uploading thumbnail...
+                    {(courseThumbnailUploadState.status !== 'idle' || isUploadingCourseThumbnail) && (
+                      <div
+                        className={`rounded-xl border px-4 py-3 ${
+                          courseThumbnailUploadState.status === 'failed'
+                            ? 'border-rose-200 bg-rose-50'
+                            : courseThumbnailUploadState.status === 'uploaded'
+                              ? 'border-emerald-200 bg-emerald-50'
+                              : 'border-indigo-200 bg-indigo-50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs font-bold text-slate-700">
+                            {courseThumbnailUploadState.status === 'failed' && 'Thumbnail upload failed'}
+                            {courseThumbnailUploadState.status === 'uploaded' && 'Thumbnail uploaded'}
+                            {courseThumbnailUploadState.status === 'preparing' && 'Preparing upload'}
+                            {courseThumbnailUploadState.status === 'uploading' && 'Uploading thumbnail'}
+                            {courseThumbnailUploadState.status === 'processing' && 'Saving to cloud storage'}
+                          </p>
+                          <div className="flex items-center gap-2">
+                            {(courseThumbnailUploadState.status === 'preparing' ||
+                              courseThumbnailUploadState.status === 'uploading' ||
+                              courseThumbnailUploadState.status === 'processing') && (
+                              <div className="w-3.5 h-3.5 border-2 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
+                            )}
+                            <span className="text-xs font-extrabold text-slate-600">
+                              {Math.max(0, Math.min(100, Math.round(courseThumbnailUploadState.progress || 0)))}%
+                            </span>
+                          </div>
+                        </div>
+                        <div className="mt-2 h-2 rounded-full bg-white/90 border border-slate-200 overflow-hidden">
+                          <div
+                            className={`h-full transition-all duration-300 ${
+                              courseThumbnailUploadState.status === 'failed'
+                                ? 'bg-rose-500'
+                                : courseThumbnailUploadState.status === 'uploaded'
+                                  ? 'bg-emerald-500'
+                                  : 'bg-indigo-500'
+                            }`}
+                            style={{ width: `${Math.max(0, Math.min(100, courseThumbnailUploadState.progress || 0))}%` }}
+                          />
+                        </div>
+                        <p className="mt-2 text-[11px] text-slate-600">
+                          {courseThumbnailUploadState.message || (isUploadingCourseThumbnail ? 'Uploading thumbnail...' : '')}
+                        </p>
+                        {(courseThumbnailUploadState.status === 'uploading' || courseThumbnailUploadState.status === 'processing') && (
+                          <p className="mt-1 text-[10px] font-semibold text-slate-500">
+                            {`${formatFileSize(courseThumbnailUploadState.uploadedBytes)} / ${formatFileSize(courseThumbnailUploadState.totalBytes)}`}
+                          </p>
+                        )}
+                        {(courseThumbnailUploadState.status === 'uploading' || courseThumbnailUploadState.status === 'processing') && (
+                          <p className="mt-1 text-[10px] font-semibold text-slate-500">
+                            {formatUploadSpeed(courseThumbnailUploadState.speedBytesPerSecond) || 'Calculating upload speed...'}
+                          </p>
+                        )}
                       </div>
                     )}
 
@@ -571,6 +692,11 @@ const CourseEditorPanel: React.FC<{
 
                     {courseForm.modules.map((module, moduleIndex) => {
                       const moduleKey = getEditableModuleKey(module, moduleIndex);
+                      const moduleVideoUploadState = moduleVideoUploadStateByKey[moduleKey];
+                      const normalizedVideoUploadProgress = Math.max(
+                        0,
+                        Math.min(100, Math.round(moduleVideoUploadState?.progress || 0))
+                      );
                       return (
                         <div key={moduleKey} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
                           <div className="flex items-center justify-between gap-2">
@@ -609,13 +735,20 @@ const CourseEditorPanel: React.FC<{
                                 placeholder="YouTube/Vimeo URL or uploaded video URL"
                                 className="w-full px-3 py-2.5 rounded-lg border border-slate-200 bg-white outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm"
                               />
-                              <label className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-600 cursor-pointer hover:border-indigo-300 hover:bg-indigo-50/30 transition-all">
+                              <label
+                                className={`flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-600 transition-all ${
+                                  uploadingModuleVideoKey
+                                    ? 'cursor-not-allowed opacity-70'
+                                    : 'cursor-pointer hover:border-indigo-300 hover:bg-indigo-50/30'
+                                }`}
+                              >
                                 <Video className="w-3.5 h-3.5" />
                                 Upload Video
                                 <input
                                   type="file"
                                   accept="video/*"
                                   className="hidden"
+                                  disabled={Boolean(uploadingModuleVideoKey)}
                                   onChange={(e) => {
                                     const file = e.target.files?.[0];
                                     if (file) onUploadModuleVideo(moduleIndex, file);
@@ -624,12 +757,60 @@ const CourseEditorPanel: React.FC<{
                                 />
                               </label>
                             </div>
-                            {uploadingModuleVideoKey === moduleKey && (
-                              <p className="text-[11px] font-bold text-indigo-600 flex items-center gap-1.5">
-                                <div className="w-3 h-3 border-2 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
-                                Uploading video...
-                              </p>
-                            )}
+                            {(moduleVideoUploadState?.status && moduleVideoUploadState.status !== 'idle') || uploadingModuleVideoKey === moduleKey ? (
+                              <div
+                                className={`rounded-lg border px-3 py-2 ${
+                                  moduleVideoUploadState?.status === 'failed'
+                                    ? 'border-rose-200 bg-rose-50'
+                                    : moduleVideoUploadState?.status === 'uploaded'
+                                      ? 'border-emerald-200 bg-emerald-50'
+                                      : 'border-indigo-200 bg-indigo-50'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="text-[11px] font-bold text-slate-700">
+                                    {moduleVideoUploadState?.status === 'failed' && 'Video upload failed'}
+                                    {moduleVideoUploadState?.status === 'uploaded' && 'Video uploaded'}
+                                    {moduleVideoUploadState?.status === 'preparing' && 'Preparing upload'}
+                                    {moduleVideoUploadState?.status === 'uploading' && 'Uploading video'}
+                                    {moduleVideoUploadState?.status === 'processing' && 'Saving to cloud storage'}
+                                  </p>
+                                  <div className="flex items-center gap-2">
+                                    {(moduleVideoUploadState?.status === 'preparing' ||
+                                      moduleVideoUploadState?.status === 'uploading' ||
+                                      moduleVideoUploadState?.status === 'processing') && (
+                                      <div className="w-3 h-3 border-2 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
+                                    )}
+                                    <span className="text-[11px] font-extrabold text-slate-600">{normalizedVideoUploadProgress}%</span>
+                                  </div>
+                                </div>
+                                <div className="mt-1.5 h-1.5 rounded-full bg-white/90 border border-slate-200 overflow-hidden">
+                                  <div
+                                    className={`h-full transition-all duration-300 ${
+                                      moduleVideoUploadState?.status === 'failed'
+                                        ? 'bg-rose-500'
+                                        : moduleVideoUploadState?.status === 'uploaded'
+                                          ? 'bg-emerald-500'
+                                          : 'bg-indigo-500'
+                                    }`}
+                                    style={{ width: `${normalizedVideoUploadProgress}%` }}
+                                  />
+                                </div>
+                                <p className="mt-1 text-[10px] text-slate-600">
+                                  {moduleVideoUploadState?.message || (uploadingModuleVideoKey === moduleKey ? 'Uploading video...' : '')}
+                                </p>
+                                {(moduleVideoUploadState?.status === 'uploading' || moduleVideoUploadState?.status === 'processing') && (
+                                  <p className="mt-1 text-[10px] font-semibold text-slate-500">
+                                    {`${formatFileSize(moduleVideoUploadState?.uploadedBytes)} / ${formatFileSize(moduleVideoUploadState?.totalBytes)}`}
+                                  </p>
+                                )}
+                                {(moduleVideoUploadState?.status === 'uploading' || moduleVideoUploadState?.status === 'processing') && (
+                                  <p className="mt-1 text-[10px] font-semibold text-slate-500">
+                                    {formatUploadSpeed(moduleVideoUploadState?.speedBytesPerSecond) || 'Calculating upload speed...'}
+                                  </p>
+                                )}
+                              </div>
+                            ) : null}
                             {module.videoUrl && module.videoUrl !== '#' && (
                               <div className="flex items-center gap-2 text-xs text-emerald-600 font-medium">
                                 <Play className="w-3 h-3" />
@@ -742,13 +923,19 @@ const CourseEditorPanel: React.FC<{
                 </button>
                 <button
                   type="submit"
-                  disabled={isSavingCourse}
+                  disabled={isSavingCourse || isAnyUploadInProgress}
                   className="px-6 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 disabled:opacity-60 transition-all shadow-sm shadow-indigo-200 flex items-center gap-2"
                 >
-                  {isSavingCourse && (
+                  {(isSavingCourse || isAnyUploadInProgress) && (
                     <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                   )}
-                  {isSavingCourse ? 'Saving...' : editingCourseId ? 'Update Course' : 'Create Course'}
+                  {isSavingCourse
+                    ? 'Saving...'
+                    : isAnyUploadInProgress
+                      ? 'Upload in progress...'
+                      : editingCourseId
+                        ? 'Update Course'
+                        : 'Create Course'}
                 </button>
               </div>
             </form>
@@ -903,7 +1090,9 @@ export const TutorCourseManagePage: React.FC<TutorCourseManagePageProps> = ({
   isSavingCourse,
   isLoading,
   isUploadingCourseThumbnail,
+  courseThumbnailUploadState,
   uploadingModuleVideoKey,
+  moduleVideoUploadStateByKey,
   uploadingModuleResourcesKey,
   stemSubjects,
   onSaveCourse,
@@ -914,6 +1103,7 @@ export const TutorCourseManagePage: React.FC<TutorCourseManagePageProps> = ({
   onRemoveCourseModule,
   onUpdateCourseModule,
   onUploadCourseThumbnail,
+  onResetCourseThumbnailUploadState,
   onUploadModuleVideo,
   onUploadModuleResources,
   onUpdateCourseModuleResource,
@@ -1375,7 +1565,9 @@ export const TutorCourseManagePage: React.FC<TutorCourseManagePageProps> = ({
         editingCourseId={editingCourseId}
         isSavingCourse={isSavingCourse}
         isUploadingCourseThumbnail={isUploadingCourseThumbnail}
+        courseThumbnailUploadState={courseThumbnailUploadState}
         uploadingModuleVideoKey={uploadingModuleVideoKey}
+        moduleVideoUploadStateByKey={moduleVideoUploadStateByKey}
         uploadingModuleResourcesKey={uploadingModuleResourcesKey}
         stemSubjects={stemSubjects}
         onSave={handleSaveAndClose}
@@ -1384,6 +1576,7 @@ export const TutorCourseManagePage: React.FC<TutorCourseManagePageProps> = ({
         onRemoveModule={onRemoveCourseModule}
         onUpdateModule={onUpdateCourseModule}
         onUploadThumbnail={onUploadCourseThumbnail}
+        onResetThumbnailUploadState={onResetCourseThumbnailUploadState}
         onUploadModuleVideo={onUploadModuleVideo}
         onUploadModuleResources={onUploadModuleResources}
         onUpdateModuleResource={onUpdateCourseModuleResource}

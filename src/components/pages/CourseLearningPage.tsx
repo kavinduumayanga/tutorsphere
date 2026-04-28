@@ -42,7 +42,7 @@ const getTutorDisplayName = (tutor: Tutor & { name?: string }) => {
 };
 
 const getEmbeddableVideoUrl = (url: string): string | null => {
-  const trimmed = url?.trim();
+  const trimmed = String(url || '').trim();
   if (!trimmed || trimmed === '#') return null;
   try {
     const parsed = new URL(trimmed);
@@ -66,7 +66,49 @@ const getEmbeddableVideoUrl = (url: string): string | null => {
   }
 };
 
-const isDirectVideoFile = (url: string): boolean => /\.(mp4|webm|ogg|mov|m4v)(\?.*)?$/i.test(url.trim());
+const getModuleVideoUrl = (module: Partial<CourseModule> | null | undefined): string => {
+  if (!module) {
+    return '';
+  }
+
+  const normalizedVideoUrl = String(module.videoUrl || '').trim();
+  if (normalizedVideoUrl) {
+    return normalizedVideoUrl;
+  }
+
+  const legacyUrl = String((module as any).url || '').trim();
+  if (legacyUrl) {
+    return legacyUrl;
+  }
+
+  return String((module as any).path || '').trim();
+};
+
+const getModuleVideoMimeType = (module: Partial<CourseModule> | null | undefined): string => {
+  if (!module) {
+    return '';
+  }
+
+  const normalizedMimeType = String(module.videoMimeType || '').trim();
+  if (normalizedMimeType) {
+    return normalizedMimeType;
+  }
+
+  return String((module as any).mimeType || '').trim();
+};
+
+const isDirectVideoFile = (url: string, mimeType?: string): boolean => {
+  const trimmed = String(url || '').trim();
+  if (!trimmed || trimmed === '#') {
+    return false;
+  }
+
+  if (String(mimeType || '').toLowerCase().startsWith('video/')) {
+    return true;
+  }
+
+  return /\.(mp4|webm|ogg|mov|m4v)(\?.*)?$/i.test(trimmed);
+};
 
 // --- Types ---
 
@@ -230,8 +272,10 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
 
   const currentModule = course.modules.find(m => m.id === activeVideoModuleId) || course.modules[0];
   const currentModuleIndex = currentModule ? course.modules.findIndex(m => m.id === currentModule.id) : 0;
-  const embedUrl = currentModule ? getEmbeddableVideoUrl(currentModule.videoUrl) : null;
-  const directVideoFile = currentModule ? isDirectVideoFile(currentModule.videoUrl) : false;
+  const currentModuleVideoUrl = currentModule ? getModuleVideoUrl(currentModule) : '';
+  const currentModuleVideoMimeType = currentModule ? getModuleVideoMimeType(currentModule) : '';
+  const embedUrl = currentModuleVideoUrl ? getEmbeddableVideoUrl(currentModuleVideoUrl) : null;
+  const directVideoFile = currentModule ? isDirectVideoFile(currentModuleVideoUrl, currentModuleVideoMimeType) : false;
   const isCurrentModuleCompleted = currentModule ? completedSet.has(currentModule.id) : false;
   const hasNextModule = currentModuleIndex < course.modules.length - 1;
   const hasPrevModule = currentModuleIndex > 0;
@@ -488,7 +532,7 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
             {directVideoFile ? (
               <>
                 <video
-                  src={currentModule.videoUrl}
+                  src={currentModuleVideoUrl}
                   ref={(video) => {
                     //@ts-ignore
                     videoRef.current = video;
@@ -562,9 +606,9 @@ export const CourseLearningPage: React.FC<CourseLearningPageProps> = ({
                     <p className="text-sm font-bold text-white">External Video Module</p>
                     <p className="text-sm text-slate-400 mt-1">This video is hosted on an external platform.</p>
                   </div>
-                  {currentModule.videoUrl && currentModule.videoUrl !== '#' && (
+                  {currentModuleVideoUrl && currentModuleVideoUrl !== '#' && (
                     <a
-                      href={currentModule.videoUrl}
+                      href={currentModuleVideoUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-500/20"

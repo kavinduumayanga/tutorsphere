@@ -1122,7 +1122,7 @@ export default function App() {
 
     const loadUnreadMessageCount = async (silent = false) => {
       try {
-        const response = await apiService.getMessageUnreadCount(currentUser.id);
+        const response = await apiService.getMessageUnreadCount();
         if (isCancelled) {
           return;
         }

@@ -22,6 +22,10 @@ interface MessagesPageProps {
 
 type MobilePane = 'list' | 'chat';
 
+const CONVERSATION_LIST_POLL_INTERVAL_MS = 6000;
+const ACTIVE_CONVERSATION_POLL_INTERVAL_MS = 4000;
+const PRESENCE_POLL_INTERVAL_MS = 15000;
+
 const getConversationSortValue = (conversation: MessageConversation): number => {
   const candidate = conversation.lastMessageAt || conversation.updatedAt || conversation.createdAt;
   const timestamp = new Date(candidate).getTime();
@@ -164,6 +168,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
   const [mobilePane, setMobilePane] = useState<MobilePane>('list');
 
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
+  const [isRefreshingConversations, setIsRefreshingConversations] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [isOpeningDirectConversation, setIsOpeningDirectConversation] = useState(false);
@@ -175,6 +180,23 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
   const [sendError, setSendError] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const activeUserIdRef = useRef(currentUser.id);
+
+  useEffect(() => {
+    activeUserIdRef.current = currentUser.id;
+  }, [currentUser.id]);
+
+  useEffect(() => {
+    setConversations([]);
+    setSelectedConversationId(null);
+    setMessages([]);
+    setSearchQuery('');
+    setDraftMessage('');
+    setConversationsError(null);
+    setMessagesError(null);
+    setSendError(null);
+    setMobilePane('list');
+  }, [currentUser.id]);
 
   const selectedConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === selectedConversationId) || null,
@@ -198,12 +220,20 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
 
   const syncConversations = useCallback(
     async (silent = false) => {
+      const requestUserId = currentUser.id;
+
       if (!silent) {
         setIsLoadingConversations(true);
+      } else {
+        setIsRefreshingConversations(true);
       }
 
       try {
-        const response = await apiService.getMessageConversations(currentUser.id);
+        const response = await apiService.getMessageConversations();
+        if (activeUserIdRef.current !== requestUserId) {
+          return;
+        }
+
         const nextConversations = sortConversations(response.conversations || []);
 
         setConversations(nextConversations);
@@ -218,14 +248,22 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
           return nextConversations[0]?.id || null;
         });
       } catch (error) {
+        if (activeUserIdRef.current !== requestUserId) {
+          return;
+        }
+
         if (!silent) {
           const message =
             error instanceof Error ? error.message : 'Failed to load your conversations.';
           setConversationsError(message);
         }
       } finally {
-        if (!silent) {
-          setIsLoadingConversations(false);
+        if (activeUserIdRef.current === requestUserId) {
+          if (!silent) {
+            setIsLoadingConversations(false);
+          } else {
+            setIsRefreshingConversations(false);
+          }
         }
       }
     },
@@ -237,7 +275,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
 
     const intervalId = window.setInterval(() => {
       void syncConversations(true);
-    }, 15000);
+    }, CONVERSATION_LIST_POLL_INTERVAL_MS);
 
     return () => {
       window.clearInterval(intervalId);
@@ -249,7 +287,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
 
     const pingPresence = async () => {
       try {
-        await apiService.pingMessagePresence(currentUser.id);
+        await apiService.pingMessagePresence();
       } catch {
         // Ignore transient presence ping failures and keep polling.
       }
@@ -259,7 +297,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
 
     const intervalId = window.setInterval(() => {
       void pingPresence();
-    }, 20000);
+    }, PRESENCE_POLL_INTERVAL_MS);
 
     const handleVisibilityChange = () => {
       if (isCancelled) {
@@ -293,12 +331,13 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
     let isCancelled = false;
 
     const openDirectConversation = async () => {
+      const requestUserId = currentUser.id;
       setIsOpeningDirectConversation(true);
 
       try {
-        const response = await apiService.openDirectConversation(initialParticipantId, currentUser.id);
+        const response = await apiService.openDirectConversation(initialParticipantId);
 
-        if (isCancelled) {
+        if (isCancelled || activeUserIdRef.current !== requestUserId) {
           return;
         }
 
@@ -314,7 +353,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
 
         await syncConversations(true);
       } catch (error) {
-        if (isCancelled) {
+        if (isCancelled || activeUserIdRef.current !== requestUserId) {
           return;
         }
 
@@ -346,14 +385,21 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
     let isCancelled = false;
 
     const loadMessages = async (silent = false) => {
+      const requestUserId = currentUser.id;
+      const requestConversationId = selectedConversationId;
+
       if (!silent) {
         setIsLoadingMessages(true);
       }
 
       try {
-        const response = await apiService.getConversationMessages(selectedConversationId, currentUser.id, { limit: 120 });
+        const response = await apiService.getConversationMessages(requestConversationId, { limit: 120 });
 
-        if (isCancelled) {
+        if (
+          isCancelled ||
+          activeUserIdRef.current !== requestUserId ||
+          selectedConversationId !== requestConversationId
+        ) {
           return;
         }
 
@@ -364,14 +410,18 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
         );
 
         if (response.conversation.unreadCount > 0) {
-          const readResponse = await apiService.markConversationAsRead(selectedConversationId, currentUser.id);
-          if (isCancelled) {
+          const readResponse = await apiService.markConversationAsRead(requestConversationId);
+          if (
+            isCancelled ||
+            activeUserIdRef.current !== requestUserId ||
+            selectedConversationId !== requestConversationId
+          ) {
             return;
           }
 
           setConversations((previousConversations) =>
             previousConversations.map((conversation) =>
-              conversation.id === selectedConversationId
+              conversation.id === requestConversationId
                 ? { ...conversation, unreadCount: 0 }
                 : conversation
             )
@@ -380,7 +430,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
           onUnreadCountChange?.(Math.max(0, Number(readResponse.totalUnreadCount || 0)));
         }
       } catch (error) {
-        if (isCancelled) {
+        if (isCancelled || activeUserIdRef.current !== requestUserId) {
           return;
         }
 
@@ -390,7 +440,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
           setMessagesError(message);
         }
       } finally {
-        if (!silent && !isCancelled) {
+        if (!silent && !isCancelled && activeUserIdRef.current === currentUser.id) {
           setIsLoadingMessages(false);
         }
       }
@@ -400,7 +450,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
 
     const intervalId = window.setInterval(() => {
       void loadMessages(true);
-    }, 8000);
+    }, ACTIVE_CONVERSATION_POLL_INTERVAL_MS);
 
     return () => {
       isCancelled = true;
@@ -455,7 +505,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
     setMessages([]);
 
     try {
-      const response = await apiService.deleteMessageConversation(removedConversationId, currentUser.id);
+      const response = await apiService.deleteMessageConversation(removedConversationId);
       onUnreadCountChange?.(Math.max(0, Number(response.totalUnreadCount || 0)));
       await syncConversations(true);
 
@@ -482,7 +532,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
     setSendError(null);
 
     try {
-      const response = await apiService.sendConversationMessage(selectedConversationId, trimmedMessage, currentUser.id);
+      const response = await apiService.sendConversationMessage(selectedConversationId, trimmedMessage);
       setDraftMessage('');
 
       setMessages((previousMessages) => [...previousMessages, response.message]);
@@ -516,8 +566,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
     try {
       const response = await apiService.deleteConversationMessage(
         selectedConversationId,
-        message.id,
-        currentUser.id
+        message.id
       );
 
       setMessages((previousMessages) =>
@@ -564,10 +613,11 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
           onClick={() => {
             void syncConversations();
           }}
-          className="inline-flex items-center justify-center gap-2 self-start rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 transition-colors hover:bg-slate-50"
+          disabled={isRefreshingConversations || isLoadingConversations}
+          className="inline-flex items-center justify-center gap-2 self-start rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          <RefreshCw className="h-4 w-4" />
-          Refresh
+          <RefreshCw className={`h-4 w-4 ${(isRefreshingConversations || isLoadingConversations) ? 'animate-spin' : ''}`} />
+          {isRefreshingConversations || isLoadingConversations ? 'Refreshing...' : 'Refresh'}
         </button>
       </div>
 
@@ -753,6 +803,20 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                   <div className="hidden rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700 sm:inline-flex">
                     In platform
                   </div>
+                  <button
+                    onClick={() => {
+                      setSelectedConversationId(null);
+                      setMessages([]);
+                      setMessagesError(null);
+                      setSendError(null);
+                      if (isMobileViewport()) {
+                        setMobilePane('list');
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50"
+                  >
+                    Clear Chat
+                  </button>
                   <button
                     onClick={() => {
                       void handleDeleteConversation();

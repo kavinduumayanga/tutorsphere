@@ -901,10 +901,6 @@ export function TutorBookingPage({ tutor, onBack, onBackToDashboard, onConfirmBo
                     </div>
                   </div>
 
-                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-500">
-                    Test mode: use a card ending with <span className="font-black text-slate-700">0000</span> (or CVV <span className="font-black text-slate-700">000</span>) to simulate a failed payment.
-                  </div>
-
                   {checkoutError && (
                     <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-sm font-semibold text-rose-700 flex items-start gap-2">
                       <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />

@@ -642,9 +642,6 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
                         </div>
                       </div>
 
-                      <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-500">
-                        Test mode: use a card ending with <span className="font-black text-slate-700">0000</span> (or CVV <span className="font-black text-slate-700">000</span>) to simulate a failed payment.
-                      </div>
                     </>
                   ) : (
                     <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200">

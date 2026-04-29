@@ -13,7 +13,9 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "migrate:uploads": "npx tsx scripts/migrateUploadsToAzure.ts",
-    "migrate:uploads:dry": "npx tsx scripts/migrateUploadsToAzure.ts --dry-run"
+    "migrate:uploads:dry": "npx tsx scripts/migrateUploadsToAzure.ts --dry-run",
+    "cleanup:test-data": "npx tsx scripts/cleanupTestData.ts --execute",
+    "cleanup:test-data:dry": "npx tsx scripts/cleanupTestData.ts"
   },
   "dependencies": {
     "@azure/storage-blob": "^12.31.0",

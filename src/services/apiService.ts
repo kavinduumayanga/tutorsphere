@@ -1604,11 +1604,8 @@ class ApiService {
     });
   }
 
-  async getMessageConversations(userId: string, search?: string): Promise<MessageConversationsResponse> {
+  async getMessageConversations(search?: string): Promise<MessageConversationsResponse> {
     const params = new URLSearchParams();
-    if (userId && userId.trim()) {
-      params.set('userId', userId.trim());
-    }
     if (search && search.trim()) {
       params.set('search', search.trim());
     }
@@ -1617,43 +1614,28 @@ class ApiService {
     return this.request(`/messages/conversations${query ? `?${query}` : ''}`);
   }
 
-  async getMessageUnreadCount(userId: string): Promise<{ totalUnreadCount: number }> {
-    const params = new URLSearchParams();
-    if (userId && userId.trim()) {
-      params.set('userId', userId.trim());
-    }
-
-    const query = params.toString();
-    return this.request(`/messages/unread-count${query ? `?${query}` : ''}`);
+  async getMessageUnreadCount(): Promise<{ totalUnreadCount: number }> {
+    return this.request('/messages/unread-count');
   }
 
-  async pingMessagePresence(userId: string): Promise<{ isOnline: boolean; lastActiveAt: string | null }> {
+  async pingMessagePresence(): Promise<{ isOnline: boolean; lastActiveAt: string | null }> {
     return this.request('/messages/presence/ping', {
       method: 'POST',
-      body: JSON.stringify({ userId }),
     });
   }
 
-  async openDirectConversation(
-    participantUserId: string,
-    userId: string
-  ): Promise<{ conversation: MessageConversation; created: boolean }> {
+  async openDirectConversation(participantUserId: string): Promise<{ conversation: MessageConversation; created: boolean }> {
     return this.request('/messages/conversations/direct', {
       method: 'POST',
-      body: JSON.stringify({ participantUserId, userId }),
+      body: JSON.stringify({ participantUserId }),
     });
   }
 
   async getConversationMessages(
     conversationId: string,
-    userId: string,
     options?: { limit?: number; before?: string }
   ): Promise<ConversationMessagesResponse> {
     const params = new URLSearchParams();
-
-    if (userId && userId.trim()) {
-      params.set('userId', userId.trim());
-    }
 
     if (typeof options?.limit === 'number' && Number.isFinite(options.limit) && options.limit > 0) {
       params.set('limit', String(Math.floor(options.limit)));
@@ -1669,38 +1651,28 @@ class ApiService {
 
   async sendConversationMessage(
     conversationId: string,
-    content: string,
-    userId: string
+    content: string
   ): Promise<{ message: DirectMessage; conversation: MessageConversation; totalUnreadCount: number }> {
     return this.request(`/messages/conversations/${encodeURIComponent(conversationId)}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ content, userId }),
+      body: JSON.stringify({ content }),
     });
   }
 
   async markConversationAsRead(
-    conversationId: string,
-    userId: string
+    conversationId: string
   ): Promise<{ conversationId: string; unreadCount: number; modifiedCount: number; totalUnreadCount: number }> {
     return this.request(`/messages/conversations/${encodeURIComponent(conversationId)}/read`, {
       method: 'POST',
-      body: JSON.stringify({ userId }),
     });
   }
 
   async deleteConversationMessage(
     conversationId: string,
-    messageId: string,
-    userId: string
+    messageId: string
   ): Promise<{ message: DirectMessage; conversation: MessageConversation; totalUnreadCount: number }> {
-    const params = new URLSearchParams();
-    if (userId && userId.trim()) {
-      params.set('userId', userId.trim());
-    }
-
-    const query = params.toString();
     return this.request(
-      `/messages/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}${query ? `?${query}` : ''}`,
+      `/messages/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,
       {
         method: 'DELETE',
       }
@@ -1708,16 +1680,9 @@ class ApiService {
   }
 
   async deleteMessageConversation(
-    conversationId: string,
-    userId: string
+    conversationId: string
   ): Promise<{ conversationId: string; deletedMessageCount: number; totalUnreadCount: number }> {
-    const params = new URLSearchParams();
-    if (userId && userId.trim()) {
-      params.set('userId', userId.trim());
-    }
-
-    const query = params.toString();
-    const deleteEndpoint = `/messages/conversations/${encodeURIComponent(conversationId)}${query ? `?${query}` : ''}`;
+    const deleteEndpoint = `/messages/conversations/${encodeURIComponent(conversationId)}`;
 
     try {
       return await this.request(deleteEndpoint, {
@@ -1735,7 +1700,6 @@ class ApiService {
         `/messages/conversations/${encodeURIComponent(conversationId)}/delete`,
         {
           method: 'POST',
-          body: JSON.stringify({ userId }),
         }
       );
     }

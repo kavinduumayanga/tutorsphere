@@ -54,6 +54,14 @@ const buildConversationLookup = (conversationId: string): Record<string, unknown
 const ONLINE_WINDOW_MS = 75 * 1000;
 const PRESENCE_WRITE_THROTTLE_MS = 20 * 1000;
 
+const buildConversationParticipantQuery = (userId: string): Record<string, unknown> => ({
+  $or: [
+    { participantIds: userId },
+    { studentId: userId },
+    { tutorId: userId },
+  ],
+});
+
 const getUnreadCountForUser = (conversation: any, userId: string): number => {
   const unreadCounts = conversation?.unreadCounts;
 
@@ -194,16 +202,68 @@ const normalizeMessageForResponse = (message: any) => {
 };
 
 const isConversationParticipant = (conversation: any, userId: string): boolean => {
-  const participantIds = Array.isArray(conversation?.participantIds)
+  const participantIdsFromArray = Array.isArray(conversation?.participantIds)
     ? conversation.participantIds.map((value: unknown) => toText(value)).filter(Boolean)
-    : [toText(conversation?.studentId), toText(conversation?.tutorId)].filter(Boolean);
+    : [];
+  const participantIdsFromConversation = [toText(conversation?.studentId), toText(conversation?.tutorId)].filter(
+    Boolean
+  );
+  const participantIds = Array.from(
+    new Set([...participantIdsFromArray, ...participantIdsFromConversation])
+  );
 
   return participantIds.includes(userId);
 };
 
+const getConversationKeyCandidates = (conversation: any, requestedConversationId: string): string[] => {
+  return Array.from(
+    new Set(
+      [
+        requestedConversationId,
+        toText(conversation?.id),
+        toText(conversation?._id),
+      ].filter(Boolean)
+    )
+  );
+};
+
+const buildConversationMessageQuery = (
+  conversation: any,
+  requestedConversationId: string
+): Record<string, unknown> => {
+  const keys = getConversationKeyCandidates(conversation, requestedConversationId);
+
+  if (keys.length <= 1) {
+    return { conversationId: keys[0] || requestedConversationId };
+  }
+
+  return {
+    conversationId: { $in: keys },
+  };
+};
+
+const getCanonicalConversationId = (conversation: any, requestedConversationId: string): string => {
+  return toText(conversation?.id) || toText(conversation?._id) || requestedConversationId;
+};
+
+const buildConversationUpdateLookup = (
+  conversation: any,
+  requestedConversationId: string
+): Record<string, unknown> => {
+  if (conversation?._id) {
+    return { _id: conversation._id };
+  }
+
+  return buildConversationLookup(getCanonicalConversationId(conversation, requestedConversationId));
+};
+
+const findConversationByLookup = async (conversationId: string) => {
+  return MessageConversation.findOne(buildConversationLookup(conversationId));
+};
+
 const getTotalUnreadCountForUser = async (userId: string): Promise<number> => {
   const conversations = await MessageConversation.find(
-    { participantIds: userId },
+    buildConversationParticipantQuery(userId),
     { unreadCounts: 1 }
   );
 
@@ -225,20 +285,20 @@ const requireMessagingUser = async (
   res: express.Response
 ): Promise<any | null> => {
   const sessionUserId = toText((req.session as any)?.userId);
-  const requestedUserId = resolveRequestedUserId(req);
-  const resolvedUserId = sessionUserId || requestedUserId;
-
-  if (sessionUserId && requestedUserId && sessionUserId !== requestedUserId) {
-    res.status(403).json({ error: 'Mismatched user context for messaging request.' });
-    return null;
-  }
-
-  if (!resolvedUserId) {
+  if (!sessionUserId) {
     res.status(401).json({ error: 'You must be signed in to use messaging.' });
     return null;
   }
 
-  const user = await User.findOne({ id: resolvedUserId });
+  const requestedUserId = resolveRequestedUserId(req);
+  if (requestedUserId && requestedUserId !== sessionUserId) {
+    console.warn(
+      '[Messaging] Ignoring mismatched frontend user hint and using session user.',
+      { sessionUserId, requestedUserId }
+    );
+  }
+
+  const user = await User.findOne({ id: sessionUserId });
   if (!user) {
     res.status(401).json({ error: 'Your session is invalid. Please sign in again.' });
     return null;
@@ -284,7 +344,7 @@ router.get('/conversations', async (req, res) => {
 
     const search = toText(req.query.search).toLowerCase();
 
-    const conversations = await MessageConversation.find({ participantIds: currentUser.id }).sort({
+    const conversations = await MessageConversation.find(buildConversationParticipantQuery(currentUser.id)).sort({
       lastMessageAt: -1,
       updatedAt: -1,
       createdAt: -1,
@@ -298,9 +358,13 @@ router.get('/conversations', async (req, res) => {
       new Set(
         conversations
           .flatMap((conversation) => {
-            const ids = Array.isArray((conversation as any).participantIds)
-              ? (conversation as any).participantIds
-              : [conversation.studentId, conversation.tutorId];
+            const ids = [
+              ...(Array.isArray((conversation as any).participantIds)
+                ? (conversation as any).participantIds
+                : []),
+              conversation.studentId,
+              conversation.tutorId,
+            ];
             return ids.map((entry: unknown) => toText(entry)).filter(Boolean);
           })
           .filter((id) => id !== currentUser.id)
@@ -562,7 +626,7 @@ router.get('/conversations/:id/messages', async (req, res) => {
       return res.status(400).json({ error: 'Conversation id is required.' });
     }
 
-    const conversation = await MessageConversation.findOne({ id: conversationId });
+    const conversation = await findConversationByLookup(conversationId);
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found.' });
     }
@@ -577,7 +641,7 @@ router.get('/conversations/:id/messages', async (req, res) => {
       : 80;
 
     const before = toText(req.query.before);
-    const query: Record<string, unknown> = { conversationId };
+    const query: Record<string, unknown> = buildConversationMessageQuery(conversation, conversationId);
 
     if (before) {
       const beforeDate = new Date(before);
@@ -637,7 +701,7 @@ router.post('/conversations/:id/messages', async (req, res) => {
       return res.status(400).json({ error: 'Message content cannot exceed 2000 characters.' });
     }
 
-    const conversation = await MessageConversation.findOne({ id: conversationId });
+    const conversation = await findConversationByLookup(conversationId);
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found.' });
     }
@@ -655,9 +719,11 @@ router.post('/conversations/:id/messages', async (req, res) => {
       return res.status(400).json({ error: 'Unable to resolve message recipient.' });
     }
 
+    const canonicalConversationId = getCanonicalConversationId(conversation, conversationId);
+
     const createdMessage = await DirectMessage.create({
       id: createEntityId(),
-      conversationId,
+      conversationId: canonicalConversationId,
       senderId: currentUser.id,
       recipientId,
       content,
@@ -669,7 +735,7 @@ router.post('/conversations/:id/messages', async (req, res) => {
 
     const updatedConversation =
       (await MessageConversation.findOneAndUpdate(
-        { id: conversationId },
+        buildConversationUpdateLookup(conversation, conversationId),
         {
           $set: {
             lastMessagePreview: preview,
@@ -717,7 +783,7 @@ router.delete('/conversations/:id/messages/:messageId', async (req, res) => {
       return res.status(400).json({ error: 'Conversation id and message id are required.' });
     }
 
-    const conversation = await MessageConversation.findOne({ id: conversationId });
+    const conversation = await findConversationByLookup(conversationId);
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found.' });
     }
@@ -726,7 +792,9 @@ router.delete('/conversations/:id/messages/:messageId', async (req, res) => {
       return res.status(403).json({ error: 'You are not allowed to delete messages in this conversation.' });
     }
 
-    const existingMessage = await DirectMessage.findOne({ id: messageId, conversationId });
+    const conversationMessageQuery = buildConversationMessageQuery(conversation, conversationId);
+
+    const existingMessage = await DirectMessage.findOne({ id: messageId, ...conversationMessageQuery });
     if (!existingMessage) {
       return res.status(404).json({ error: 'Message not found.' });
     }
@@ -739,7 +807,7 @@ router.delete('/conversations/:id/messages/:messageId', async (req, res) => {
       existingMessage.isDeleted
         ? existingMessage
         : (await DirectMessage.findOneAndUpdate(
-          { id: messageId, conversationId },
+          { id: messageId, ...conversationMessageQuery },
           {
             $set: {
               isDeleted: true,
@@ -750,7 +818,7 @@ router.delete('/conversations/:id/messages/:messageId', async (req, res) => {
           { new: true }
         )) || existingMessage;
 
-    const latestMessage = await DirectMessage.findOne({ conversationId }).sort({ createdAt: -1 });
+    const latestMessage = await DirectMessage.findOne(conversationMessageQuery).sort({ createdAt: -1 });
     const conversationUpdate: Record<string, any> = {
       $set: {
         lastMessagePreview: buildMessagePreview(latestMessage),
@@ -771,7 +839,7 @@ router.delete('/conversations/:id/messages/:messageId', async (req, res) => {
 
     const updatedConversation =
       (await MessageConversation.findOneAndUpdate(
-        { id: conversationId },
+        buildConversationUpdateLookup(conversation, conversationId),
         conversationUpdate,
         { new: true }
       )) || conversation;
@@ -807,7 +875,7 @@ router.post('/conversations/:id/read', async (req, res) => {
       return res.status(400).json({ error: 'Conversation id is required.' });
     }
 
-    const conversation = await MessageConversation.findOne({ id: conversationId });
+    const conversation = await findConversationByLookup(conversationId);
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found.' });
     }
@@ -816,9 +884,11 @@ router.post('/conversations/:id/read', async (req, res) => {
       return res.status(403).json({ error: 'You are not allowed to update this conversation.' });
     }
 
+    const conversationMessageQuery = buildConversationMessageQuery(conversation, conversationId);
+
     const markReadResult = await DirectMessage.updateMany(
       {
-        conversationId,
+        ...conversationMessageQuery,
         recipientId: currentUser.id,
         isRead: false,
       },
@@ -831,7 +901,7 @@ router.post('/conversations/:id/read', async (req, res) => {
     );
 
     await MessageConversation.updateOne(
-      { id: conversationId },
+      buildConversationUpdateLookup(conversation, conversationId),
       {
         $set: {
           [`unreadCounts.${currentUser.id}`]: 0,

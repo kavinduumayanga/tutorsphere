@@ -15,10 +15,14 @@ import { FaqChatContext, SafePlatformSnapshot } from '../faq-chatbot/types.js';
 
 const FALLBACK_REPLY =
   'Hi! Here is a clear overview for you.\n\n🧭 TutorSphere Help\n\n1. Platform Guidance\n   • Scope: Courses, tutors, bookings, resources, certificates\n   • Format: Structured response blocks\n   • Support: Step-by-step help\n\n👉 You can explore these in TutorSphere sections, and I can guide your next step.';
+const NO_DATA_INFO_MESSAGE = "I couldn't find that information on TutorSphere right now.";
 
 type AssistantIntent =
   | 'courses'
   | 'tutors'
+  | 'course_enrollment_help'
+  | 'booking_help'
+  | 'resource_download_help'
   | 'bookings'
   | 'resources'
   | 'certificates'
@@ -27,11 +31,41 @@ type AssistantIntent =
 const INTENT_PATTERNS: Record<AssistantIntent, RegExp> = {
   courses: /\b(course|courses|enroll|enrollment|module|lesson|price|paid|free)\b/i,
   tutors: /\b(tutor|tutors|teacher|mentor|availability|profile|review|reviews|price\s*per\s*hour)\b/i,
+  course_enrollment_help: /\b(course|courses|enroll|enrollment|join|start)\b/i,
+  booking_help: /\b(book|booking|session|slot|schedule|reserve)\b/i,
+  resource_download_help: /\b(resource|resources|download|file)\b/i,
   bookings: /\b(booking|bookings|book|session|slot|pending|confirmed|completed|cancelled|canceled)\b/i,
   resources: /\b(resource|resources|library|download|paper|article|note)\b/i,
   certificates: /\b(certificate|certificates|completion|completed\s*course)\b/i,
   platform: /\b(platform|dashboard|settings|how\s+to|usage|use\s+this\s+app|help|section)\b/i,
 };
+
+const HOW_TO_PHRASE_PATTERN = /\b(how\s+to|how\s+do\s+i|how\s+can\s+i|steps?\s+to|guide\s+to)\b/i;
+
+const COURSE_ENROLLMENT_HELP_PATTERNS: RegExp[] = [
+  /\bhow\s+(do|can)\s+i\s+(enroll|join|start)\b/i,
+  /\bhow\s+to\s+(enroll|join|start)\b/i,
+  /\bsteps?\s+(to|for)\s+(enroll|enrollment|join|start)\b/i,
+  /\b(enroll|enrollment)\s+(in|into)\s+(a\s+)?course\b/i,
+  /\bhelp\s+(me\s+)?(enroll|enrollment|join)\b/i,
+];
+
+const BOOKING_HELP_PATTERNS: RegExp[] = [
+  /\bhow\s+(do|can)\s+i\s+(book|schedule|reserve)\b/i,
+  /\bhow\s+to\s+(book|schedule|reserve)\b/i,
+  /\bsteps?\s+(to|for)\s+(book|booking|schedule|reserve)\b/i,
+  /\b(book|booking)\s+(a\s+)?tutor\b/i,
+  /\bhelp\s+(me\s+)?(book|booking|schedule)\b/i,
+  /\bbooking\s+process\b/i,
+];
+
+const RESOURCE_DOWNLOAD_HELP_PATTERNS: RegExp[] = [
+  /\bdownload(?:ing)?\s+(a\s+)?resource\b/i,
+  /\bdownload(?:ing)?\s+resources\b/i,
+  /\b(get|save)\s+(a\s+)?resource\b/i,
+  /\bresource\s+download\b/i,
+  /\bdownload\s+from\s+resources?\b/i,
+];
 
 const SECTION_LINE_PATTERN = /^(📚|👩‍🏫|📅|📄|🏅|🧭|🛡️)\s+.+/;
 const ITEM_BLOCK_PATTERN = /(^|\n)\d+\.\s.+\n\s*•\s.+\n\s*•\s.+/m;
@@ -52,6 +86,48 @@ const toStatusTitle = (status: string): string => {
   return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
 };
 
+const toVerificationLabel = (isVerified: boolean): string => {
+  return isVerified ? 'Verified' : 'Not verified';
+};
+
+const toRatingSummary = (rating: number, reviewCount: number): string => {
+  const safeRating = Number.isFinite(rating) ? rating : 0;
+  const safeReviews = Number.isFinite(reviewCount) ? reviewCount : 0;
+  return `${safeRating.toFixed(1)} (${safeReviews} reviews)`;
+};
+
+const hasPatternMatch = (message: string, patterns: RegExp[]): boolean => {
+  return patterns.some((pattern) => pattern.test(message));
+};
+
+const isBookingHelpQuestion = (message: string): boolean => {
+  if (!INTENT_PATTERNS.booking_help.test(message)) {
+    return false;
+  }
+
+  return hasPatternMatch(message, BOOKING_HELP_PATTERNS);
+};
+
+const isCourseEnrollmentHelpQuestion = (message: string): boolean => {
+  if (!INTENT_PATTERNS.course_enrollment_help.test(message)) {
+    return false;
+  }
+
+  return hasPatternMatch(message, COURSE_ENROLLMENT_HELP_PATTERNS);
+};
+
+const isResourceDownloadHelpQuestion = (message: string): boolean => {
+  if (!INTENT_PATTERNS.resource_download_help.test(message)) {
+    return false;
+  }
+
+  if (!HOW_TO_PHRASE_PATTERN.test(message)) {
+    return false;
+  }
+
+  return hasPatternMatch(message, RESOURCE_DOWNLOAD_HELP_PATTERNS);
+};
+
 const formatItemBlock = (
   index: number,
   title: string,
@@ -68,6 +144,9 @@ const formatItemBlock = (
 const intentSectionTitle: Record<AssistantIntent, string> = {
   courses: '📚 Available Courses',
   tutors: '👩‍🏫 Available Tutors',
+  course_enrollment_help: '📚 Course Enrollment Guide',
+  booking_help: '📅 Tutor Booking Guide',
+  resource_download_help: '📄 Resource Download Guide',
   bookings: '📅 Booking Overview',
   resources: '📄 Resource Library',
   certificates: '🏅 Certificate Help',
@@ -77,6 +156,11 @@ const intentSectionTitle: Record<AssistantIntent, string> = {
 const intentCta: Record<AssistantIntent, string> = {
   courses: '👉 You can explore these in the Courses section.',
   tutors: '👉 You can explore these in the Find Tutors section.',
+  course_enrollment_help: '👉 Next step: open Browse Courses and pick a course to enroll.',
+  booking_help:
+    '👉 Next step: ask "What tutors are available on this platform?" and I will list tutor options here.',
+  resource_download_help:
+    '👉 Next step: open Resources and choose the file you want to download.',
   bookings: '👉 You can manage these in the booking flow and dashboard sections.',
   resources: '👉 You can explore these in the Resources section.',
   certificates: '👉 You can access this from the Courses learning flow after completion.',
@@ -87,8 +171,14 @@ const detectIntent = (message: string): AssistantIntent => {
   if (INTENT_PATTERNS.certificates.test(message)) {
     return 'certificates';
   }
-  if (INTENT_PATTERNS.bookings.test(message)) {
-    return 'bookings';
+  if (isCourseEnrollmentHelpQuestion(message)) {
+    return 'course_enrollment_help';
+  }
+  if (isBookingHelpQuestion(message)) {
+    return 'booking_help';
+  }
+  if (isResourceDownloadHelpQuestion(message)) {
+    return 'resource_download_help';
   }
   if (INTENT_PATTERNS.resources.test(message)) {
     return 'resources';
@@ -98,6 +188,9 @@ const detectIntent = (message: string): AssistantIntent => {
   }
   if (INTENT_PATTERNS.courses.test(message)) {
     return 'courses';
+  }
+  if (INTENT_PATTERNS.bookings.test(message)) {
+    return 'bookings';
   }
   return 'platform';
 };
@@ -111,10 +204,10 @@ const buildCoursesResponse = (snapshot: SafePlatformSnapshot): string => {
       '',
       intentSectionTitle.courses,
       '',
-      '1. No courses found right now',
-      '   • Subject: N/A',
-      '   • Price: N/A',
-      '   • Modules: 0',
+      `1. ${NO_DATA_INFO_MESSAGE}`,
+      '   • Area: Courses',
+      '   • Status: No course records available',
+      '   • Next Step: Try again later in Browse Courses',
       '',
       intentCta.courses,
     ].join('\n');
@@ -148,10 +241,10 @@ const buildTutorsResponse = (snapshot: SafePlatformSnapshot): string => {
       '',
       intentSectionTitle.tutors,
       '',
-      '1. No tutors found right now',
-      '   • Subjects: N/A',
-      '   • Rate: N/A',
-      '   • Rating: N/A',
+      "1. I couldn't find any tutors right now.",
+      '   • Area: Tutors',
+      '   • Status: No tutor records available',
+      '   • Next Step: Try again later in Find Tutors',
       '',
       intentCta.tutors,
     ].join('\n');
@@ -160,8 +253,10 @@ const buildTutorsResponse = (snapshot: SafePlatformSnapshot): string => {
   const blocks = items.map((tutor, index) =>
     formatItemBlock(index + 1, tutor.name, [
       { label: 'Subjects', value: tutor.subjects.join(', ') || 'N/A' },
-      { label: 'Rate', value: toLkr(tutor.pricePerHour) },
-      { label: 'Rating', value: `${tutor.rating || 0} (${tutor.reviewCount || 0} reviews)` },
+      { label: 'Teaching Level', value: tutor.teachingLevel || 'Not specified' },
+      { label: 'Hourly Rate', value: toLkr(tutor.pricePerHour) },
+      { label: 'Rating', value: toRatingSummary(tutor.rating, tutor.reviewCount) },
+      { label: 'Verified', value: toVerificationLabel(tutor.isVerified) },
     ])
   );
 
@@ -173,6 +268,121 @@ const buildTutorsResponse = (snapshot: SafePlatformSnapshot): string => {
     blocks.join('\n\n'),
     '',
     intentCta.tutors,
+  ].join('\n');
+};
+
+const buildCourseEnrollmentHelpResponse = (): string => {
+  const steps = [
+    formatItemBlock(1, 'Go to Browse Courses', [
+      { label: 'Action', value: 'Open the Courses section' },
+      { label: 'Goal', value: 'Find a course by subject or title' },
+      { label: 'Output', value: 'Choose a course card' },
+    ]),
+    formatItemBlock(2, 'Open Course Details', [
+      { label: 'Action', value: 'Select the course you want to join' },
+      { label: 'Check', value: 'Review modules, tutor, and pricing' },
+      { label: 'Output', value: 'Continue to enrollment' },
+    ]),
+    formatItemBlock(3, 'Complete Enrollment', [
+      { label: 'Action', value: 'Click enroll and complete payment if required' },
+      { label: 'Result', value: 'Enrollment is saved to your account' },
+      { label: 'Output', value: 'Course appears in your learning area' },
+    ]),
+    formatItemBlock(4, 'Start Learning', [
+      { label: 'Action', value: 'Open the enrolled course modules' },
+      { label: 'Progress', value: 'Track completion from your dashboard' },
+      { label: 'Result', value: 'Continue lessons at your own pace' },
+    ]),
+  ];
+
+  return [
+    'Hi! Here is the course enrollment flow.',
+    '',
+    intentSectionTitle.course_enrollment_help,
+    '',
+    steps.join('\n\n'),
+    '',
+    intentCta.course_enrollment_help,
+  ].join('\n');
+};
+
+const buildBookingHelpResponse = (): string => {
+  const steps = [
+    formatItemBlock(1, 'Go to Find Tutors', [
+      { label: 'Action', value: 'Open the Find Tutors section' },
+      { label: 'Goal', value: 'Filter tutors by subject, level, and price' },
+      { label: 'Output', value: 'Choose a tutor profile to continue' },
+    ]),
+    formatItemBlock(2, 'Select a Tutor', [
+      { label: 'Action', value: 'Open your preferred tutor profile' },
+      { label: 'Check', value: 'Review subjects, rating, and hourly rate' },
+      { label: 'Output', value: 'Start the booking flow from the profile' },
+    ]),
+    formatItemBlock(3, 'Choose Available Date and Time', [
+      { label: 'Action', value: 'Pick an available slot from the tutor calendar' },
+      { label: 'Check', value: 'Confirm your selected date and time' },
+      { label: 'Output', value: 'Proceed to payment' },
+    ]),
+    formatItemBlock(4, 'Complete Payment', [
+      { label: 'Action', value: 'Use the platform checkout to confirm the booking' },
+      { label: 'Result', value: 'Booking is saved with a valid status' },
+      { label: 'Output', value: 'Session appears in your bookings' },
+    ]),
+    formatItemBlock(5, 'Join the Session', [
+      { label: 'Action', value: 'Open your booking at session time' },
+      { label: 'Requirement', value: 'Tutor must add the meeting link' },
+      { label: 'Result', value: 'Join directly from your booking record' },
+    ]),
+  ];
+
+  return [
+    'Hi! Here is the tutor booking flow.',
+    '',
+    intentSectionTitle.booking_help,
+    '',
+    steps.join('\n\n'),
+    '',
+    intentCta.booking_help,
+  ].join('\n');
+};
+
+const buildResourceDownloadHelpResponse = (): string => {
+  const steps = [
+    formatItemBlock(1, 'Go to the Resources section', [
+      { label: 'Action', value: 'Open Resources in TutorSphere' },
+      { label: 'Goal', value: 'Access your resource library' },
+      { label: 'Output', value: 'Resource cards are visible' },
+    ]),
+    formatItemBlock(2, 'Browse or search for the resource', [
+      { label: 'Action', value: 'Use filters or search by title/subject' },
+      { label: 'Goal', value: 'Find the exact file you need' },
+      { label: 'Output', value: 'Target resource is selected' },
+    ]),
+    formatItemBlock(3, 'Open or select the resource card', [
+      { label: 'Action', value: 'Click the resource card' },
+      { label: 'Check', value: 'Confirm the correct resource details' },
+      { label: 'Output', value: 'Locate the download action' },
+    ]),
+    formatItemBlock(4, 'Click Download', [
+      { label: 'Action', value: 'Press the Download button' },
+      { label: 'Result', value: 'Download starts immediately' },
+      { label: 'Output', value: 'File begins saving locally' },
+    ]),
+    formatItemBlock(5, 'The file will download to your device', [
+      { label: 'Location', value: 'Usually your Downloads folder' },
+      { label: 'Status', value: 'Ready to open after download completes' },
+      { label: 'Next Step', value: 'Use it for your study session' },
+    ]),
+  ];
+
+  return [
+    'Hi! Here are the resource download steps.',
+    '',
+    intentSectionTitle.resource_download_help,
+    '',
+    steps.join('\n\n'),
+    '',
+    intentCta.resource_download_help,
   ].join('\n');
 };
 
@@ -208,10 +418,10 @@ const buildResourcesResponse = (snapshot: SafePlatformSnapshot): string => {
       '',
       intentSectionTitle.resources,
       '',
-      '1. No resources found right now',
-      '   • Subject: N/A',
-      '   • Type: N/A',
-      '   • Downloads: 0',
+      `1. ${NO_DATA_INFO_MESSAGE}`,
+      '   • Area: Resources',
+      '   • Status: No resource records available',
+      '   • Next Step: Check the Resources section later',
       '',
       intentCta.resources,
     ].join('\n');
@@ -302,6 +512,12 @@ const buildStructuredFallback = (
   snapshot: SafePlatformSnapshot
 ): string => {
   switch (intent) {
+    case 'course_enrollment_help':
+      return buildCourseEnrollmentHelpResponse();
+    case 'booking_help':
+      return buildBookingHelpResponse();
+    case 'resource_download_help':
+      return buildResourceDownloadHelpResponse();
     case 'courses':
       return buildCoursesResponse(snapshot);
     case 'tutors':
@@ -317,6 +533,18 @@ const buildStructuredFallback = (
       return buildPlatformResponse();
   }
 };
+
+const DETERMINISTIC_INTENTS = new Set<AssistantIntent>([
+  'courses',
+  'tutors',
+  'course_enrollment_help',
+  'booking_help',
+  'resource_download_help',
+  'bookings',
+  'resources',
+  'certificates',
+  'platform',
+]);
 
 const normalizeStructuredSpacing = (value: string): string => {
   return String(value || '')
@@ -388,6 +616,10 @@ export class TutorSphereAssistantService {
     const safeContext = toSafeContext(context);
     const safeSnapshot = await buildSafePlatformSnapshot();
 
+    if (DETERMINISTIC_INTENTS.has(intent)) {
+      return buildStructuredFallback(intent, safeSnapshot);
+    }
+
     const composedUserPrompt = [
       'Use the context below to answer the TutorSphere platform question.',
       FAQ_RESPONSE_FORMAT_RULES,
@@ -396,7 +628,7 @@ export class TutorSphereAssistantService {
       `PlatformInfo: ${JSON.stringify(PLATFORM_INFO_CONTEXT)}`,
       `SafePlatformData: ${JSON.stringify(safeSnapshot)}`,
       `UserQuestion: ${sanitizedMessage}`,
-      'Return a direct answer focused on TutorSphere usage. If the question is out of scope, reply with the out-of-scope message.',
+      `If the question is outside TutorSphere platform scope, reply exactly with: "${FAQ_OUT_OF_SCOPE_MESSAGE}"`,
     ].join('\n\n');
 
     const rawReply = await azureOpenAiClient.chat(

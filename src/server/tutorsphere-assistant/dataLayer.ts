@@ -6,11 +6,82 @@ import { SafePlatformSnapshot } from '../faq-chatbot/types.js';
 
 const sanitizeText = (value: unknown): string => String(value ?? '').trim();
 
+const getNestedValue = (source: any, path: string): unknown => {
+  return path.split('.').reduce((acc, key) => {
+    if (acc == null || typeof acc !== 'object') {
+      return undefined;
+    }
+    return (acc as Record<string, unknown>)[key];
+  }, source);
+};
+
+const toNameFromEmail = (email: string): string => {
+  const safeEmail = sanitizeText(email);
+  if (!safeEmail || !safeEmail.includes('@')) {
+    return '';
+  }
+
+  const localPart = safeEmail.split('@')[0] ?? '';
+  const normalizedLocalPart = localPart.replace(/[._-]+/g, ' ').trim();
+  if (!normalizedLocalPart) {
+    return safeEmail;
+  }
+
+  return normalizedLocalPart
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+};
+
 const toTutorName = (tutor: any): string => {
-  const firstName = sanitizeText(tutor?.firstName);
-  const lastName = sanitizeText(tutor?.lastName);
-  const fullName = `${firstName} ${lastName}`.trim();
-  return fullName || 'Tutor';
+  const candidateNamePaths = [
+    'name',
+    'fullName',
+    'full_name',
+    'displayName',
+    'tutorProfile.name',
+    'user.name',
+    'user.fullName',
+    'user.full_name',
+    'user.displayName',
+  ];
+
+  for (const path of candidateNamePaths) {
+    const value = sanitizeText(getNestedValue(tutor, path));
+    if (value) {
+      return value;
+    }
+  }
+
+  const candidateFirstNames = [
+    sanitizeText(tutor?.firstName),
+    sanitizeText(getNestedValue(tutor, 'user.firstName')),
+  ];
+  const candidateLastNames = [
+    sanitizeText(tutor?.lastName),
+    sanitizeText(getNestedValue(tutor, 'user.lastName')),
+  ];
+
+  for (let index = 0; index < candidateFirstNames.length; index += 1) {
+    const fullName = `${candidateFirstNames[index]} ${candidateLastNames[index]}`.trim();
+    if (fullName) {
+      return fullName;
+    }
+  }
+
+  const candidateEmailPaths = ['email', 'user.email'];
+  for (const path of candidateEmailPaths) {
+    const email = sanitizeText(getNestedValue(tutor, path));
+    const derivedName = toNameFromEmail(email);
+    if (derivedName) {
+      return derivedName;
+    }
+    if (email) {
+      return email;
+    }
+  }
+
+  return 'Tutor';
 };
 
 const sanitizeSubjectList = (subjects: unknown): string[] => {
@@ -59,8 +130,15 @@ export const buildSafePlatformSnapshot = async (): Promise<SafePlatformSnapshot>
       {},
       {
         _id: 0,
+        name: 1,
+        fullName: 1,
+        full_name: 1,
+        displayName: 1,
         firstName: 1,
         lastName: 1,
+        email: 1,
+        tutorProfile: 1,
+        user: 1,
         subjects: 1,
         teachingLevel: 1,
         pricePerHour: 1,

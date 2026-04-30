@@ -173,16 +173,15 @@ Use `.env.example` as the source of truth. Never commit real secrets.
 - Add automated test suites (unit/integration/e2e)
 - Introduce CI/CD workflows with deployment gates
 - Integrate a full payment gateway for live transaction processing
-- Add admin moderation and analytics console
 - Improve observability (structured logs, metrics, tracing)
-- Add multilingual support and accessibility audits
+
 
 ## 13. Contact / Author
-**Author:** `[Your Name]`  
-**LinkedIn:** `[Add LinkedIn profile URL]`  
-**GitHub:** `[Add GitHub profile URL]`  
-**Email:** `[Add professional email]`
+**Author:** `Kavindu Umayanga`  
+**LinkedIn:** [kavindu-umayanga](https://www.linkedin.com/in/kavindu-umayanga/)  
+**GitHub:** [kavinduumayanga](https://github.com/kavinduumayanga)  
+**Email:** kavinumayanga@gmail.com
 
 ---
 
-If you are a recruiter or collaborator interested in this project, feel free to connect. I’m actively improving TutorSphere as part of my software engineering portfolio and internship journey.
+If you are a collaborator interested in this project, feel free to connect.

@@ -98,7 +98,7 @@ TutorSphere is designed for Azure-first deployment:
 - **Database:** MongoDB connection via `MONGODB_URI`
 
 ### Demo
-- Live Demo: `[Add deployed URL here]`
+- Live Demo: `https://www.tutorsphere.me/`
 - Product Walkthrough Video: `[Add YouTube/Loom link here]`
 
 ## 9. Screenshots Section Placeholders
